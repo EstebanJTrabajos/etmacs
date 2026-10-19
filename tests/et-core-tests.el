@@ -1,0 +1,445 @@
+;;; et-core-tests.el --- Offline configuration checks -*- lexical-binding: t; -*-
+(require 'ert)
+(require 'cl-lib)
+(defconst et/test-root
+  (file-name-directory
+   (directory-file-name (file-name-directory load-file-name))))
+(defconst et/test-state (make-temp-file "etmacs-tests-" t))
+(add-hook 'kill-emacs-hook (lambda () (delete-directory et/test-state t)) 100)
+(load (expand-file-name "early-init.el" et/test-root) nil t)
+(cl-letf (((symbol-function 'package-refresh-contents)
+           (lambda (&rest _) (error "Startup attempted archive refresh")))
+          ((symbol-function 'package-install)
+           (lambda (&rest _) (error "Startup attempted package installation"))))
+  ;; Keep package activation in the repo, redirect runtime history/session state.
+  (advice-add 'require :before
+              (defun et/test-redirect-state (feature &rest _)
+                (when (eq feature 'et-core)
+                  (setq et/state-directory (file-name-as-directory et/test-state)))))
+  (unwind-protect
+      (load (expand-file-name "init.el" et/test-root) nil t)
+    (advice-remove 'require #'et/test-redirect-state)))
+
+(ert-deftest et/startup-keeps-installation-explicit ()
+  (should-not package-enable-at-startup)
+  (should-not use-package-always-ensure)
+  (should (commandp 'et/install-packages))
+  (should (commandp 'et/tangle-config)))
+
+(ert-deftest et/state-and-notes-paths ()
+  (should (file-in-directory-p savehist-file et/test-state))
+  (should (file-in-directory-p save-place-file et/test-state))
+  (should (equal et/notes-directory (expand-file-name "~/org/")))
+  (should (equal et/roam-directory (expand-file-name "~/org/roam/"))))
+
+(ert-deftest et/leader-basics ()
+  (should (eq (lookup-key et/leader-map (kbd "f f")) 'find-file))
+  (should (eq (lookup-key et/leader-map (kbd "f c")) 'et/open-config))
+  (should (eq (lookup-key et/leader-map (kbd "w u")) 'winner-undo))
+  (should (eq (lookup-key et/leader-map (kbd "p")) et/project-map))
+  (should (eq (key-binding (kbd "C-c SPC")) et/leader-map)))
+
+(ert-deftest et/mode-local-map-is-buffer-local ()
+  (let ((original et/local-leader-map) (special (make-sparse-keymap)))
+    (with-temp-buffer
+      (setq-local et/local-leader-map special)
+      (define-key special (kbd "x") #'ignore)
+      (should (eq (lookup-key et/leader-map (kbd "m x")) 'ignore)))
+    (should (eq et/local-leader-map original))))
+
+(ert-deftest et/installer-only-installs-missing-packages ()
+  (let ((et/packages '(example-installed example-missing)) calls)
+    (cl-letf (((symbol-function 'package-installed-p)
+               (lambda (package &rest _) (eq package 'example-installed)))
+              ((symbol-function 'package-refresh-contents)
+               (lambda () (push 'refresh calls)))
+              ((symbol-function 'package-install)
+               (lambda (package &rest _) (push package calls))))
+      (et/install-packages)
+      (should (equal (reverse calls) '(refresh example-missing))))))
+
+(ert-deftest et/installer-does-nothing-if-complete ()
+  (cl-letf (((symbol-function 'package-installed-p) (lambda (&rest _) t))
+            ((symbol-function 'package-refresh-contents)
+             (lambda () (ert-fail "Unnecessary refresh"))))
+    (et/install-packages)))
+
+(ert-deftest et/evil-and-completion ()
+  (skip-unless (featurep 'evil))
+  (with-temp-buffer
+    (evil-local-mode 1)
+    (evil-normal-state)
+    (should (eq (key-binding (kbd "SPC f f")) 'find-file))
+    (evil-insert-state)
+    (should (eq (key-binding (kbd "SPC")) 'self-insert-command)))
+  (should (bound-and-true-p vertico-mode))
+  (should (bound-and-true-p marginalia-mode))
+  (should (equal completion-styles '(orderless basic)))
+  (should (eq (lookup-key et/theme-map (kbd "t")) 'consult-theme)))
+
+(ert-deftest et/terminal-posframe-fallback ()
+  (skip-unless (featurep 'vertico-posframe))
+  (cl-letf (((symbol-function 'posframe-workable-p) (lambda (&rest _) nil)))
+    (should-not (vertico-posframe-mode-workable-p))))
+
+(ert-deftest et/default-theme-loaded ()
+  (skip-unless (package-installed-p 'guava-themes))
+  (should (equal custom-enabled-themes '(guava-themes-ceiba))))
+
+(ert-deftest et/generated-files-match-literate-source ()
+  (require 'ob-tangle)
+  (let ((directory (make-temp-file "etmacs-tangle-" t)))
+    (unwind-protect
+        (progn
+          (copy-file (expand-file-name "config.org" et/test-root)
+                     (expand-file-name "config.org" directory))
+          (org-babel-tangle-file (expand-file-name "config.org" directory))
+          (dolist (file '("early-init.el" "init.el" "lisp/et-core.el"
+                          "lisp/et-projects.el" "lisp/et-editing.el"
+                          "lisp/et-org.el" "lisp/et-roam.el"))
+            (should
+             (equal (with-temp-buffer
+                      (insert-file-contents (expand-file-name file directory))
+                      (buffer-string))
+                    (with-temp-buffer
+                      (insert-file-contents (expand-file-name file et/test-root))
+                      (buffer-string))))))
+      (delete-directory directory t))))
+
+(ert-deftest et/project-names-do-not-collide ()
+  (should-not (equal (et/project-workspace-name "/first/project/")
+                     (et/project-workspace-name "/second/project/")))
+  (should (equal (et/project-workspace-name "/first/project")
+                 (et/project-workspace-name "/first/project/"))))
+
+(ert-deftest et/projectile-policy-and-search-integration ()
+  (skip-unless (featurep 'projectile))
+  (should-not projectile-auto-discover-projects)
+  (should-not projectile-auto-track-known-projects)
+  (should (eq projectile-switch-project-action #'et/project-open))
+  (should (eq consult-project-function #'et/consult-project-root))
+  (should (eq (lookup-key et/project-map (kbd "s")) 'consult-ripgrep)))
+
+(ert-deftest et/project-switch-activates-workspace-before-file-picker ()
+  (let (calls)
+    (cl-letf (((symbol-function 'projectile-project-root) (lambda () "/tmp/fixture/"))
+              ((symbol-function 'et/project-workspace)
+               (lambda (root) (push 'workspace calls) root))
+              ((symbol-function 'projectile-find-file)
+               (lambda ()
+                 (should (equal default-directory "/tmp/fixture/"))
+                 (push 'file calls))))
+      (et/project-open)
+      (should (equal (reverse calls) '(workspace file))))))
+
+(ert-deftest et/workspace-buffer-isolation-and-layouts ()
+  (skip-unless (bound-and-true-p persp-mode))
+  (let ((original (persp-current-name))
+        (a (generate-new-buffer "et-test-a"))
+        (b (generate-new-buffer "et-test-b")))
+    (unwind-protect
+        (progn
+          (persp-switch "et-test-a")
+          (switch-to-buffer a)
+          (split-window-right)
+          (persp-switch "et-test-b")
+          (switch-to-buffer b)
+          (should (memq b (et/workspace-buffers)))
+          (should-not (memq a (et/workspace-buffers)))
+          (should (= (length (window-list)) 1))
+          (persp-switch "et-test-a")
+          (should (= (length (window-list)) 2))
+          (should (memq a (et/workspace-buffers)))
+          (should-not (memq b (et/workspace-buffers))))
+      (persp-switch original)
+      (persp-kill "et-test-a")
+      (persp-kill "et-test-b")
+      (kill-buffer a)
+      (kill-buffer b))))
+
+(ert-deftest et/projectile-switches-real-projects-into-distinct-workspaces ()
+  (skip-unless (and (bound-and-true-p projectile-mode) (bound-and-true-p persp-mode)))
+  (let ((original (persp-current-name))
+        (projectile-known-projects nil)
+        (roots (mapcar (lambda (name) (expand-file-name name et/test-state))
+                       '("project-a/" "project-b/")))
+        buffers)
+    (unwind-protect
+        (progn
+          (dolist (root roots)
+            (make-directory root t)
+            (with-temp-file (expand-file-name ".projectile" root))
+            (with-temp-file (expand-file-name "fixture.txt" root) (insert "Fixture\n")))
+          (cl-letf (((symbol-function 'projectile-find-file)
+                     (lambda ()
+                       (find-file (expand-file-name "fixture.txt" default-directory)))))
+            (dolist (root roots)
+              (projectile-switch-project-by-name root)
+              (should (equal (persp-current-name) (et/project-workspace-name root)))
+              (should (equal buffer-file-name (expand-file-name "fixture.txt" root)))
+              (push (current-buffer) buffers)))
+          (should (memq (car buffers) (et/workspace-buffers)))
+          (should-not (memq (cadr buffers) (et/workspace-buffers))))
+      (persp-switch original)
+      (dolist (root roots)
+        (when (member (et/project-workspace-name root) (persp-names))
+          (persp-kill (et/project-workspace-name root))))
+      (mapc #'kill-buffer buffers))))
+
+(ert-deftest et/scoped-picker-does-not-include-global-file-sources ()
+  (skip-unless (featurep 'consult))
+  (cl-letf (((symbol-function 'consult-buffer)
+             (lambda ()
+               (should (equal consult-buffer-sources '(consult-source-buffer)))
+               (should (eq consult-buffer-list-function #'et/workspace-buffers)))))
+    (et/switch-buffer)))
+
+(ert-deftest et/session-filters-remote-and-process-buffers ()
+  (with-temp-buffer
+    (setq buffer-file-name "/ssh:unreachable:/private.org")
+    (should-not (et/session-buffer-type (lambda (_) (ert-fail "Remote classified"))
+                                      (current-buffer)))
+    (setq buffer-file-name nil default-directory "/tmp/")
+    (should-not (et/session-buffer-type (lambda (_) 'eshell-mode) (current-buffer)))
+    (setq buffer-file-name "/tmp/local.org")
+    (should (eq (et/session-buffer-type (lambda (_) 'file) (current-buffer)) 'file)))
+  (dolist (record '("/ssh:unreachable:/file.org"
+                    (file "secret" "/ssh:unreachable:/file.org")
+                    (eshell-mode "*eshell*" "/tmp/")))
+    (should-not (et/session-restore-buffer (lambda (_) (ert-fail "Unsafe restore")) record))))
+
+(ert-deftest et/session-roundtrip-local-file-and-layout ()
+  (skip-unless (bound-and-true-p persp-mode))
+  (let* ((original (persp-current-name))
+         (file (expand-file-name "session-fixture.txt" et/test-state))
+         (persp-state-default-file (expand-file-name "test-session.el" et/test-state))
+         buffer)
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "Fixture\n"))
+          (persp-switch "et-test-session")
+          (setq buffer (find-file-noselect file))
+          (switch-to-buffer buffer)
+          (split-window-right)
+          (et/save-session)
+          (should (= (logand (file-modes persp-state-default-file) #o777) #o600))
+          (delete-other-windows)
+          (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+            (et/load-session))
+          (persp-switch "et-test-session")
+          (should (memq buffer (persp-current-buffers)))
+          (should (= (length (window-list)) 2)))
+      (persp-switch original)
+      (persp-kill "et-test-session")
+      (when (buffer-live-p buffer) (kill-buffer buffer)))))
+
+(ert-deftest et/corfu-has-real-elisp-completion-source ()
+  (skip-unless (featurep 'corfu))
+  (should (bound-and-true-p global-corfu-mode))
+  (with-temp-buffer
+    (emacs-lisp-mode)
+    (insert "(messag")
+    (let ((completion (elisp-completion-at-point)))
+      (should completion)
+      (should (test-completion "message" (nth 2 completion)))))
+  (should (eq corfu-preselect 'prompt))
+  (should (eq (lookup-key corfu-map (kbd "TAB")) 'corfu-next)))
+
+(ert-deftest et/session-restores-in-a-fresh-process ()
+  (skip-unless (bound-and-true-p persp-mode))
+  (let* ((file (expand-file-name "fresh-session-fixture.txt" et/test-state))
+         (state (expand-file-name "fresh-session.el" et/test-state))
+         (emacs (expand-file-name invocation-name invocation-directory))
+         (common `("-Q" "--batch" "--load"
+                   ,(expand-file-name "tests/et-core-tests.el" et/test-root)))
+         (save-form
+          `(progn
+             (setq persp-state-default-file ,state)
+             (persp-switch "fresh-project")
+             (find-file ,file)
+             (split-window-right)
+             (et/save-session)))
+         (load-form
+          `(progn
+             (setq persp-state-default-file ,state)
+             (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) t)))
+               (et/load-session))
+             (persp-switch "fresh-project")
+             (unless (and (get-file-buffer ,file)
+                          (memq (get-file-buffer ,file) (persp-current-buffers))
+                          (= (length (window-list)) 2))
+               (error "Fresh-process session restoration failed")))))
+    (with-temp-file file (insert "Fresh-process fixture\n"))
+    (dolist (form (list save-form load-form))
+      (with-temp-buffer
+        (let ((status (apply #'call-process emacs nil t nil
+                             (append common (list "--eval" (prin1-to-string form))))))
+          (unless (eq status 0)
+            (ert-fail (buffer-string))))))))
+
+(ert-deftest et/help-popup-has-a-side-window ()
+  (save-window-excursion
+    (let ((buffer (generate-new-buffer "*et-test-help*")))
+      (unwind-protect
+          (progn
+            (with-current-buffer buffer (help-mode))
+            (let ((window (display-buffer buffer)))
+              (should (eq (window-parameter window 'window-side) 'right))))
+        (kill-buffer buffer)))))
+
+(ert-deftest et/treemacs-perspective-integration-loads ()
+  (skip-unless (and (featurep 'perspective) (locate-library "treemacs-perspective")))
+  (require 'treemacs)
+  (should (featurep 'treemacs-perspective))
+  (should (featurep 'treemacs-evil))
+  (should (commandp (lookup-key et/leader-map (kbd "e")))))
+
+(ert-deftest et/which-key-prefix-labels ()
+  ;; Test Which Key's actual extraction, not just the keymap prompt strings.
+  (let ((bindings (which-key--get-keymap-bindings et/leader-map)))
+    (dolist (entry '(("f" . "files") ("b" . "buffers") ("w" . "windows")
+                     ("p" . "projects") ("n" . "notes") ("g" . "git")
+                     ("h" . "help") ("t" . "themes") ("TAB" . "workspaces")
+                     ("j" . "jump") ("c" . "edit") ("m" . "mode commands")))
+      (should (equal (cdr (assoc (car entry) bindings)) (concat "group:" (cdr entry)))))))
+
+(ert-deftest et/which-key-labels-through-both-leaders ()
+  (skip-unless (featurep 'evil))
+  (with-temp-buffer
+    (evil-local-mode 1)
+    (evil-normal-state)
+    (dolist (prefix '("SPC" "C-c SPC"))
+      (let ((bindings (which-key--get-current-bindings (kbd prefix))))
+        (should (equal (cdr (assoc (concat prefix " f") bindings)) "group:files"))
+        (should (equal (cdr (assoc (concat prefix " b") bindings)) "group:buffers"))))))
+
+(ert-deftest et/conservative-editing-defaults ()
+  (require 'dired)
+  (should (bound-and-true-p editorconfig-mode))
+  (should (bound-and-true-p global-auto-revert-mode))
+  (should-not auto-revert-remote-files)
+  (should-not (memq 'kill-ring savehist-additional-variables))
+  (should-not (memq 'delete-trailing-whitespace before-save-hook))
+  (should-not (memq 'whitespace-cleanup before-save-hook))
+  (should-not (bound-and-true-p super-save-mode))
+  (should (eq dired-recursive-deletes 'top))
+  (should (eq dired-recursive-copies 'top))
+  (should (file-in-directory-p recentf-save-file et/test-state))
+  (should (file-in-directory-p transient-history-file et/test-state))
+  (should (file-in-directory-p projectile-frecency-file et/test-state)))
+
+(ert-deftest et/recent-file-exclusions-avoid-remote-probing ()
+  (cl-letf (((symbol-function 'file-truename)
+             (lambda (&rest _) (ert-fail "Recent exclusion resolved a remote path"))))
+    (dolist (path (list "/ssh:unreachable:/secret.org" "/home/user/secret.gpg"
+                        "/home/user/.authinfo" "/home/user/.authinfo.gpg"
+                        (expand-file-name "history" et/state-directory)))
+      (should (et/recent-file-excluded-p path)))
+    (should-not (et/recent-file-excluded-p "/home/user/notes.org"))))
+
+(ert-deftest et/switching-buffers-does-not-save-or-clean-whitespace ()
+  (let* ((file (expand-file-name "no-auto-save.txt" et/test-state))
+         (original (current-buffer)) buffer)
+    (unwind-protect
+        (progn
+          (with-temp-file file (insert "Original  \n"))
+          (setq buffer (find-file-noselect file))
+          (switch-to-buffer buffer)
+          (goto-char (point-max))
+          (insert "Unsaved  \n")
+          (switch-to-buffer original)
+          (should (buffer-modified-p buffer))
+          (should (equal (with-temp-buffer (insert-file-contents file) (buffer-string))
+                         "Original  \n"))
+          (with-current-buffer buffer
+            (save-buffer)
+            (should (string-match-p "Unsaved  \n" (buffer-string)))))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer (set-buffer-modified-p nil))
+        (kill-buffer buffer)))))
+
+(ert-deftest et/editorconfig-honors-project-indentation ()
+  (let* ((directory (expand-file-name "editorconfig-fixture/" et/test-state))
+         (file (expand-file-name "fixture.js" directory)) buffer)
+    (make-directory directory t)
+    (with-temp-file (expand-file-name ".editorconfig" directory)
+      (insert "root = true\n\n[*.js]\nindent_style = space\nindent_size = 2\n"))
+    (with-temp-file file (insert "const answer = 42;\n"))
+    (unwind-protect
+        (progn
+          (setq buffer (find-file-noselect file))
+          (with-current-buffer buffer
+            (should (= js-indent-level 2))
+            (should-not indent-tabs-mode)
+            (should-not (buffer-modified-p))))
+      (when (buffer-live-p buffer) (kill-buffer buffer)))))
+
+(ert-deftest et/pairing-engines-do-not-overlap ()
+  (skip-unless (locate-library "smartparens"))
+  (with-temp-buffer
+    (emacs-lisp-mode)
+    (should (bound-and-true-p smartparens-mode))
+    (should-not (bound-and-true-p smartparens-strict-mode))
+    (should-not (bound-and-true-p electric-pair-mode))
+    (should (eq et/local-leader-map et/lisp-edit-map))
+    (should (eq (lookup-key et/leader-map (kbd "m >")) 'sp-forward-slurp-sexp)))
+  (with-temp-buffer
+    (python-mode)
+    (should (bound-and-true-p electric-pair-mode))
+    (should-not (bound-and-true-p smartparens-mode))))
+
+(ert-deftest et/diff-highlighting-does-not-start-remote-processes ()
+  (with-temp-buffer
+    (setq default-directory "/ssh:unreachable:/project/"
+          buffer-file-name "/ssh:unreachable:/project/file.py")
+    (cl-letf (((symbol-function 'diff-hl-mode)
+               (lambda (&rest _) (ert-fail "Enabled remote diff highlighting")))
+              ((symbol-function 'diff-hl-dired-mode)
+               (lambda (&rest _) (ert-fail "Enabled remote directory highlighting"))))
+      (et/enable-local-diff-hl))))
+
+(ert-deftest et/editing-and-git-bindings-are-real-commands ()
+  (skip-unless (package-installed-p 'crux))
+  (require 'crux)
+  (require 'magit)
+  (require 'git-timemachine)
+  (dolist (key '("j j" "j w" "j l" "w w" "c e" "c E" "c o" "c O" "c d"
+                 "f R" "g s" "g f" "g l" "g b" "g t"))
+    (should (commandp (lookup-key et/leader-map (kbd key)))))
+  (should (eq (lookup-key et/leader-map (kbd "g s")) 'magit-status))
+  (should (memq #'diff-hl-magit-post-refresh magit-post-refresh-hook)))
+
+(ert-deftest et/lisp-structural-editing-preserves-contents ()
+  (skip-unless (locate-library "smartparens"))
+  (with-temp-buffer
+    (emacs-lisp-mode)
+    (insert "(one) two")
+    (goto-char 2)
+    (sp-forward-slurp-sexp)
+    (should (equal (buffer-string) "(one two)"))
+    (sp-forward-barf-sexp)
+    (should (equal (buffer-string) "(one) two"))))
+
+(ert-deftest et/magit-status-opens-without-changing-repository ()
+  (skip-unless (and (locate-library "magit") (executable-find "git")))
+  (require 'magit)
+  (let* ((directory (expand-file-name "git-fixture/" et/test-state))
+         (original (current-buffer)) status-buffer)
+    (make-directory directory t)
+    (should (= 0 (call-process "git" nil nil nil "init" "-q" directory)))
+    (with-temp-file (expand-file-name "fixture.txt" directory) (insert "Untracked\n"))
+    (unwind-protect
+        (progn
+          (setq status-buffer (magit-status-setup-buffer directory))
+          (with-current-buffer status-buffer
+            (should (derived-mode-p 'magit-status-mode))
+            (should (string-match-p "Untracked files" (buffer-string)))
+            ;; Untracked sections can be collapsed/lazy until expanded.
+            (should (member "fixture.txt" (magit-untracked-files))))
+          ;; No staging or committing is part of this test.
+          (let ((default-directory directory))
+            (should-not (magit-git-lines "ls-files"))))
+      (switch-to-buffer original)
+      (when (buffer-live-p status-buffer) (kill-buffer status-buffer)))))
+
+(load (expand-file-name "tests/et-org-tests.el" et/test-root) nil t)

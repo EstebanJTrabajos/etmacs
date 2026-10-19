@@ -1,0 +1,318 @@
+#+title: Etmacs
+#+options: toc:2
+
+A personal, literate Emacs configuration—not a Doom or Prelude clone. Includes
+Evil, discoverable leader keys, completion, Projectile/Perspective workspaces,
+Treemacs, Git tools, conservative editing defaults, and Org/roam workflows.
+The source of truth and package rationales are in [[file:config.org][config.org]]. Maintained project
+documentation uses Org format. Old session/planning artifacts are not runtime
+dependencies and are not part of the proposed configuration commit.
+
+* Try without replacing Doom
+
+Requires Emacs 31.1+ with SQLite support. Run from this repository in a new
+instance, not an existing Doom server client. Nothing migrates existing notes.
+
+1. Generate the Lisp (also provided alongside its source):
+   #+begin_src sh
+   emacs -Q --batch --load scripts/tangle.el
+   #+end_src
+2. Explicitly install third-party packages and dependencies from GNU ELPA,
+   NonGNU ELPA and MELPA. This downloads and executes package code:
+   #+begin_src sh
+   emacs -Q --batch --load init.el --funcall et/install-packages
+   #+end_src
+   Or start Emacs and run =M-x et/install-packages=, then restart. Normal
+   startup never refreshes archives, installs packages, or starts a graph server.
+3. Start the configuration:
+   #+begin_src sh
+   emacs --init-directory "$PWD" --debug-init
+   #+end_src
+   For terminal Emacs:
+   #+begin_src sh
+   emacs -nw --init-directory "$PWD" --debug-init
+   #+end_src
+
+Runtime packages and state live in ignored =.local/=. Native caches and editor
+locks are not source. Packages are not version-locked; this is not a claim of
+fully reproducible builds. =doom-conf/= is preserved as reference material.
+
+* Editing and local settings
+
+Edit =config.org=, run =M-x et/tangle-config=, and restart. Do not edit generated
+=early-init.el=, =init.el= or =lisp/*.el= directly. There is no auto-tangle hook
+on arbitrary Org files.
+
+Optional =.local/settings.el= loads before modules. Set =et/notes-directory=,
+=et/roam-directory=, =et/default-theme=, =et/bibliography-files=, or
+=et/org-extra-agenda-files= there; not every core setting is an override API.
+Credentials belong in =auth-source=, normally =~/.authinfo.gpg=, not this repo.
+Customize writes to =.local/custom.el= but does not automatically load it;
+promote intentional shared settings into the literate source.
+
+Custom functions *and variables* use =et/=. File and feature names retain =et-=
+(for example, =et-core.el=). Update any old =et-notes-directory= or
+=et-default-theme= local overrides. Restart after renaming, not hot-reloading.
+
+* Core keys and completion
+
+| Keys | Action |
+|------+--------|
+| SPC SPC | Commands |
+| SPC f f / SPC f s / SPC f c | Find file / save / open config |
+| SPC b b / SPC b B | Workspace buffers / all buffers |
+| SPC w v / SPC w s | Split right / below |
+| SPC w h/j/k/l | Move between windows |
+| SPC w u / SPC w r | Winner layout undo / redo |
+| SPC s / SPC / | Buffer search / project-directory ripgrep |
+| SPC t t | Theme picker with live preview |
+
+=SPC= is a leader in Evil normal/visual/motion states; ordinary Space inserts
+spaces in insert state. =C-c SPC= is the alternative leader. Which Key groups
+are labelled files, buffers, windows, projects, notes, git, help, themes,
+workspaces, jump, edit and mode commands—not just "prefix".
+
+Vertico handles minibuffer completion; Corfu handles in-buffer CAPFs. They do
+not compete. Company/Cape are not installed without a specific need. Try Lisp
+completion by typing =(messag= and pressing =C-M-i=. =TAB=/=S-TAB= move, =RET=
+accepts a selected candidate, =C-g= dismisses. Automatic completion begins after
+three characters; CAPFs may execute Lisp, so use care with untrusted code.
+
+GUI Vertico menus float. Terminal frames use normal minibuffer rendering;
+Corfu uses supported child frames or the built-in completion fallback. In the
+theme picker, =C-n=/=C-p= preview, =RET= accepts, and =C-g= restores the previous
+theme. Only trusted installed theme code should be previewed. Selection is
+session-only; change =et/default-theme= for a persistent default.
+
+* Projects, workspaces and windows
+
+Projectile owns project roots/files/build/test commands; Perspective owns
+workspace buffers and layouts. Same-basename projects receive distinct
+=name#hash= workspaces. This is organizational isolation, not a sandbox: an
+explicit file open may share a buffer between workspaces.
+
+| Keys | Action |
+|------+--------|
+| SPC p a / SPC p p | Register / switch project |
+| SPC p w | Activate current project's workspace |
+| SPC p f / SPC p s | Project files / Consult project search |
+| SPC p c / SPC p t | Build / test (project commands may need configuration) |
+| SPC TAB . / SPC TAB TAB | Choose / previous workspace |
+| SPC TAB a / SPC TAB d | Add / forget a buffer, without deleting its file |
+| SPC TAB S / SPC TAB L | Explicit session save / restore |
+| SPC e / SPC p e | Toggle tree / display only the current project in tree |
+
+Discovery is explicit, not a recursive startup scan. Treemacs uses Evil
+bindings and Perspective scopes. Help opens right, compilation/warnings below;
+=q= dismisses help/compilation. No additional pop-up framework is needed.
+
+Session save/restore is *manual*. Local files and Dired layouts are supported;
+remote files, tree buffers, unsaved buffer contents, terminals and LSP processes
+are not restored. Unsupported windows become scratch windows. Restore only
+trusted local state: opening files can invoke their mode hooks. Reconnect remote
+tools deliberately. No automatic exit save can overwrite a good saved session
+with a short empty session. Do not enable desktop restoration over these layouts.
+
+* Prelude-inspired editing and Git
+
+We adopt capabilities from [[https://github.com/bbatsov/prelude][Prelude]], not its startup framework or global keymap.
+
+| Capability | Choice and reason |
+|------------+-------------------|
+| Project indentation | Built-in EditorConfig honors the project |
+| Search counts, buffer names, pairing display, scrolling | Built-ins |
+| External file changes | Local unmodified-file auto-revert, no remote polling |
+| Recent files | recentf + Consult; excludes remote/auth/encrypted/internal paths |
+| Visible-text/window navigation | Avy + Ace Window, current frame |
+| Semantic selection | expand-region complements Evil text objects |
+| Explicit editing/file helpers | Selected Crux commands, no automatic edit advice |
+| Lisp structure | Non-strict Smartparens only in Lisp; electric-pair elsewhere |
+| Source TODO/FIXME markers | hl-todo, not an alternative task database |
+| Git operations/change markers/history | Magit, diff-hl, git-timemachine, git-modes |
+
+| Keys | Action |
+|------+--------|
+| SPC j j / SPC j w / SPC j l | Two-character / word / line jump |
+| SPC w w | Ace Window; existing directional bindings and C-x o stay intact |
+| SPC c e / SPC c E | Expand / contract selection |
+| SPC c o/O / SPC c d | Open line below/above / duplicate line or region |
+| SPC f R / SPC f r | Explicit file+buffer rename / global recent files |
+| SPC g s / SPC g v | Magit status / built-in VC |
+| SPC g f / SPC g l / SPC g b / SPC g t | File actions / log / blame / time machine |
+| SPC m > / SPC m < / SPC m s (Lisp) | Slurp / barf / splice |
+| SPC m f/b (Lisp) | Move over forms |
+
+Intentionally not enabled: super-save, midnight cleanup, persisted kill rings,
+global whitespace cleanup or format-on-save, pasted-text reindentation,
+automatic chmod, undo-tree, alternate completion frameworks, or Flycheck/Eglot
+bridges. Recursive Dired operations retain top-level confirmation; compilation
+retains save/running-process prompts. Project EditorConfig may explicitly request
+cleanup. Runtime metadata reduces friction, but is not a privacy boundary.
+
+* Org planning and knowledge
+
+** Storage and activation
+
+Default layout (created only as captures need it):
+#+begin_example
+~/org/
+  personal/{inbox,tasks}.org
+  work/{inbox,tasks}.org
+  roam/
+    personal/{topics,ideas,projects,references,vocabulary,daily,reviews}/
+    work/{topics,ideas,projects,references,vocabulary,daily,reviews}/
+    general/{topics,ideas,projects,references,vocabulary,daily,reviews}/
+#+end_example
+
+One org-roam graph indexes all three domains in =~/org/roam=. Nothing migrates
+existing notes/IDs. Unknown-layout legacy nodes are accessible with all-domain
+lookup. Ordinary task files stay outside roam. Project tasks live inside their
+project notes, not duplicated into daily files. Add existing other task files
+to =et/org-extra-agenda-files=; these appear in the all-domain agenda.
+
+Set a workspace's default with =SPC n D=. A domain-specific note overrides that
+default. The default can be reset after restoring a session; it is not serialized
+with layouts. Scoped lookup includes the current domain plus general. Uppercase
+=SPC n r F/I/S= finds/inserts/searches all domains. =SPC u= supplies a prefix
+argument to the next command (Evil reserves =C-u= for scrolling). The database, graph,
+backlinks and explicit links can cross domains: this is not confidentiality
+enforcement. AI integration must not silently send work notes.
+
+The index starts on the first roam command, not Emacs startup. SQLite support is
+required. The local browser graph starts *only* with =SPC n r g=; it contains
+all domains and opens loopback-only HTTP/WebSocket servers. Close/disable
+=org-roam-ui-mode= to stop it. Never expose that server to an untrusted network.
+Sync source notes/attachments with Syncthing if desired, not =.local/= or live
+SQLite files. Each machine rebuilds its own index with =SPC n r u=.
+
+** Capture and daily use
+
+| Keys | Action |
+|------+--------|
+| SPC n c / C-c c | Task/inbox capture menu |
+| SPC n a / C-c a | Choose agenda domain and open daily dashboard |
+| SPC n D | Set workspace default domain |
+| SPC n d | Browse the existing Org root |
+| SPC n r c | Choose domain, title, then a roam note template |
+| SPC n r f / SPC n r i | Find note / insert ID link; uppercase F/I include all domains |
+| SPC n r s / SPC n r S | Scoped / all-domain full-text search |
+| SPC n r d | Today's journal/log/meeting; SPC u then SPC n r d chooses a domain |
+| SPC n r w | Weekly review linking seven dailies, without creating missing days |
+| SPC n r b / a / t | Backlinks / add alias / add subject tag |
+| SPC n r g / u | Explicit graph / rebuild local index |
+
+Task capture keys: =pi= personal inbox, =pt= personal TODO, =ph= daily personal
+habit, =wi= work inbox, =wt= work TODO, =j= task in an existing project note.
+Choose/create a project note first via roam template =p=. Project capture asks
+for an existing project in the current/shared domain. Plain TODOs have no
+invented deadline/schedule; habit captures supply an editable daily repeater.
+Finalize with =C-c C-c=; cancel with =C-c C-k=.
+
+Roam template keys: =n= topic, =i= idea, =p= project, =r= reference, =v=
+vocabulary. References store a URL or =cite:key= in indexed =ROAM_REFS= metadata.
+Aliases and
+tags are stored in the note, not a competing metadata system.
+
+Daily template keys: =j= journal, =l= work log, =m= meeting. All entries for a
+domain/date share one file. Work logs link to the actively clocked task via
+Org's clock link; they do not create duplicate clock records. Clock/pomodoro
+the real task. Vocabulary notes contain a drill-tagged question and Answer
+heading; Arabic editing/bidi is preserved. Multilingual spelling is a later stage.
+
+Agenda views include general projects plus the chosen personal/work domain, or
+all domains. Only designated project directories are scanned. States are TODO,
+NEXT, WAIT, DONE and CANCELLED; completion/wait logging lives in LOGBOOK drawers.
+Use Org repeaters for recurring tasks, and the habit STYLE property for habits.
+
+** Org-local commands, research and export
+
+In Org buffers =SPC m= offers:
+| Key | Action |
+|-----+--------|
+| c / a / t | Capture / agenda / TODO state |
+| s / d / r | Schedule / deadline / refile |
+| i / l | Create ID / store link |
+| k / K / p | Clock in / out / Pomodoro |
+| F f / F t / F a | Drill file / subtree / resume |
+| C | Insert citation through Citar |
+| b / T | Execute source block / explicitly tangle this file |
+| e e | Org export dispatcher |
+| e h / e p / e d / e H | HTML / PDF / DOCX / Hugo |
+
+Org, habits, agenda, capture, clocks, Babel and exporters are built in.
+=org-roam= adds the linked-note index; =org-roam-ui= adds the browser graph.
+=org-pomodoro= adds focus cycles and =org-drill= spaced repetition. =citar=
+provides reference insertion/opening over Org Cite and your own BibTeX files;
+set =et/bibliography-files= before startup. Zotero can maintain those files but
+is not mandatory. PDF viewing initially uses Emacs's available built-in viewer;
+pdf-tools/annotation integrations can be added separately.
+
+HTML uses Org; PDF uses Org's LaTeX exporter and an external TeX toolchain.
+HTML source blocks fall back to plain text if optional =htmlize= is absent.
+=ox-pandoc= + external Pandoc supply DOCX. =ox-hugo= exports posts/subtrees;
+set =#+hugo_base_dir:= and an appropriate section/export filename in your
+document. Citation insertion works independently of export: bibliography
+formatting requires the export-specific processor/style/toolchain to be chosen
+and verified. Do not assume one citation setup works identically in all formats.
+
+Babel enables Emacs Lisp, Python, shell, SQL, JavaScript and restclient when
+its packages are installed. =restclient= / =ob-restclient= supply HTTP blocks.
+Execution confirmation remains enabled; exporting does not execute blocks.
+External interpreters/services remain your responsibility. Do not disable
+confirmation globally or trust third-party literate files automatically.
+
+* External dependencies and remaining stages
+
+Git and ripgrep are used by project/Git/search commands. On Arch/Ubuntu the
+search package is =ripgrep=. PDF needs TeX; DOCX needs Pandoc. org-roam needs
+built-in SQLite support. No system packages, language servers, dictionaries,
+or tree-sitter grammars are silently installed. Babel needs the corresponding
+interpreter/database/HTTP service for the blocks you execute.
+
+For PDF, having =pdflatex= and =latexmk= executables is not enough: the TeX
+distribution's formats and LaTeX packages must also be installed/configured.
+An error about missing =pdflatex.fmt= is a system TeX setup problem, not an Org
+export setting. Fix that distribution setup before verifying PDF output.
+
+Language-specific Eglot/Flymake/testing/formatting, remote/container development,
+vterm, AI, spelling/grammar, deeper citation/PDF workflows and optional Forge
+remain separate stages. Do not load another completion or diagnostic framework
+globally over the current one without a concrete reason.
+
+* Verification
+
+Automated checks (offline; package-specific checks skip until installation):
+#+begin_src sh
+emacs -Q --batch --load tests/et-core-tests.el --funcall ert-run-tests-batch-and-exit
+#+end_src
+
+Tests use disposable notes/repositories, not your real vault. They cover source
+tangling, startup/no installation, labels through both leaders, workspace
+scoping/layouts and fresh-process restoration, safe persistence, completion,
+EditorConfig, structural edits, conservative saves, pop-ups, and Org workflows.
+They do not replace real keyboard/rendering/server/export checks.
+
+Manual acceptance checklist:
+1. Restart offline; check Evil, labels, GUI floating completion and terminal
+   fallback. Preview/cancel themes repeatedly; =custom-enabled-themes= should
+   contain only the selected theme.
+2. Register two disposable projects; switch between them, split their layouts,
+   check scoped/all buffer pickers and independent trees, then save/restart/load.
+   Use =SPC w u= to test layout undo without crossing workspace layouts.
+3. Try Avy/Ace Window, region expansion, explicit Crux helpers and Lisp
+   slurp/barf. Verify EditorConfig, local auto-revert, Git markers and Magit.
+   Ordinary buffer switches must not save, and saves must not trim unrelated
+   trailing spaces. Check compilation ANSI colors and help placement.
+4. Capture personal/work TODOs and a habit. Create a project note and capture
+   its task; verify the right scoped/combined agenda and refile destinations.
+   Complete a recurring task; verify its repeater and LOGBOOK behavior.
+5. Create notes in two domains and general. Add aliases/tags, insert an ID
+   link, view backlinks, compare scoped/all search, then rebuild the index.
+   IDs and source notes must remain intact. Open the graph explicitly.
+6. Capture two daily entries and a meeting. Clock a project task, make a work
+   log, stop the clock, and inspect the daily link and original task's clock
+   record. Drill a vocabulary note; verify Arabic editing/font fallback.
+7. Insert/open a bibliography reference and export a disposable report to each
+   required format with your installed tools. Verify citations/bibliographies
+   separately in each output. Source blocks must not run during export; manual
+   execution must still ask. Do not use sensitive real HTTP endpoints in tests.

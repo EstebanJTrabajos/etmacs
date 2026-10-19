@@ -1,0 +1,7 @@
+doom-conf/
+.local/
+*.elc
+/eln-cache/
+.#*
+*~
+/projectile-frecency.eld
