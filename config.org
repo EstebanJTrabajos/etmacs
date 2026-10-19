@@ -69,7 +69,8 @@ package directory first. No global bidi or aggressive GC tweaks.
     treemacs-evil treemacs-perspective avy ace-window expand-region crux
     smartparens magit diff-hl git-timemachine git-modes hl-todo
     org-roam org-roam-ui org-pomodoro org-drill citar ox-hugo ox-pandoc
-    restclient ob-restclient)
+    restclient ob-restclient typescript-mode web-mode yaml-mode yara-mode
+    dockerfile-mode docker)
   "Direct dependencies for the current slice; package.el resolves dependencies.")
 
 (defun et/missing-packages ()
@@ -104,6 +105,7 @@ package directory first. No global bidi or aggressive GC tweaks.
 (require 'et-editing)
 (require 'et-org)
 (require 'et-roam)
+(require 'et-dev)
 
 (when-let* ((missing (et/missing-packages)))
   (display-warning 'etmacs
@@ -996,6 +998,12 @@ all domains. Unknown-layout legacy nodes remain available through all-domain
 lookup; we never migrate them automatically. Capture asks a domain explicitly.
 File-level aliases and subject tags use upstream commands, not a parallel index.
 
+Completion labels show file nodes by title and heading nodes as
+=Document title -> Parent heading -> Heading=. The indexed outline path includes
+parents without IDs too. This is display-only: note titles, IDs, and inserted
+link descriptions are not rewritten. The same display setting applies to both
+our scoped commands and upstream =org-roam-node-find=, including alias candidates.
+
 Dailies use =DOMAIN/daily/YYYY-MM-DD.org=. Short journal, work log, and meeting
 entries share that day's file. Work logs insert a link to the currently clocked
 task, not duplicate clock records. Weekly reviews link seven existing/missing
@@ -1013,6 +1021,20 @@ Zotero is optional, not a prerequisite.
 (define-key et/notes-map (kbd "r") (cons "roam" et/roam-map))
 (setq org-roam-directory et/roam-directory
       org-roam-db-location (expand-file-name "org-roam.db" et/state-directory))
+
+(defun et/roam-node-hierarchy (node)
+  "Format NODE as its document title, ancestors, and own title."
+  (if (zerop (org-roam-node-level node))
+      (org-roam-node-title node)
+    (string-join
+     (append (list (or (org-roam-node-file-title node)
+                       (file-name-base (org-roam-node-file node))))
+             (org-roam-node-olp node)
+             (list (org-roam-node-title node)))
+     " -> ")))
+
+(with-eval-after-load 'org-roam
+  (setq org-roam-node-display-template #'et/roam-node-hierarchy))
 
 (defun et/roam-start ()
   "Explicitly initialize the local roam index when first using a roam command."
@@ -1222,4 +1244,229 @@ Zotero is optional, not a prerequisite.
                (side . right) (slot . 1) (window-width . 0.35)))
 (provide 'et-roam)
 ;;; et-roam.el ends here
+#+end_src
+
+* Development: languages, Eglot, and containers
+
+Built-in =Eglot=, =Flymake=, =Xref= and =Eldoc= provide language-server integration,
+diagnostics, navigation and documentation. Corfu displays their standard CAPFs.
+There is no lsp-mode/Flycheck overlap, server auto-installation, or format-on-save.
+Servers start explicitly with =SPC m l=. Opening code, including remote files,
+does not start a server, run tests, query a database, or contact Docker.
+
+** Modes and servers
+
+Python, JavaScript, Java and SQL use built-in modes. =typescript-mode= adds
+TypeScript, =web-mode= supplies TSX without requiring a grammar,
+=yaml-mode= adds YAML, =yara-mode= adds YARA syntax, and =dockerfile-mode= /
+=et/compose-mode= handle container definitions. Compose is a small YAML-derived
+mode: the old docker-compose-mode is not available in our archives, and does not
+justify a separate Git bootstrap. =docker= provides explicit
+Docker management commands, not an automatic daemon connection.
+
+Installed tree-sitter grammars enable built-in Python/JS/TS/TSX/Java/YAML/
+Dockerfile modes per buffer; absent grammars fall back without downloads. No
+grammar is installed or compiled on ordinary startup. Compose remains in its
+dedicated YAML-derived mode so its commands and filename detection remain useful.
+
+| Language | External server (install separately) |
+|----------+--------------------------------------|
+| Python | Eglot's available choices, e.g. basedpyright-langserver or pylsp |
+| JavaScript/TypeScript/TSX | typescript-language-server --stdio, plus TypeScript |
+| YAML/Compose | yaml-language-server --stdio (Compose is YAML; schema setup is separate) |
+| Java | jdtls (requires a compatible JDK), or Eglot's java-language-server alternative |
+| SQL | sqls; configure dialect/connections deliberately, no stored credentials here |
+| Dockerfile | docker-langserver --stdio |
+| YARA | yr-ls, through Emacs 31's built-in Eglot mapping |
+
+Eglot's built-in server mappings are retained except for adding our mode variants
+and SQL. SQL evaluation/REPL uses built-in sql.el, only when explicitly invoked.
+YARA matching runs rules against data, not just syntax checks, so no automatic
+matching/validation command runs on opening or saving a rule.
+
+** Environments, commands, and boundaries
+
+=SPC m v= explicitly selects a Python virtualenv directory; it updates PATH,
+=exec-path=, and the REPL interpreter in the current buffer only. Nothing assumes
+Poetry/Conda/uv conventions. Other project buffers must select the same env when
+needed. Project-local =node_modules/.bin= is added only when =SPC m l= is invoked
+for a local JS/TS project. This executes project-provided tools, so use only in
+trusted projects. Remote interpreter/server paths must be configured explicitly.
+
+Build/test use Projectile/compilation, prompting for your actual project commands
+rather than assuming pytest/Jest/Maven/Gradle. Formatter commands use the LSP
+server if it supports formatting; otherwise report the limitation. Standalone
+Ruff/Prettier/SQL formatters and test UIs are not silently installed or selected.
+Without a server, modes and built-in editing/completion still work.
+
+Docker management is =SPC p D=. =SPC m V= validates a Compose file through
+=docker compose -f FILE config --quiet= after asking to save changes. It refuses
+unsaved/remote files: Docker contexts, SSH file paths and remote-container LSP
+are distinct workflows still to be configured/tested against your topology.
+Use explicit =docker context use NAME= or =DOCKER_HOST= settings for remote CLI
+management; this configuration does not switch contexts or deploy containers.
+Compose validation can read .env files but uses --quiet to avoid dumping resolved
+secrets into the compilation buffer. No automatic up/build/prune actions.
+
+#+begin_src emacs-lisp :tangle lisp/et-dev.el
+;;; et-dev.el --- Generated from config.org -*- lexical-binding: t; -*-
+(require 'eglot)
+(require 'flymake)
+(require 'xref)
+(require 'compile)
+(require 'python)
+
+(defvar et/dev-map (make-sparse-keymap "development"))
+(defvar et/dev-modes
+  '(python-mode python-ts-mode js-mode js-ts-mode typescript-mode
+    typescript-ts-mode tsx-ts-mode web-mode yaml-mode yaml-ts-mode
+    java-mode java-ts-mode sql-mode yara-mode dockerfile-mode
+    dockerfile-ts-mode et/compose-mode))
+(defvar-local et/python-environment-bin nil
+  "Previously selected environment bin, for replacing rather than stacking PATH.")
+(defvar-local et/node-environment-bin nil
+  "Previously selected project Node bin directory.")
+
+(defun et/dev-prepend-path (bin previous)
+  "Prepend BIN to buffer-local PATH/exec-path, replacing PREVIOUS if non-nil."
+  (setq-local exec-path (cons bin (delete bin (remove previous (copy-sequence exec-path)))))
+  (let* ((paths (split-string (or (getenv "PATH") "") path-separator t))
+         (paths (delete bin (remove previous paths))))
+    (setq-local process-environment (copy-sequence process-environment))
+    (setenv "PATH" (mapconcat #'identity (cons bin paths) path-separator))))
+
+(defun et/dev-mode-defaults ()
+  "Expose language commands without starting external tools."
+  (setq-local et/local-leader-map et/dev-map)
+  ;; web-mode already owns TSX tag/quote pairing.
+  (when (derived-mode-p 'web-mode) (electric-pair-local-mode -1))
+  (eldoc-mode 1))
+(dolist (mode et/dev-modes)
+  (add-hook (intern (concat (symbol-name mode) "-hook")) #'et/dev-mode-defaults))
+
+(defun et/tree-sitter-ready-p (grammar)
+  "Whether GRAMMAR is already available; never install or prompt."
+  (and (fboundp 'treesit-ready-p) (treesit-ready-p grammar t)))
+
+(dolist (spec '((python-mode python-ts-mode python) (js-mode js-ts-mode javascript)
+                (typescript-mode typescript-ts-mode typescript)
+                (java-mode java-ts-mode java) (yaml-mode yaml-ts-mode yaml)
+                (dockerfile-mode dockerfile-ts-mode dockerfile)))
+  (pcase-let ((`(,classic ,modern ,grammar) spec))
+    (when (and (fboundp modern) (et/tree-sitter-ready-p grammar))
+      (add-to-list 'major-mode-remap-alist (cons classic modern)))))
+
+(use-package typescript-mode
+  :if (locate-library "typescript-mode")
+  :mode "\\.ts\\'")
+(use-package web-mode
+  :if (locate-library "web-mode")
+  :mode "\\.tsx\\'")
+(when (and (fboundp 'tsx-ts-mode) (et/tree-sitter-ready-p 'tsx)
+           (et/tree-sitter-ready-p 'typescript))
+  (add-to-list 'auto-mode-alist '("\\.tsx\\'" . tsx-ts-mode)))
+(use-package yaml-mode
+  :if (locate-library "yaml-mode")
+  :mode "\\.ya?ml\\'")
+(use-package yara-mode
+  :if (locate-library "yara-mode")
+  :mode "\\.yara?\\'")
+(use-package dockerfile-mode
+  :if (locate-library "dockerfile-mode")
+  :mode ("\\(?:\\`\\|/\\)Dockerfile\\(?:[.-].*\\)?\\'" "\\.dockerfile\\'"))
+(define-derived-mode et/compose-mode yaml-mode "Compose"
+  "Edit Docker Compose YAML; validation and services are explicitly invoked.")
+(when (locate-library "yaml-mode")
+  (add-to-list 'auto-mode-alist
+               '("\\(?:\\`\\|/\\)\\(?:docker-\\)?compose\\(?:[.-][^. /]+\\)*\\.ya?ml\\'"
+                 . et/compose-mode)))
+
+;; Prepend only mode variants that Eglot does not map by default.
+(add-to-list 'eglot-server-programs
+             '((et/compose-mode :language-id "yaml") . ("yaml-language-server" "--stdio")))
+(add-to-list 'eglot-server-programs '(sql-mode . ("sqls")))
+(add-to-list 'eglot-server-programs
+             '((web-mode :language-id "typescriptreact") . ("typescript-language-server" "--stdio")))
+
+(defun et/dev-project-root ()
+  "Return the Projectile root or the current directory without prompting."
+  (or (when (featurep 'projectile) (projectile-project-root)) default-directory))
+
+(defun et/dev-node-environment ()
+  "Explicitly use trusted local project Node tools for this buffer, if present."
+  (when (and (derived-mode-p 'js-mode 'js-ts-mode 'typescript-mode
+                             'typescript-ts-mode 'tsx-ts-mode 'web-mode)
+             (not (file-remote-p default-directory)))
+    (let ((bin (expand-file-name "node_modules/.bin/" (et/dev-project-root))))
+      (when (file-directory-p bin)
+        (et/dev-prepend-path bin et/node-environment-bin)
+        (setq-local et/node-environment-bin bin)))))
+
+(defun et/python-environment (directory)
+  "Select an existing local Python virtualenv DIRECTORY for this buffer."
+  (interactive "DVirtualenv directory: ")
+  (unless (derived-mode-p 'python-mode 'python-ts-mode)
+    (user-error "Select a Python environment from a Python buffer"))
+  (when (or (file-remote-p default-directory) (file-remote-p directory))
+    (user-error "Configure remote Python environments explicitly on the remote host"))
+  (let* ((root (directory-file-name (expand-file-name directory)))
+         (bin (expand-file-name "bin/" root))
+         (python (expand-file-name "python" bin)))
+    (unless (file-executable-p python) (user-error "No executable bin/python in %s" root))
+    (et/dev-prepend-path bin et/python-environment-bin)
+    (setq-local et/python-environment-bin bin)
+    (setenv "VIRTUAL_ENV" root)
+    (setq-local python-shell-interpreter python)
+    (message "Buffer Python: %s (restart any existing Eglot/REPL process)" python)))
+
+(defun et/lsp-start ()
+  "Explicitly start Eglot using separately installed/configured server tools."
+  (interactive)
+  (et/dev-node-environment)
+  (call-interactively #'eglot))
+
+(defun et/lsp-format ()
+  "Format explicitly with the connected server; never format automatically."
+  (interactive)
+  (unless (eglot-managed-p) (user-error "Connect Eglot first with SPC m l"))
+  (if (use-region-p)
+      (call-interactively #'eglot-format)
+    (eglot-format-buffer)))
+
+(defun et/lsp-stop ()
+  "Stop this project's Eglot server."
+  (interactive)
+  (unless (eglot-managed-p) (user-error "No Eglot server for this buffer"))
+  (eglot-shutdown (eglot-current-server)))
+
+(defun et/compose-validate ()
+  "Validate a saved local Compose file without starting/deploying containers."
+  (interactive)
+  (unless (derived-mode-p 'et/compose-mode)
+    (user-error "Open a Compose YAML file first"))
+  (unless (and buffer-file-name (not (file-remote-p buffer-file-name)))
+    (user-error "Compose validation currently requires a local file"))
+  (unless (executable-find "docker") (user-error "Install Docker CLI with the Compose plugin"))
+  (when (buffer-modified-p)
+    (unless (yes-or-no-p "Save Compose changes before validation? ") (user-error "Validation cancelled"))
+    (save-buffer))
+  (compilation-start (mapconcat #'shell-quote-argument
+                               (list "docker" "compose" "-f" buffer-file-name "config" "--quiet")
+                               " ")))
+
+(use-package docker
+  :if (locate-library "docker")
+  :commands docker
+  :init (define-key et/project-map (kbd "D") #'docker))
+(dolist (binding '(("l" . et/lsp-start) ("q" . et/lsp-stop) ("f" . et/lsp-format)
+                   ("r" . eglot-rename) ("a" . eglot-code-actions)
+                   ("d" . xref-find-definitions) ("R" . xref-find-references)
+                   ("h" . eldoc-doc-buffer) ("e" . flymake-show-buffer-diagnostics)
+                   ("E" . flymake-show-project-diagnostics) ("n" . flymake-goto-next-error)
+                   ("p" . flymake-goto-prev-error) ("c" . projectile-compile-project)
+                   ("t" . projectile-test-project) ("v" . et/python-environment)
+                   ("V" . et/compose-validate)))
+  (define-key et/dev-map (kbd (car binding)) (cdr binding)))
+(provide 'et-dev)
+;;; et-dev.el ends here
 #+end_src

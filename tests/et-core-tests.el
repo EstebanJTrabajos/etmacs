@@ -96,7 +96,7 @@
           (org-babel-tangle-file (expand-file-name "config.org" directory))
           (dolist (file '("early-init.el" "init.el" "lisp/et-core.el"
                           "lisp/et-projects.el" "lisp/et-editing.el"
-                          "lisp/et-org.el" "lisp/et-roam.el"))
+                          "lisp/et-org.el" "lisp/et-roam.el" "lisp/et-dev.el"))
             (should
              (equal (with-temp-buffer
                       (insert-file-contents (expand-file-name file directory))
@@ -443,3 +443,4 @@
       (when (buffer-live-p status-buffer) (kill-buffer status-buffer)))))
 
 (load (expand-file-name "tests/et-org-tests.el" et/test-root) nil t)
+(load (expand-file-name "tests/et-dev-tests.el" et/test-root) nil t)

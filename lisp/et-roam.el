@@ -8,6 +8,20 @@
 (setq org-roam-directory et/roam-directory
       org-roam-db-location (expand-file-name "org-roam.db" et/state-directory))
 
+(defun et/roam-node-hierarchy (node)
+  "Format NODE as its document title, ancestors, and own title."
+  (if (zerop (org-roam-node-level node))
+      (org-roam-node-title node)
+    (string-join
+     (append (list (or (org-roam-node-file-title node)
+                       (file-name-base (org-roam-node-file node))))
+             (org-roam-node-olp node)
+             (list (org-roam-node-title node)))
+     " -> ")))
+
+(with-eval-after-load 'org-roam
+  (setq org-roam-node-display-template #'et/roam-node-hierarchy))
+
 (defun et/roam-start ()
   "Explicitly initialize the local roam index when first using a roam command."
   (require 'ucs-normalize)

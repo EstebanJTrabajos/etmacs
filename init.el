@@ -25,7 +25,8 @@
     treemacs-evil treemacs-perspective avy ace-window expand-region crux
     smartparens magit diff-hl git-timemachine git-modes hl-todo
     org-roam org-roam-ui org-pomodoro org-drill citar ox-hugo ox-pandoc
-    restclient ob-restclient)
+    restclient ob-restclient typescript-mode web-mode yaml-mode yara-mode
+    dockerfile-mode docker)
   "Direct dependencies for the current slice; package.el resolves dependencies.")
 
 (defun et/missing-packages ()
@@ -60,6 +61,7 @@
 (require 'et-editing)
 (require 'et-org)
 (require 'et-roam)
+(require 'et-dev)
 
 (when-let* ((missing (et/missing-packages)))
   (display-warning 'etmacs

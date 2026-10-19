@@ -334,3 +334,58 @@
         (org-babel-execute-src-block))
       (should asked)
       (should-not executed))))
+
+(ert-deftest et/roam-completion-displays-document-and-full-heading-path ()
+  (skip-unless (and (locate-library "org-roam") (sqlite-available-p)))
+  (et/with-test-vault
+    (let* ((title "etmacs - personalized emacs configuration")
+           (node (et/test-roam-capture "personal" title "p"))
+           (file (org-roam-node-file node))
+           (heading-id "et-test-heading-id")
+           (nested-id "et-test-nested-id"))
+      (with-current-buffer (find-file-noselect file)
+        (goto-char (point-max))
+        (insert "\n* [50%] Tasks\n:PROPERTIES:\n:ID: " heading-id
+                "\n:ROAM_ALIASES: \"Task alias\"\n:END:\n"
+                "** Parent without ID\n*** Nested task\n:PROPERTIES:\n:ID: " nested-id
+                "\n:END:\n")
+        (save-buffer))
+      (org-roam-db-sync)
+      (should (eq org-roam-node-display-template #'et/roam-node-hierarchy))
+      (let* ((before (et/test-file-text file))
+             (candidates (org-roam-node-read--completions))
+             (file-label title)
+             (heading-label (concat title " -> [50%] Tasks"))
+             (alias-label (concat title " -> Task alias"))
+             ;; Org's indexed ancestor path omits progress cookies; the current
+             ;; node title itself retains them.
+             (nested-label (concat title " -> Tasks -> Parent without ID -> Nested task")))
+        (dolist (entry `((,file-label . ,(org-roam-node-id node))
+                         (,heading-label . ,heading-id)
+                         (,alias-label . ,heading-id)
+                         (,nested-label . ,nested-id)))
+          (should (member (car entry) (mapcar #'car candidates)))
+          (should (equal (org-roam-node-id (cdr (assoc (car entry) candidates)))
+                         (cdr entry))))
+        ;; Both entry points must present the same hierarchy and still resolve
+        ;; the selected candidate to the original heading node, not a new title.
+        (dolist (find-command '(org-roam-node-find et/roam-find))
+          (let (visited)
+            (cl-letf (((symbol-function 'completing-read)
+                       (lambda (_prompt collection &rest _)
+                         (should (member nested-label (all-completions "" collection)))
+                         nested-label))
+                      ((symbol-function 'org-roam-node-visit)
+                       (lambda (selected &rest _)
+                         (setq visited (org-roam-node-id selected)))))
+              (funcall find-command))
+            (should (equal visited nested-id))))
+        (should (equal before (et/test-file-text file)))
+        (should (equal (org-roam-node-title (org-roam-node-from-id nested-id)) "Nested task"))))))
+
+(ert-deftest et/roam-heading-label-falls-back-to-filename-without-file-title ()
+  (skip-unless (locate-library "org-roam"))
+  (require 'org-roam)
+  (should (equal (et/roam-node-hierarchy
+                  (org-roam-node-create :level 1 :file "/notes/untitled.org" :title "Heading"))
+                 "untitled -> Heading")))
