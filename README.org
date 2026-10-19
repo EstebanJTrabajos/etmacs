@@ -354,7 +354,9 @@ PATH (or the selected venv / project =node_modules/.bin=), not just a shell.
 
 =SPC m v= selects an existing local virtualenv's =bin/python= and adjusts PATH
 and =exec-path= *for this buffer*. It does not guess uv/Poetry/Conda layouts or
-change all project buffers. The selected environment is propagated to the Eglot
+change all project buffers. The interactive Python REPL uses =ipython3= (with
+=--simple-prompt=) when available, falling back to plain =python=. The selected
+environment is propagated to the Eglot
 server process via =VIRTUAL_ENV=, so basedpyright analyses against that venv.
 Select the environment before starting Eglot/REPL; restart already-running
 processes after changing it. Invoking =SPC m l=, a test command, or =SPC m F= in

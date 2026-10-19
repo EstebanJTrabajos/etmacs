@@ -58,6 +58,7 @@
       (python-mode)
       (et/python-environment root)
       (should (equal python-shell-interpreter python))
+      (should (equal python-shell-interpreter-args "-i"))
       (should (equal (getenv "VIRTUAL_ENV") (directory-file-name root)))
       (should (equal (car exec-path) bin))
       (et/python-environment root)
@@ -66,6 +67,27 @@
     (should (eq exec-path original-exec))
     (with-temp-buffer
       (should-error (et/python-environment root) :type 'user-error))))
+
+(ert-deftest et/dev-python-environment-prefers-ipython-repl ()
+  (let* ((root (expand-file-name "venv-ipython-fixture/" et/test-state))
+         (bin (expand-file-name "bin/" root))
+         (python (expand-file-name "python" bin))
+         (ipython (expand-file-name "ipython3" bin)))
+    (make-directory bin t)
+    (with-temp-file python (insert "#!/bin/sh\nexit 0\n"))
+    (with-temp-file ipython (insert "#!/bin/sh\nexit 0\n"))
+    (set-file-modes python #o700)
+    (set-file-modes ipython #o700)
+    (with-temp-buffer
+      (python-mode)
+      (et/python-environment root)
+      (should (equal python-shell-interpreter ipython))
+      (should (equal python-shell-interpreter-args "--simple-prompt -i")))))
+
+(ert-deftest et/dev-default-python-repl-is-ipython-when-available ()
+  (skip-unless (executable-find "ipython3"))
+  (should (equal python-shell-interpreter "ipython3"))
+  (should (equal python-shell-interpreter-args "--simple-prompt -i")))
 
 (ert-deftest et/dev-node-tools-are-opt-in-and-local ()
   (let* ((root (expand-file-name "node-fixture/" et/test-state))

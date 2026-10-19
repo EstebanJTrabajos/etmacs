@@ -5,6 +5,12 @@
 (require 'compile)
 (require 'python)
 
+;; Prefer IPython for the interactive Python REPL; fall back to plain python.
+(setq python-shell-interpreter
+      (if (executable-find "ipython3") "ipython3" "python3")
+      python-shell-interpreter-args
+      (if (executable-find "ipython3") "--simple-prompt -i" "-i"))
+
 (defvar et/dev-map (make-sparse-keymap "development"))
 (defvar et/dev-modes
   '(python-mode python-ts-mode js-mode js-ts-mode typescript-mode
@@ -122,13 +128,17 @@
     (user-error "Configure remote Python environments explicitly on the remote host"))
   (let* ((root (directory-file-name (expand-file-name directory)))
          (bin (expand-file-name "bin/" root))
-         (python (expand-file-name "python" bin)))
+         (python (expand-file-name "python" bin))
+         (ipython (expand-file-name "ipython3" bin))
+         (repl (if (file-executable-p ipython) ipython python)))
     (unless (file-executable-p python) (user-error "No executable bin/python in %s" root))
     (et/dev-prepend-path bin et/python-environment-bin)
     (setq-local et/python-environment-bin bin)
     (setenv "VIRTUAL_ENV" root)
-    (setq-local python-shell-interpreter python)
-    (message "Buffer Python: %s (restart any existing Eglot/REPL process)" python)))
+    (setq-local python-shell-interpreter repl)
+    (setq-local python-shell-interpreter-args
+                (if (string-match-p "ipython" repl) "--simple-prompt -i" "-i"))
+    (message "Buffer Python REPL: %s (restart any existing Eglot/REPL process)" repl)))
 
 (defun et/lsp-start ()
   "Explicitly start Eglot using separately installed/configured server tools."
