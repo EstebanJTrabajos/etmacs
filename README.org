@@ -2,8 +2,9 @@
 #+options: toc:2
 
 A personal, literate Emacs configuration—not a Doom or Prelude clone. Includes
-Evil, discoverable leader keys, completion, Projectile/Perspective workspaces,
-Treemacs, Git tools, conservative editing defaults, and Org/roam workflows.
+Evil, discoverable leader keys, a custom dashboard, gptel AI integration,
+completion, Projectile/Perspective workspaces, Treemacs, Git tools, conservative
+editing defaults, and Org/roam workflows.
 The source of truth and package rationales are in [[file:config.org][config.org]]. Maintained project
 documentation uses Org format. Old session/planning artifacts are not runtime
 dependencies and are not part of the proposed configuration commit.
@@ -84,6 +85,35 @@ theme picker, =C-n=/=C-p= preview, =RET= accepts, and =C-g= restores the previou
 theme. Only trusted installed theme code should be previewed. Selection is
 session-only; change =et/default-theme= for a persistent default.
 
+* Dashboard and AI
+
+=SPC d= opens a dependency-free dashboard with Projects, Recent files, Agenda,
+Daily journal and a News placeholder. It reads Projectile/recentf/Org data; it
+does not start a server or fetch a feed. =g= refreshes, =q= quits, and =TAB=/=RET=
+activates a button. =SPC q= quits Emacs; =SPC R= re-tangles =config.org= and
+restarts Emacs after saving buffers.
+
+=gptel= provides OpenAI, Anthropic and DeepSeek backends. API keys are read from
+=~/.authinfo.gpg= through =gptel-api-key-from-auth-source=; the machine and user
+are prompted for at first use and cached for the session. Reasoning text is
+hidden by default because reasoning tokens are billed as output. The OpenCode
+entry is a placeholder.
+
+| Keys                  | Action                                                     |
+|-----------------------+------------------------------------------------------------|
+| SPC d                 | Open the dashboard                                         |
+| SPC q / SPC R         | Quit Emacs / re-tangle and restart                         |
+| SPC a g / SPC a s     | gptel chat / send                                          |
+| SPC a m               | gptel menu                                                 |
+| SPC a k               | Prompt for and cache auth-source keys                      |
+| SPC a r               | Toggle reasoning output for this session                   |
+| SPC a o               | OpenCode placeholder                                       |
+| SPC n C               | Create and persist an Org capture template                 |
+
+Interactively created capture templates are written to
+=.local/capture-templates.el= with mode 0600 and merged ahead of the built-in
+templates on startup. They contain data only, never credentials.
+
 * Projects, workspaces and windows
 
 Projectile owns project roots/files/build/test commands; Perspective owns
@@ -126,7 +156,7 @@ We adopt capabilities from [[https://github.com/bbatsov/prelude][Prelude]], not 
 | Visible-text/window navigation                          | Avy + Ace Window, current frame                                  |
 | Semantic selection                                      | expand-region complements Evil text objects                      |
 | Explicit editing/file helpers                           | Selected Crux commands, no automatic edit advice                 |
-| Lisp structure                                          | Non-strict Smartparens only in Lisp; electric-pair elsewhere     |
+| Lisp structure                                          | Parinfer (parinfer-rust-mode) + rainbow delimiters; electric-pair elsewhere |
 | Source TODO/FIXME markers                               | hl-todo, not an alternative task database                        |
 | Git operations/change markers/history                   | Magit, diff-hl, git-timemachine, git-modes                       |
 
@@ -139,8 +169,7 @@ We adopt capabilities from [[https://github.com/bbatsov/prelude][Prelude]], not 
 | SPC f R / SPC f r                     | Explicit file+buffer rename / global recent files               |
 | SPC g s / SPC g v                     | Magit status / built-in VC                                      |
 | SPC g f / SPC g l / SPC g b / SPC g t | File actions / log / blame / time machine                       |
-| SPC m > / SPC m < / SPC m s (Lisp)    | Slurp / barf / splice                                           |
-| SPC m f/b (Lisp)                      | Move over forms                                                 |
+| SPC m f/b (Lisp)                      | Forward/backward form; Parinfer handles parens                  |
 
 Intentionally not enabled: super-save, midnight cleanup, persisted kill rings,
 global whitespace cleanup or format-on-save, pasted-text reindentation,
@@ -195,6 +224,7 @@ SQLite files. Each machine rebuilds its own index with =SPC n r u=.
 | Keys                  | Action                                                             |
 |-----------------------+--------------------------------------------------------------------|
 | SPC n c / C-c c       | Task/inbox capture menu                                            |
+| SPC n C               | Create and persist a new capture template                          |
 | SPC n a / C-c a       | Choose agenda domain and open daily dashboard                      |
 | SPC n D               | Set workspace default domain                                       |
 | SPC n d               | Browse the existing Org root                                       |
@@ -237,7 +267,10 @@ In Org buffers =SPC m= offers:
 | c / a / t             | Capture / agenda / TODO state                      |
 | s / d / r             | Schedule / deadline / refile                       |
 | i / l                 | Create ID / store link                             |
-| k / K / p             | Clock in / out / Pomodoro                          |
+| k / K / p             | Clock in / out / org-pomodoro                      |
+| P / S                 | Start / stop the Etmacs pomodoro helper            |
+| L                     | Log pomodoros for an Org date range                |
+| H / G                 | New habit / restart an archived habit              |
 | F f / F t / F a       | Drill file / subtree / resume                      |
 | C                     | Insert citation through Citar                      |
 | b / T                 | Execute source block / explicitly tangle this file |
@@ -246,11 +279,18 @@ In Org buffers =SPC m= offers:
 
 Org, habits, agenda, capture, clocks, Babel and exporters are built in.
 =org-roam= adds the linked-note index; =org-roam-ui= adds the browser graph.
-=org-pomodoro= adds focus cycles and =org-drill= spaced repetition. =citar=
-provides reference insertion/opening over Org Cite and your own BibTeX files;
-set =et/bibliography-files= before startup. Zotero can maintain those files but
-is not mandatory. PDF viewing initially uses Emacs's available built-in viewer;
-pdf-tools/annotation integrations can be added separately.
+=org-pomodoro= remains at =SPC m p= and =org-drill= adds spaced repetition.
+The separate =et/pomodoro-start= helper at =SPC m P= records each work segment as
+a TODO in =DOMAIN/pomodoro.org=, prompts for "Planned work" and "What was
+achieved?", follows 25/5 × 4 then 30, and logs a date range with Org's date
+selector. Compare both helpers and keep the preferred one.
+=et/new-habit= records a frequency and objective; reaching the objective archives
+the habit under =DOMAIN/habits-archive.org=, and =et/restart-habit= brings it
+back. =et/pomodoro-trial-habit= creates five weekly weekday habits for the
+one-month comparison. =citar= provides reference insertion/opening over Org Cite and your own
+BibTeX files; set =et/bibliography-files= before startup. Zotero can maintain
+those files but is not mandatory. PDF viewing initially uses Emacs's available
+built-in viewer; pdf-tools/annotation integrations can be added separately.
 
 HTML uses Org; PDF uses Org's LaTeX exporter and an external TeX toolchain.
 HTML source blocks fall back to plain text if optional =htmlize= is absent.
@@ -410,9 +450,11 @@ bindings, isolated environments and their propagation to the server process,
 basedpyright preference, pytest/Jest/Vitest command construction and runner
 detection, standalone formatting and reload, Compose validation/cancellation,
 and a real Eglot JSON-RPC connection to a deterministic test fixture for CAPF,
-Flymake, Xref and formatting. This fixture does *not* verify production
-language-server behavior. No production server is installed on this development
-host yet.
+Flymake, Xref and formatting. Dashboard sections and buttons, gptel auth-source
+prompting and reasoning defaults, persistent capture templates, pomodoro
+segments/logging, and habit archive/restart behavior also have offline tests.
+This fixture does *not* verify production language-server behavior. No production
+server is installed on this development host yet.
 
 * External dependencies and remaining stages
 
@@ -427,7 +469,7 @@ distribution's formats and LaTeX packages must also be installed/configured.
 An error about missing =pdflatex.fmt= is a system TeX setup problem, not an Org
 export setting. Fix that distribution setup before verifying PDF output.
 
-Production-server tuning, remote/container development, vterm, AI,
+Production-server tuning, remote/container development, vterm,
 spelling/grammar, deeper citation/PDF workflows and optional Forge remain
 separate stages. Do not load another completion or diagnostic framework globally
 over the current one without a concrete reason.

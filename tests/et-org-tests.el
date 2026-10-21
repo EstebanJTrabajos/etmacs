@@ -389,3 +389,25 @@
   (should (equal (et/roam-node-hierarchy
                   (org-roam-node-create :level 1 :file "/notes/untitled.org" :title "Heading"))
                  "untitled -> Heading")))
+
+(ert-deftest et/capture-templates-persist-and-merge ()
+  (et/with-test-vault
+    (let* ((state (expand-file-name "capture-templates.el" directory))
+           (et/capture-template-state-file state)
+           (et/custom-capture-templates nil)
+           (org-capture-templates et/default-capture-templates)
+           (file (expand-file-name "personal/inbox.org" et/notes-directory)))
+      (et/capture-template-add "z" "Custom template" 'entry
+                               "file+headline" file "Inbox" "* %?\n")
+      (should (file-exists-p state))
+      (should (= (logand (file-modes state) #o777) #o600))
+      (should (assoc "z" org-capture-templates))
+      (should (assoc "z" et/custom-capture-templates))
+      (setq et/custom-capture-templates nil)
+      (setq org-capture-templates et/default-capture-templates)
+      (et/load-capture-templates)
+      (should (assoc "z" org-capture-templates))
+      (et/capture "z")
+      (insert "Custom entry")
+      (org-capture-finalize)
+      (should (string-match-p "Custom entry" (et/test-file-text file))))))

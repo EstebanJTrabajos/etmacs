@@ -23,7 +23,8 @@
   '(evil evil-collection vertico orderless marginalia consult
     vertico-posframe guava-themes projectile perspective corfu treemacs
     treemacs-evil treemacs-perspective avy ace-window expand-region crux
-    smartparens magit diff-hl git-timemachine git-modes hl-todo
+    gptel parinfer-rust-mode rainbow-delimiters
+    magit diff-hl git-timemachine git-modes hl-todo
     org-roam org-roam-ui org-pomodoro org-drill citar ox-hugo ox-pandoc
     restclient ob-restclient typescript-mode web-mode yaml-mode yara-mode
     dockerfile-mode docker)
@@ -62,6 +63,9 @@
 (require 'et-org)
 (require 'et-roam)
 (require 'et-dev)
+(require 'et-dashboard)
+(require 'et-ai)
+(require 'et-pomodoro)
 
 (when-let* ((missing (et/missing-packages)))
   (display-warning 'etmacs

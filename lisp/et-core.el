@@ -98,6 +98,25 @@
 (define-key et/help-map (kbd "p") #'et/install-packages)
 (global-set-key (kbd "C-c SPC") et/leader-map)
 
+(defun et/reload-config ()
+  "Re-tangle config.org, then restart Emacs."
+  (interactive)
+  (when (save-some-buffers t)
+    (et/tangle-config)
+    (let ((program (expand-file-name invocation-name invocation-directory))
+          (default-directory et/config-directory))
+      (condition-case err
+          (progn
+            (start-process "etmacs-restart" nil program
+                           "--init-directory" et/config-directory)
+            (kill-emacs))
+        (error
+         (user-error "Tangle complete, but restart failed: %s; restart Emacs manually"
+                     (error-message-string err)))))))
+
+(define-key et/leader-map (kbd "q") #'save-buffers-kill-emacs)
+(define-key et/leader-map (kbd "R") #'et/reload-config)
+
 (use-package evil
   :if (locate-library "evil")
   :demand t

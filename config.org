@@ -67,7 +67,8 @@ package directory first. No global bidi or aggressive GC tweaks.
   '(evil evil-collection vertico orderless marginalia consult
     vertico-posframe guava-themes projectile perspective corfu treemacs
     treemacs-evil treemacs-perspective avy ace-window expand-region crux
-    smartparens magit diff-hl git-timemachine git-modes hl-todo
+    gptel parinfer-rust-mode rainbow-delimiters
+    magit diff-hl git-timemachine git-modes hl-todo
     org-roam org-roam-ui org-pomodoro org-drill citar ox-hugo ox-pandoc
     restclient ob-restclient typescript-mode web-mode yaml-mode yara-mode
     dockerfile-mode docker)
@@ -106,6 +107,9 @@ package directory first. No global bidi or aggressive GC tweaks.
 (require 'et-org)
 (require 'et-roam)
 (require 'et-dev)
+(require 'et-dashboard)
+(require 'et-ai)
+(require 'et-pomodoro)
 
 (when-let* ((missing (et/missing-packages)))
   (display-warning 'etmacs
@@ -225,6 +229,25 @@ to supply their own bindings without changing every other mode.
 (define-key et/help-map (kbd "i") #'info)
 (define-key et/help-map (kbd "p") #'et/install-packages)
 (global-set-key (kbd "C-c SPC") et/leader-map)
+
+(defun et/reload-config ()
+  "Re-tangle config.org, then restart Emacs."
+  (interactive)
+  (when (save-some-buffers t)
+    (et/tangle-config)
+    (let ((program (expand-file-name invocation-name invocation-directory))
+          (default-directory et/config-directory))
+      (condition-case err
+          (progn
+            (start-process "etmacs-restart" nil program
+                           "--init-directory" et/config-directory)
+            (kill-emacs))
+        (error
+         (user-error "Tangle complete, but restart failed: %s; restart Emacs manually"
+                     (error-message-string err)))))))
+
+(define-key et/leader-map (kbd "q") #'save-buffers-kill-emacs)
+(define-key et/leader-map (kbd "R") #'et/reload-config)
 
 (use-package evil
   :if (locate-library "evil")
@@ -541,6 +564,318 @@ on demand, not forced into every workspace. Pop-up rules use built-in
 ;;; et-projects.el ends here
 #+end_src
 
+* Dashboard
+
+The dashboard is a small, dependency-free =special-mode= buffer. It reads
+Projectile's registered projects, =recentf-list=, and today's Org agenda without
+opening a graph server or contacting the network. Buttons use Emacs's built-in
+=button= library. The news feed is deliberately a placeholder; no feed reader or
+remote request is wired in. Refresh with =g=, quit with =q=, and use =TAB=/=RET=
+to activate a button. =SPC d= opens it.
+
+#+begin_src emacs-lisp :tangle lisp/et-dashboard.el
+;;; et-dashboard.el --- Generated from config.org -*- lexical-binding: t; -*-
+(require 'button)
+(require 'seq)
+(require 'subr-x)
+
+(declare-function et/capture "et-org" (&optional key))
+(declare-function et/current-domain "et-org" (&optional buffer))
+(declare-function et/daily "et-roam" (&optional choose-domain key))
+(declare-function et/org-agenda "et-org" (scope))
+(declare-function et/org-refresh-agenda "et-org" (&optional scope))
+
+(defvar et/dashboard-buffer-name "*etmacs-dashboard*")
+(defvar et/dashboard-recent-limit 8)
+(defvar et/dashboard-project-limit 8)
+(defvar et/dashboard-agenda-limit 8)
+
+(defvar et/dashboard-mode-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map special-mode-map)
+    (define-key map (kbd "g") #'et/dashboard-refresh)
+    (define-key map (kbd "d") #'et/dashboard-daily)
+    (define-key map (kbd "a") #'et/dashboard-agenda)
+    (define-key map (kbd "p") #'et/dashboard-switch-project)
+    (define-key map (kbd "c") #'et/capture)
+    (define-key map (kbd "n") #'et/dashboard-news)
+    map)
+  "Keymap for the Etmacs dashboard.")
+
+(define-derived-mode et/dashboard-mode special-mode "Etmacs Dashboard"
+  "Major mode for the Etmacs dashboard."
+  (setq-local revert-buffer-function #'et/dashboard-refresh)
+  (setq-local truncate-lines t))
+
+(define-button-type 'et/dashboard-button
+  'action #'ignore
+  'follow-link t
+  'help-echo "Open")
+
+(defun et/dashboard-insert-button (label action &optional help)
+  "Insert LABEL as a button whose ACTION opens it."
+  (insert-text-button label
+                      :type 'et/dashboard-button
+                      :action action
+                      :help-echo (or help label)))
+
+(defun et/dashboard-insert-section (title)
+  "Insert a dashboard section heading TITLE."
+  (insert (propertize (concat title "\n") 'face 'bold))
+  (insert (make-string (length title) ?-) "\n"))
+
+(defun et/dashboard-projects ()
+  "Return known Projectile projects, most recent first."
+  (when (bound-and-true-p projectile-mode)
+    (seq-take (projectile-known-projects) et/dashboard-project-limit)))
+
+(defun et/dashboard-recent-files ()
+  "Return existing local recent files."
+  (seq-take
+   (seq-filter (lambda (file)
+                 (and (stringp file)
+                      (not (file-remote-p file))
+                      (file-exists-p file)))
+               recentf-list)
+   et/dashboard-recent-limit))
+
+(defun et/dashboard-agenda-items ()
+  "Return open agenda tasks without opening the agenda buffer."
+  (let (lines)
+    (dolist (file (bound-and-true-p org-agenda-files))
+      (when (file-readable-p file)
+        (condition-case nil
+            (with-current-buffer (find-file-noselect file)
+              (org-map-entries
+               (lambda ()
+                 (let ((state (org-get-todo-state)))
+                   (when (member state '("TODO" "NEXT" "WAIT"))
+                     (let ((heading (org-get-heading t t t t))
+                           (scheduled (org-entry-get nil "SCHEDULED"))
+                           (deadline (org-entry-get nil "DEADLINE")))
+                       (push (concat heading
+                                     (when scheduled (format "  [%s]" scheduled))
+                                     (when deadline (format "  [deadline %s]" deadline)))
+                             lines)))))
+               nil 'file))
+          (error nil))))
+    (seq-take (nreverse lines) et/dashboard-agenda-limit)))
+
+(defun et/dashboard-daily-file ()
+  "Return today's daily file for the current domain."
+  (expand-file-name (format-time-string "%Y-%m-%d.org")
+                    (expand-file-name (concat (et/current-domain) "/daily/")
+                                      et/roam-directory)))
+
+(defun et/dashboard-open-project (project)
+  "Switch to PROJECT and prompt for one of its files."
+  (let ((default-directory (file-name-as-directory project)))
+    (projectile-switch-project-by-name project)))
+
+(defun et/dashboard-switch-project ()
+  "Choose and switch to a project, activating its workspace."
+  (interactive)
+  (if (fboundp 'projectile-switch-project)
+      (call-interactively #'projectile-switch-project)
+    (user-error "Projectile is not installed")))
+
+(defun et/dashboard-render ()
+  "Render the dashboard into the current buffer."
+  (let ((inhibit-read-only t))
+    (erase-buffer)
+    (insert (propertize "Etmacs\n" 'face '(:height 1.4 :weight bold)))
+    (insert (format-time-string "%A, %Y-%m-%d %H:%M\n\n"))
+    (et/dashboard-insert-section "Projects")
+    (let ((projects (et/dashboard-projects)))
+      (if projects
+          (dolist (project projects)
+            (insert "  ")
+            (et/dashboard-insert-button
+             (abbreviate-file-name project)
+             (lambda (_button) (et/dashboard-open-project project))
+             (format "Switch to %s" project))
+            (insert "\n"))
+        (insert "  No registered projects. Use SPC p a to add one.\n")))
+    (insert "\n")
+    (et/dashboard-insert-section "Recent files")
+    (let ((files (et/dashboard-recent-files)))
+      (if files
+          (dolist (file files)
+            (insert "  ")
+            (et/dashboard-insert-button
+             (abbreviate-file-name file)
+             (lambda (_button) (find-file file))
+             (format "Open %s" file))
+            (insert "\n"))
+        (insert "  No recent files yet.\n")))
+    (insert "\n")
+    (et/dashboard-insert-section "Agenda")
+    (let ((items (et/dashboard-agenda-items)))
+      (if items
+          (dolist (item items) (insert "  " item "\n"))
+        (insert "  Nothing scheduled for today.\n"))
+      (insert "  ")
+      (et/dashboard-insert-button "Open agenda" #'et/dashboard-agenda)
+      (insert "\n"))
+    (insert "\n")
+    (et/dashboard-insert-section "Daily journal")
+    (insert "  ")
+    (et/dashboard-insert-button "Open today's journal" #'et/dashboard-daily)
+    (insert "  " (abbreviate-file-name (et/dashboard-daily-file)) "\n")
+    (insert "\n")
+    (et/dashboard-insert-section "News")
+    (insert "  News feed placeholder (not configured yet).\n")
+    (insert "\n")
+    (insert (propertize
+             "g refresh · q quit · TAB/RET open · d journal · a agenda\n"
+             'face 'shadow))))
+
+(defun et/dashboard-refresh ()
+  "Refresh the Etmacs dashboard."
+  (interactive)
+  (unless (derived-mode-p 'et/dashboard-mode)
+    (user-error "Not in the Etmacs dashboard"))
+  (et/dashboard-render))
+
+(defun et/dashboard ()
+  "Open the Etmacs dashboard."
+  (interactive)
+  (when (fboundp 'et/org-refresh-agenda)
+    (condition-case nil
+        (et/org-refresh-agenda et/org-agenda-scope)
+      (error nil)))
+  (let ((buffer (get-buffer-create et/dashboard-buffer-name)))
+    (with-current-buffer buffer
+      (et/dashboard-mode)
+      (et/dashboard-refresh))
+    (switch-to-buffer buffer)))
+
+(defun et/dashboard-daily ()
+  "Open today's journal entry."
+  (interactive)
+  (et/daily))
+
+(defun et/dashboard-agenda ()
+  "Open the agenda for the current domain."
+  (interactive)
+  (et/org-agenda (et/current-domain)))
+
+(defun et/dashboard-news ()
+  "Placeholder for the future news feed."
+  (interactive)
+  (message "News feed placeholder: not configured yet"))
+
+(define-key et/leader-map (kbd "d") #'et/dashboard)
+(provide 'et-dashboard)
+;;; et-dashboard.el ends here
+#+end_src
+
+* AI assistance
+
+=gptel= talks to OpenAI, Anthropic, and DeepSeek. API keys are never stored in
+this repository: the backends call =gptel-api-key-from-auth-source= with a
+machine and user prompted at first use, so =~/.authinfo.gpg= remains the source of
+truth. Reasoning text is hidden by default because providers bill reasoning
+tokens as output; =SPC a r= toggles it deliberately for one session. The
+OpenCode entry is a placeholder and does not start a process or contact a server.
+
+#+begin_src emacs-lisp :tangle lisp/et-ai.el
+;;; et-ai.el --- Generated from config.org -*- lexical-binding: t; -*-
+(require 'seq)
+(require 'subr-x)
+
+(declare-function gptel-api-key-from-auth-source "gptel-request" (&optional host user))
+(declare-function gptel-make-anthropic "gptel-anthropic" (name &rest args))
+(declare-function gptel-make-deepseek "gptel-openai-extras" (name &rest args))
+(declare-function gptel-make-openai "gptel-openai" (name &rest args))
+
+(defvar et/ai-map (make-sparse-keymap "AI"))
+(define-key et/leader-map (kbd "a") (cons "AI" et/ai-map))
+
+(defvar et/gptel-keys nil
+  "Cached auth-source API keys, keyed by host.")
+
+(defvar et/gptel-openai nil)
+(defvar et/gptel-anthropic nil)
+(defvar et/gptel-deepseek nil)
+
+(defun et/gptel-auth-source-key (host)
+  "Prompt for machine/user and return HOST's key from auth-source."
+  (require 'gptel)
+  (let* ((machine (read-string (format "Auth machine for %s: " host) host))
+         (user (read-string (format "Auth user for %s: " host) "apikey")))
+    (gptel-api-key-from-auth-source machine user)))
+
+(defun et/gptel-key (host)
+  "Return HOST's cached key, prompting through auth-source when needed."
+  (or (alist-get host et/gptel-keys nil nil #'equal)
+      (let ((key (et/gptel-auth-source-key host)))
+        (setf (alist-get host et/gptel-keys nil nil #'equal) key)
+        key)))
+
+(defun et/gptel-auth (&optional provider)
+  "Prompt for and cache API keys for PROVIDER, or all providers."
+  (interactive
+   (list (completing-read "Provider: "
+                          '("all" "api.openai.com" "api.anthropic.com" "api.deepseek.com")
+                          nil t nil nil "all")))
+  (let ((hosts (if (equal provider "all")
+                   '("api.openai.com" "api.anthropic.com" "api.deepseek.com")
+                 (list provider))))
+    (dolist (host hosts)
+      (setf (alist-get host et/gptel-keys nil nil #'equal)
+            (et/gptel-auth-source-key host)))
+    (message "Cached API key(s) for %s" (mapconcat #'identity hosts ", "))))
+
+(defun et/gptel-toggle-reasoning ()
+  "Toggle whether gptel includes reasoning text in responses."
+  (interactive)
+  (setq gptel-include-reasoning
+        (if gptel-include-reasoning nil t))
+  (message "gptel reasoning: %s"
+           (if gptel-include-reasoning "included" "hidden")))
+
+(defun et/gptel-configure ()
+  "Create gptel backends that obtain keys through auth-source."
+  (setq et/gptel-openai
+        (gptel-make-openai "OpenAI"
+          :host "api.openai.com"
+          :key (lambda () (et/gptel-key "api.openai.com")))
+        et/gptel-anthropic
+        (gptel-make-anthropic "Anthropic"
+          :host "api.anthropic.com"
+          :key (lambda () (et/gptel-key "api.anthropic.com")))
+        et/gptel-deepseek
+        (gptel-make-deepseek "DeepSeek"
+          :host "api.deepseek.com"
+          :key (lambda () (et/gptel-key "api.deepseek.com")))
+        gptel-backend et/gptel-deepseek
+        gptel-model 'deepseek-flash))
+
+(defun et/opencode-placeholder ()
+  "Placeholder for a future OpenCode integration."
+  (interactive)
+  (message "OpenCode integration is not configured yet"))
+
+(use-package gptel
+  :if (locate-library "gptel")
+  :commands (gptel gptel-send gptel-menu)
+  :init
+  (setq gptel-include-reasoning nil)
+  :config
+  (setq gptel-include-reasoning nil)
+  (et/gptel-configure))
+
+(define-key et/ai-map (kbd "g") #'gptel)
+(define-key et/ai-map (kbd "s") #'gptel-send)
+(define-key et/ai-map (kbd "m") #'gptel-menu)
+(define-key et/ai-map (kbd "k") #'et/gptel-auth)
+(define-key et/ai-map (kbd "r") #'et/gptel-toggle-reasoning)
+(define-key et/ai-map (kbd "o") #'et/opencode-placeholder)
+(provide 'et-ai)
+;;; et-ai.el ends here
+#+end_src
+
 * Prelude-inspired editing and navigation
 
 This layer adopts capabilities from [[https://github.com/bbatsov/prelude][Emacs Prelude]], not its startup framework or
@@ -619,7 +954,7 @@ Compile keeps its save prompt and does not automatically kill an existing job.
 (defun et/program-editing-defaults ()
   "Use conservative pairing and comment-only fill in programming buffers."
   (setq-local comment-auto-fill-only-comments t)
-  ;; Lisp gets non-strict Smartparens below, never two pairing engines.
+  ;; Lisp gets Parinfer and rainbow delimiters below, never two pairing engines.
   (unless (derived-mode-p 'emacs-lisp-mode 'lisp-interaction-mode 'lisp-mode 'scheme-mode)
     (electric-pair-local-mode 1)))
 (add-hook 'prog-mode-hook #'et/program-editing-defaults)
@@ -648,9 +983,10 @@ Compile keeps its save prompt and does not automatically kill an existing job.
   objects. It does not create a second modal editing system.
 - =crux= supplies selected explicit commands (open line, duplicate, rename).
   We don't install its broad global remappings or advice for automatic edits.
-- =smartparens= adds Lisp structural operations and pairing, non-strict and
-  Lisp-only. Other programming modes use built-in electric-pair. No competing
-  Parinfer/Paredit, no automatic reindent-on-paste, no Smartparens key takeover.
+- =smartparens= is no longer used. Lisp buffers get =parinfer-rust-mode= for
+  structural editing and =rainbow-delimiters= for depth readability. Other
+  programming modes keep built-in electric-pair. No competing Parinfer/Paredit
+  stack, no automatic reindent-on-paste, no Smartparens key takeover.
 - =hl-todo= highlights markers in source code, not a separate task database.
 
 #+begin_src emacs-lisp :tangle lisp/et-editing.el
@@ -693,12 +1029,29 @@ Compile keeps its save prompt and does not automatically kill an existing job.
   (define-key et/edit-map (kbd "d") #'crux-duplicate-current-line-or-region)
   (define-key et/file-map (kbd "R") #'crux-rename-file-and-buffer))
 
+(with-eval-after-load 'parinfer-rust-mode
+  (setq parinfer-rust-library-directory
+        (expand-file-name "parinfer-rust/" et/state-directory)
+        parinfer-rust-library
+        (expand-file-name parinfer-rust--lib-name
+                          parinfer-rust-library-directory)
+        ;; Lisp buffers disable electric-pair explicitly; indent-tabs-mode is a
+        ;; variable, not a competing structural mode, so neither should prompt.
+        parinfer-rust-troublesome-modes
+        (delq 'indent-tabs-mode
+              (delq 'electric-pair-mode parinfer-rust-troublesome-modes))
+        parinfer-rust-check-before-enable nil))
+
 (defun et/lisp-editing-defaults ()
-  "Enable non-strict Lisp pairing and a buffer-local structural command map."
-  (when (require 'smartparens nil t)
-    (electric-pair-local-mode -1)
-    (smartparens-mode 1)
-    (setq-local et/local-leader-map et/lisp-edit-map)))
+  "Enable Parinfer and rainbow delimiters in Lisp buffers."
+  (electric-pair-local-mode -1)
+  (when (require 'rainbow-delimiters nil t)
+    (rainbow-delimiters-mode 1))
+  (when (require 'parinfer-rust-mode nil t)
+    ;; Batch sessions must not prompt for a network download.
+    (when (or (file-exists-p parinfer-rust-library) (not noninteractive))
+      (parinfer-rust-mode 1)))
+  (setq-local et/local-leader-map et/lisp-edit-map))
 (dolist (hook '(emacs-lisp-mode-hook lisp-interaction-mode-hook lisp-mode-hook scheme-mode-hook))
   (add-hook hook #'et/lisp-editing-defaults))
 ;; *scratch* may have entered Lisp mode before this module was loaded.
@@ -706,12 +1059,19 @@ Compile keeps its save prompt and does not automatically kill an existing job.
   (with-current-buffer scratch
     (when (derived-mode-p 'lisp-interaction-mode)
       (et/lisp-editing-defaults))))
-(with-eval-after-load 'smartparens
-  (define-key et/lisp-edit-map (kbd "f") #'sp-forward-sexp)
-  (define-key et/lisp-edit-map (kbd "b") #'sp-backward-sexp)
-  (define-key et/lisp-edit-map (kbd ">") #'sp-forward-slurp-sexp)
-  (define-key et/lisp-edit-map (kbd "<") #'sp-forward-barf-sexp)
-  (define-key et/lisp-edit-map (kbd "s") #'sp-splice-sexp))
+(define-key et/lisp-edit-map (kbd "f") #'forward-sexp)
+(define-key et/lisp-edit-map (kbd "b") #'backward-sexp)
+
+(defun et/install-parinfer-rust ()
+  "Download the parinfer-rust dynamic library used by Lisp buffers."
+  (interactive)
+  (unless (require 'parinfer-rust-mode nil t)
+    (user-error "Install parinfer-rust-mode with et/install-packages first"))
+  (parinfer-rust--download-from-github
+   (car parinfer-rust-supported-versions)
+   parinfer-rust-library
+   parinfer-rust--lib-name)
+  (message "parinfer-rust installed; restart Emacs and reopen a Lisp buffer"))
 
 (use-package hl-todo
   :if (locate-library "hl-todo")
@@ -795,6 +1155,7 @@ The initial daily habit schedule is editable before finalizing.
 (require 'org-habit)
 (require 'org-clock)
 (require 'oc)
+(require 'seq)
 
 (defvar et/org-domain "personal" "Default note domain in the current workspace.")
 (defvar et/org-domains '("personal" "work" "general"))
@@ -862,26 +1223,106 @@ The initial daily habit schedule is editable before finalizing.
       org-agenda-custom-commands
       '(("d" "Daily dashboard" ((agenda "") (todo "NEXT") (todo "WAIT")))))
 
-(setq org-capture-templates
-      '(("p" "Personal")
-        ("pi" "Inbox" entry
-         (file+headline (lambda () (et/org-target-file "personal/inbox.org")) "Inbox")
-         "* %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n%i\n%a\n" :empty-lines 1)
-        ("pt" "TODO" entry
-         (file+headline (lambda () (et/org-target-file "personal/tasks.org")) "Tasks")
-         "* TODO %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n" :empty-lines 1)
-        ("ph" "Daily habit" entry
-         (file+headline (lambda () (et/org-target-file "personal/tasks.org")) "Habits")
-         (function et/habit-template) :empty-lines 1)
-        ("w" "Work")
-        ("wi" "Inbox" entry
-         (file+headline (lambda () (et/org-target-file "work/inbox.org")) "Inbox")
-         "* %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n%i\n%a\n" :empty-lines 1)
-        ("wt" "TODO" entry
-         (file+headline (lambda () (et/org-target-file "work/tasks.org")) "Tasks")
-         "* TODO %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n" :empty-lines 1)
-        ("j" "Project task" entry (function et/project-task-target)
-         "* TODO %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n" :empty-lines 1)))
+(defvar et/capture-template-state-file
+  (expand-file-name "capture-templates.el" et/state-directory)
+  "File holding capture templates created interactively.")
+
+(defvar et/custom-capture-templates nil
+  "Interactively created capture templates, loaded from the state file.")
+
+(defvar et/default-capture-templates
+  '(("p" "Personal")
+    ("pi" "Inbox" entry
+     (file+headline (lambda () (et/org-target-file "personal/inbox.org")) "Inbox")
+     "* %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n%i\n%a\n" :empty-lines 1)
+    ("pt" "TODO" entry
+     (file+headline (lambda () (et/org-target-file "personal/tasks.org")) "Tasks")
+     "* TODO %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n" :empty-lines 1)
+    ("ph" "Daily habit" entry
+     (file+headline (lambda () (et/org-target-file "personal/tasks.org")) "Habits")
+     (function et/habit-template) :empty-lines 1)
+    ("w" "Work")
+    ("wi" "Inbox" entry
+     (file+headline (lambda () (et/org-target-file "work/inbox.org")) "Inbox")
+     "* %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n%i\n%a\n" :empty-lines 1)
+    ("wt" "TODO" entry
+     (file+headline (lambda () (et/org-target-file "work/tasks.org")) "Tasks")
+     "* TODO %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n" :empty-lines 1)
+    ("j" "Project task" entry (function et/project-task-target)
+     "* TODO %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n" :empty-lines 1))
+  "Built-in capture templates; interactive templates are prepended.")
+
+(defun et/rebuild-capture-templates ()
+  "Merge custom capture templates ahead of the built-in defaults."
+  (setq org-capture-templates
+        (append et/custom-capture-templates et/default-capture-templates)))
+
+(defun et/load-capture-templates ()
+  "Load and merge templates created with `et/capture-template-add'."
+  (when (file-readable-p et/capture-template-state-file)
+    (condition-case err
+        (with-temp-buffer
+          (insert-file-contents et/capture-template-state-file)
+          (goto-char (point-min))
+          (setq et/custom-capture-templates (read (current-buffer))))
+      (error
+       (display-warning 'etmacs
+                        (format "Ignoring unreadable %s: %s"
+                                et/capture-template-state-file
+                                (error-message-string err))))))
+  (et/rebuild-capture-templates))
+
+(defun et/save-capture-templates ()
+  "Persist interactively created capture templates."
+  (let ((coding-system-for-write 'utf-8-unix))
+    (with-temp-file et/capture-template-state-file
+      (insert ";; Generated by et/capture-template-add; do not edit by hand.\n")
+      (prin1 et/custom-capture-templates (current-buffer))
+      (insert "\n")))
+  (set-file-modes et/capture-template-state-file #o600))
+
+(defun et/capture-template-add (key description type target-type file headline template)
+  "Create and persist an Org capture template.
+KEY, DESCRIPTION, TYPE, TARGET-TYPE, FILE, HEADLINE, and TEMPLATE
+are prompted for interactively.  TARGET-TYPE is either
+\"file+headline\" or \"file\"."
+  (interactive
+   (let* ((key (string-trim (read-string "Template key: ")))
+          (description (string-trim (read-string "Description: ")))
+          (type (intern (completing-read "Type: "
+                                         '("entry" "item" "checkitem" "plain" "table-line")
+                                         nil t nil nil "entry")))
+          (target-type (completing-read "Target: " '("file+headline" "file")
+                                        nil t nil nil "file+headline"))
+          (file (expand-file-name
+                 (read-file-name "Target file: " et/notes-directory nil nil
+                                 (concat (et/current-domain) "/inbox.org"))))
+          (headline (when (equal target-type "file+headline")
+                      (read-string "Headline: " "Inbox")))
+          (template (replace-regexp-in-string
+                     "\\\\n" "\n"
+                     (read-string "Template (use \\n for newline): " "* %?"))))
+     (list key description type target-type file headline template)))
+  (when (string-empty-p key) (user-error "A capture template needs a key"))
+  (when (string-match-p "[ \t]" key) (user-error "Template keys cannot contain spaces"))
+  (unless (memq type '(entry item checkitem plain table-line))
+    (user-error "Unknown capture template type: %s" type))
+  (make-directory (file-name-directory file) t)
+  (let ((entry (list key description type
+                     (if (equal target-type "file+headline")
+                         (list 'file+headline file headline)
+                       (list 'file file))
+                     template
+                     :empty-lines 1)))
+    (setq et/custom-capture-templates
+          (cons entry
+                (seq-remove (lambda (candidate) (equal (car candidate) key))
+                            et/custom-capture-templates)))
+    (et/save-capture-templates)
+    (et/rebuild-capture-templates)
+    (message "Capture template %s saved" key)))
+
+(et/load-capture-templates)
 
 (defun et/capture (&optional key)
   "Capture a task/inbox item using optional template KEY."
@@ -924,6 +1365,7 @@ The initial daily habit schedule is editable before finalizing.
 (define-key et/notes-map (kbd "c") #'et/capture)
 (define-key et/notes-map (kbd "a") #'et/org-agenda)
 (define-key et/notes-map (kbd "D") #'et/set-domain)
+(define-key et/notes-map (kbd "C") #'et/capture-template-add)
 (global-set-key (kbd "C-c c") #'et/capture)
 (global-set-key (kbd "C-c a") #'et/org-agenda)
 (global-set-key (kbd "C-c l") #'org-store-link)
@@ -983,6 +1425,413 @@ The initial daily habit schedule is editable before finalizing.
 (define-key et/org-export-map (kbd "H") #'et/export-hugo)
 (provide 'et-org)
 ;;; et-org.el ends here
+#+end_src
+
+* Pomodoro and habits
+
+=org-pomodoro= remains available at =SPC m p= and is not modified. The new
+=et/pomodoro-start= helper at =SPC m P= is an independent, inspectable cycle:
+four 25-minute work segments, 5-minute breaks between them, then a 30-minute
+break. Every segment is recorded as a TODO in =DOMAIN/pomodoro.org=; work
+segments prompt for "Planned work" at the start and "What was achieved?" at the
+end. =SPC m L= lists work segments for an Org-style date range (default Monday
+of this week through today). Compare both helpers and keep the preferred one.
+
+=et/new-habit= creates an Org habit with an explicit frequency and objective.
+When the objective is reached the habit is archived under
+=DOMAIN/habits-archive.org=; =et/restart-habit= copies it back with a fresh
+count. =et/pomodoro-trial-habit= creates five weekly weekday habits (Mon–Fri)
+for one month so both pomodoro helpers can be compared.
+
+** TODO Select preferred pomodoro
+Compare =org-pomodoro= (=SPC m p=) with =et/pomodoro-start= (=SPC m P=), then
+keep one primary binding and document the choice here.
+
+#+begin_src emacs-lisp :tangle lisp/et-pomodoro.el
+;;; et-pomodoro.el --- Generated from config.org -*- lexical-binding: t; -*-
+(require 'org)
+(require 'org-clock)
+(require 'seq)
+(require 'subr-x)
+
+(declare-function et/current-domain "et-org" (&optional buffer))
+(declare-function et/file-domain "et-org" (file))
+(declare-function et/org-target-file "et-org" (relative))
+
+(defvar et/pomodoro-plan
+  '((work . 25) (break . 5)
+    (work . 25) (break . 5)
+    (work . 25) (break . 5)
+    (work . 25) (break . 30))
+  "Pomodoro cycle: four work segments and their breaks.")
+
+(defvar et/pomodoro-index 0)
+(defvar et/pomodoro-phase nil)
+(defvar et/pomodoro-timer nil)
+(defvar et/pomodoro-entry-marker nil)
+(defvar et/pomodoro-planned-work nil)
+
+(define-key et/org-map (kbd "P") #'et/pomodoro-start)
+(define-key et/org-map (kbd "S") #'et/pomodoro-stop)
+(define-key et/org-map (kbd "L") #'et/pomodoro-log)
+(define-key et/org-map (kbd "H") #'et/new-habit)
+(define-key et/org-map (kbd "G") #'et/restart-habit)
+
+(defun et/pomodoro-file (&optional domain)
+  "Return the pomodoro log file for DOMAIN, defaulting to the current domain."
+  (expand-file-name (concat (or domain (et/current-domain)) "/pomodoro.org")
+                    et/notes-directory))
+
+(defun et/pomodoro--ensure-file (file)
+  "Create FILE and its parent directory, returning its buffer."
+  (make-directory (file-name-directory file) t)
+  (let ((buffer (find-file-noselect file)))
+    (with-current-buffer buffer
+      (when (= (point-min) (point-max))
+        (insert "#+title: Pomodoro log\n\n")
+        (save-buffer)))
+    buffer))
+
+(defun et/pomodoro--ensure-date-heading (buffer)
+  "Ensure BUFFER has today's date heading; return its position."
+  (with-current-buffer buffer
+    (widen)
+    (goto-char (point-min))
+    (let ((heading (format-time-string "%Y-%m-%d %a")))
+      (unless (re-search-forward (format "^\\* %s[ \t]*$" (regexp-quote heading)) nil t)
+        (goto-char (point-max))
+        (unless (bolp) (insert "\n"))
+        (insert (format "* %s\n" heading)))
+      (goto-char (point-min))
+      (re-search-forward (format "^\\* %s[ \t]*$" (regexp-quote heading)) nil t)
+      (org-back-to-heading t)
+      (point))))
+
+(defun et/pomodoro--insert-entry (phase minutes planned)
+  "Insert a TODO for PHASE and MINUTES, recording PLANNED work."
+  (let* ((buffer (et/pomodoro--ensure-file (et/pomodoro-file)))
+         (heading (et/pomodoro--ensure-date-heading buffer))
+         entry-start)
+    (with-current-buffer buffer
+      (goto-char heading)
+      (org-end-of-subtree t)
+      (unless (bolp) (insert "\n"))
+      (setq entry-start (point))
+      (insert (format "** TODO %s %s\n"
+                      (if (eq phase 'work) "Work" "Break")
+                      (format-time-string "%H:%M")))
+      (insert (format "SCHEDULED: <%s>\n" (format-time-string "%Y-%m-%d %a %H:%M")))
+      (insert ":PROPERTIES:\n")
+      (insert (format ":ET_POMODORO_DATE: %s\n" (format-time-string "%Y-%m-%d")))
+      (insert (format ":ET_POMODORO_PHASE: %s\n" (if (eq phase 'work) "work" "break")))
+      (insert (format ":ET_POMODORO_MINUTES: %d\n" minutes))
+      (when planned (insert (format ":ET_POMODORO_PLANNED: %s\n" planned)))
+      (insert ":END:\n")
+      (when (eq phase 'work)
+        (insert (format ":LOGBOOK:\n- Planned: %s\n:END:\n" planned)))
+      (save-buffer)
+      (goto-char entry-start)
+      (org-back-to-heading t)
+      (setq et/pomodoro-entry-marker (point-marker)))
+    buffer))
+
+(defun et/pomodoro--finish-entry (achieved)
+  "Mark the current pomodoro entry done and record ACHIEVED."
+  (when (and et/pomodoro-entry-marker
+             (marker-buffer et/pomodoro-entry-marker))
+    (with-current-buffer (marker-buffer et/pomodoro-entry-marker)
+      (goto-char et/pomodoro-entry-marker)
+      (org-back-to-heading t)
+      (when (member (org-get-todo-state) '("TODO" "NEXT" "WAIT"))
+        (org-todo "DONE"))
+      (org-end-of-subtree t)
+      (unless (bolp) (insert "\n"))
+      (insert (format "- Achieved: %s\n" (string-trim achieved)))
+      (save-buffer))
+    (set-marker et/pomodoro-entry-marker nil)
+    (setq et/pomodoro-entry-marker nil)))
+
+(defun et/pomodoro--begin-segment ()
+  "Create and time the next pomodoro segment."
+  (let* ((spec (nth et/pomodoro-index et/pomodoro-plan))
+         (phase (car spec))
+         (minutes (cdr spec))
+         (planned (when (eq phase 'work)
+                    (string-trim (read-string "Planned work: ")))))
+    (setq et/pomodoro-phase phase
+          et/pomodoro-planned-work planned)
+    (et/pomodoro--insert-entry phase minutes planned)
+    (setq et/pomodoro-timer
+          (run-at-time (* minutes 60) nil #'et/pomodoro--segment-finished))
+    (message "Pomodoro %s: %d min%s"
+             (if (eq phase 'work) "work" "break") minutes
+             (if (and planned (not (string-empty-p planned)))
+                 (format " — %s" planned) ""))))
+
+(defun et/pomodoro--segment-finished ()
+  "Finish the current segment and advance the cycle."
+  (setq et/pomodoro-timer nil)
+  (if (eq et/pomodoro-phase 'work)
+      (et/pomodoro--finish-entry (read-string "What was achieved? "))
+    (et/pomodoro--finish-entry "Break completed"))
+  (setq et/pomodoro-index (1+ et/pomodoro-index))
+  (if (>= et/pomodoro-index (length et/pomodoro-plan))
+      (progn
+        (setq et/pomodoro-index 0)
+        (message "Pomodoro cycle complete; SPC m P starts a new cycle"))
+    (et/pomodoro--begin-segment)))
+
+(defun et/pomodoro-start ()
+  "Start a new Etmacs pomodoro cycle."
+  (interactive)
+  (when et/pomodoro-timer
+    (user-error "A pomodoro segment is already running; SPC m S stops it"))
+  (setq et/pomodoro-index 0)
+  (et/pomodoro--begin-segment))
+
+(defun et/pomodoro-stop ()
+  "Stop the current pomodoro cycle and record the interruption."
+  (interactive)
+  (when et/pomodoro-timer
+    (cancel-timer et/pomodoro-timer))
+  (setq et/pomodoro-timer nil)
+  (when et/pomodoro-entry-marker
+    (et/pomodoro--finish-entry "Stopped before completion"))
+  (setq et/pomodoro-index 0)
+  (message "Pomodoro stopped"))
+
+(defun et/pomodoro-status ()
+  "Describe the current pomodoro segment."
+  (interactive)
+  (if et/pomodoro-timer
+      (message "Pomodoro %s running (%d/%d)"
+               (symbol-name et/pomodoro-phase)
+               (1+ et/pomodoro-index) (length et/pomodoro-plan))
+    (message "No pomodoro running")))
+
+(defun et/pomodoro-log (&optional start-date end-date)
+  "Show work segments from START-DATE through END-DATE.
+The defaults are Monday of the current week and today.  Dates are
+read with `org-read-date', the same selector used for Org
+scheduling and deadlines."
+  (interactive)
+  (let* ((monday
+          (time-subtract (current-time)
+                         (days-to-time
+                          (1- (string-to-number (format-time-string "%u"))))))
+         (start (or start-date
+                    (org-read-date nil nil nil "Start date: " nil
+                                   (format-time-string "%Y-%m-%d" monday))))
+         (end (or end-date
+                  (org-read-date nil nil nil "End date: " nil
+                                 (format-time-string "%Y-%m-%d"))))
+         (start-abs (org-time-string-to-absolute start))
+         (end-abs (org-time-string-to-absolute end))
+         (file (et/pomodoro-file))
+         rows)
+    (when (file-readable-p file)
+      (with-current-buffer (find-file-noselect file)
+        (org-map-entries
+         (lambda ()
+           (let ((date (org-entry-get nil "ET_POMODORO_DATE"))
+                 (phase (org-entry-get nil "ET_POMODORO_PHASE"))
+                 (minutes (org-entry-get nil "ET_POMODORO_MINUTES"))
+                 (planned (org-entry-get nil "ET_POMODORO_PLANNED")))
+             (when (and date (equal phase "work")
+                        (>= (org-time-string-to-absolute date) start-abs)
+                        (<= (org-time-string-to-absolute date) end-abs))
+               (push (list date (org-get-heading t t t t)
+                           minutes (or planned ""))
+                     rows))))
+         nil 'file)))
+    (let ((buffer (get-buffer-create "*Pomodoro Log*")))
+      (with-current-buffer buffer
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (org-mode)
+          (insert (format "#+title: Pomodoro log %s to %s\n\n" start end))
+          (insert "| Date | Segment | Minutes | Planned |\n")
+          (insert "|------+---------+---------+---------|\n")
+          (dolist (row (nreverse rows))
+            (insert (format "| %s | %s | %s | %s |\n"
+                            (nth 0 row) (nth 1 row) (nth 2 row) (nth 3 row))))
+          (insert (format "\nWork segments: %d\n" (length rows)))))
+      (display-buffer buffer))))
+
+(defun et/habit-file (&optional domain)
+  "Return the active habits file for DOMAIN."
+  (et/org-target-file (concat (or domain (et/current-domain)) "/tasks.org")))
+
+(defun et/habit-interval (frequency)
+  "Return the repeater interval in days for FREQUENCY per week."
+  (max 1 (round (/ 7.0 (max 1 (min 7 frequency))))))
+
+(defun et/new-habit (title frequency objective-type objective &optional weekdays start)
+  "Create habit TITLE.
+FREQUENCY is times per week.  OBJECTIVE-TYPE is `repetitions'
+\(total repetitions, default 15) or `date' (end date).  WEEKDAYS
+records that the habit is intended for Monday through Friday.  START
+is an optional Org date string; it defaults to today."
+  (interactive
+   (let* ((title (string-trim (read-string "Habit: ")))
+          (frequency (max 1 (min 7 (round (read-number "Times per week (1-7): " 3)))))
+          (type (intern (completing-read "Objective: " '("repetitions" "date")
+                                         nil t nil nil "repetitions")))
+          (objective (if (eq type 'repetitions)
+                         (read-number "Total repetitions: " 15)
+                       (org-read-date nil nil nil "End date: ")))
+          (weekdays (and (= frequency 5)
+                         (yes-or-no-p "Limit this habit to weekdays (Mon-Fri)? "))))
+     (list title frequency type objective weekdays)))
+  (when (string-empty-p title) (user-error "A habit needs a title"))
+  (unless (memq objective-type '(repetitions date))
+    (user-error "Unknown habit objective: %s" objective-type))
+  (let* ((file (et/habit-file))
+         (interval (et/habit-interval frequency))
+         (start (or start (format-time-string "%Y-%m-%d %a"))))
+    (with-current-buffer (find-file-noselect file)
+      (widen)
+      (goto-char (point-min))
+      (unless (re-search-forward "^\\* Habits[ \t]*$" nil t)
+        (goto-char (point-max))
+        (unless (bolp) (insert "\n"))
+        (insert "* Habits\n")
+        (goto-char (point-min))
+        (re-search-forward "^\\* Habits[ \t]*$" nil t))
+      (org-back-to-heading t)
+      (org-end-of-subtree t)
+      (unless (bolp) (insert "\n"))
+      (insert (format "\n** TODO %s\n" title))
+      (insert (format "SCHEDULED: <%s .+%dd>\n" start interval))
+      (insert ":PROPERTIES:\n")
+      (insert ":STYLE: habit\n")
+      (insert (format ":ET_HABIT_FREQUENCY: %d\n" frequency))
+      (insert (format ":ET_HABIT_OBJECTIVE_TYPE: %s\n" objective-type))
+      (insert (format ":ET_HABIT_OBJECTIVE: %s\n" objective))
+      (insert ":ET_HABIT_COMPLETED: 0\n")
+      (when weekdays (insert ":ET_HABIT_WEEKDAYS: t\n"))
+      (insert ":END:\n")
+      (save-buffer)
+      (org-back-to-heading t)
+      (message "Habit created: %s" (org-get-heading t t t t)))))
+
+(defun et/pomodoro-trial-habit ()
+  "Create five weekly weekday habits for a one-month pomodoro trial."
+  (interactive)
+  (let* ((monday
+          (time-subtract (current-time)
+                         (days-to-time
+                          (1- (string-to-number (format-time-string "%u"))))))
+         (start (time-add monday (days-to-time 7)))
+         (end (format-time-string "%Y-%m-%d" (time-add start (days-to-time 30))))
+         (days '("Mon" "Tue" "Wed" "Thu" "Fri")))
+    (dotimes (i 5)
+      (et/new-habit (format "Try a pomodoro (%s)" (nth i days))
+                    1 'date end nil
+                    (format-time-string "%Y-%m-%d %a"
+                                        (time-add start (days-to-time i)))))))
+
+(defun et/habit-archive ()
+  "Archive the current habit for later review."
+  (interactive)
+  (let* ((domain (or (et/file-domain (buffer-file-name)) (et/current-domain)))
+         (archive (expand-file-name (concat domain "/habits-archive.org")
+                                    et/notes-directory)))
+    (make-directory (file-name-directory archive) t)
+    (org-entry-put nil "ET_HABIT_ARCHIVED" (format-time-string "%Y-%m-%d %H:%M"))
+    (org-entry-put nil "ET_HABIT_RESULT"
+                   (format "completed %s"
+                           (or (org-entry-get nil "ET_HABIT_COMPLETED") "0")))
+    (let ((org-archive-location (concat archive "::* Archived habits")))
+      (org-archive-subtree))
+    (save-buffer)))
+
+(defun et/habit-after-todo-change ()
+  "Count habit completions and archive the habit at its objective."
+  (when (and (equal (org-get-todo-state) "DONE")
+             (org-entry-get nil "ET_HABIT_OBJECTIVE")
+             (not (org-entry-get nil "ET_HABIT_ARCHIVED")))
+    (let* ((completed
+            (1+ (string-to-number
+                 (or (org-entry-get nil "ET_HABIT_COMPLETED") "0"))))
+           (type (org-entry-get nil "ET_HABIT_OBJECTIVE_TYPE"))
+           (objective (org-entry-get nil "ET_HABIT_OBJECTIVE"))
+           (reached
+            (if (equal type "date")
+                (>= (org-time-string-to-absolute (format-time-string "%Y-%m-%d"))
+                    (org-time-string-to-absolute objective))
+              (>= completed (string-to-number objective)))))
+      (org-entry-put nil "ET_HABIT_COMPLETED" (number-to-string completed))
+      (when reached (et/habit-archive)))))
+(add-hook 'org-after-todo-state-change-hook #'et/habit-after-todo-change)
+
+(defun et/restart-habit (&optional heading)
+  "Copy an archived habit back into the active habits file."
+  (interactive)
+  (let* ((domain (et/current-domain))
+         (archive (expand-file-name (concat domain "/habits-archive.org")
+                                    et/notes-directory))
+         (target (et/habit-file domain)))
+    (unless (file-readable-p archive)
+      (user-error "No archived habits for domain %s" domain))
+    (let* ((headings
+            (with-current-buffer (find-file-noselect archive)
+              (delq nil
+                    (org-map-entries
+                     (lambda ()
+                       (when (org-entry-get nil "ET_HABIT_ARCHIVED")
+                         (org-get-heading t t t t)))
+                     nil 'file))))
+           (heading (or heading
+                        (completing-read "Restart habit: " headings nil t))))
+      (unless (member heading headings)
+        (user-error "No archived habit named %s" heading))
+      (let ((subtree
+             (car
+              (delq nil
+                    (with-current-buffer (find-file-noselect archive)
+                      (org-map-entries
+                       (lambda ()
+                         (when (equal (org-get-heading t t t t) heading)
+                           (org-back-to-heading t)
+                           (buffer-substring-no-properties
+                            (point) (org-end-of-subtree t t))))
+                       nil 'file))))))
+        (with-current-buffer (find-file-noselect target)
+          (widen)
+          (goto-char (point-min))
+          (unless (re-search-forward "^\\* Habits[ \t]*$" nil t)
+            (goto-char (point-max))
+            (unless (bolp) (insert "\n"))
+            (insert "* Habits\n")
+            (goto-char (point-min))
+            (re-search-forward "^\\* Habits[ \t]*$" nil t))
+          (org-back-to-heading t)
+          (org-end-of-subtree t)
+          (unless (bolp) (insert "\n"))
+          (insert "\n" subtree)
+          (goto-char (point-max))
+          (org-back-to-heading t)
+          (org-todo "TODO")
+          (dolist (property '("ET_HABIT_ARCHIVED" "ET_HABIT_RESULT"
+                              "ARCHIVE_TIME" "ARCHIVE_FILE" "ARCHIVE_OLPATH"
+                              "ARCHIVE_CATEGORY" "ARCHIVE_TODO"))
+            (org-entry-delete nil property))
+          (org-entry-put nil "ET_HABIT_COMPLETED" "0")
+          (let ((interval
+                 (et/habit-interval
+                  (string-to-number
+                   (or (org-entry-get nil "ET_HABIT_FREQUENCY") "3"))))
+                (date (format-time-string "%Y-%m-%d")))
+            (org-schedule nil date)
+            (save-excursion
+              (org-back-to-heading t)
+              (when (re-search-forward "^SCHEDULED: <[^>]+>" (line-end-position) t)
+                (replace-match (format "SCHEDULED: <%s .+%dd>" date interval)))))
+          (save-buffer))
+        (message "Restarted habit: %s" heading)))))
+(provide 'et-pomodoro)
+;;; et-pomodoro.el ends here
 #+end_src
 
 * Org-roam: domains, research, dailies, and graph
