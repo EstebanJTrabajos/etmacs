@@ -2,9 +2,10 @@
 #+options: toc:2
 
 A personal, literate Emacs configuration—not a Doom or Prelude clone. Includes
-Evil, discoverable leader keys, a custom dashboard, gptel AI integration,
-completion, Projectile/Perspective workspaces, Treemacs, Git tools, conservative
-editing defaults, and Org/roam workflows.
+Evil, discoverable leader keys, a startup dashboard, gptel AI integration,
+Elfeed news, mu4e support, doom-modeline, completion, Projectile/Perspective
+workspaces, Treemacs, Git tools, conservative editing defaults, and Org/roam
+workflows.
 The source of truth and package rationales are in [[file:config.org][config.org]]. Maintained project
 documentation uses Org format. Old session/planning artifacts are not runtime
 dependencies and are not part of the proposed configuration commit.
@@ -67,17 +68,26 @@ Custom functions *and variables* use =et/=. File and feature names retain =et-=
 | SPC w u / SPC w r           | Winner layout undo / redo                 |
 | SPC s / SPC /               | Buffer search / project-directory ripgrep |
 | SPC t t                     | Theme picker with live preview            |
+| SPC x                       | General Org capture menu                  |
+| SPC M m / u / c / s         | mu4e open / update / compose / search     |
+| SPC N o / u / s             | Elfeed open / update / choose news topics |
+| SPC T i / s                 | Install / report tree-sitter grammars     |
+| RET (Evil normal)           | Follow button, Org link, URL, or id link  |
+| C-j / C-k (menus)           | Next / previous completion or menu item   |
 
 =SPC= is a leader in Evil normal/visual/motion states; ordinary Space inserts
 spaces in insert state. =C-c SPC= is the alternative leader. Which Key groups
 are labelled files, buffers, windows, projects, notes, git, help, themes,
-workspaces, jump, edit and mode commands—not just "prefix".
+workspaces, jump, edit, AI, mail, news, tree-sitter and mode commands—not just
+"prefix".
 
 Vertico handles minibuffer completion; Corfu handles in-buffer CAPFs. They do
 not compete. Company/Cape are not installed without a specific need. Try Lisp
 completion by typing =(messag= and pressing =C-M-i=. =TAB=/=S-TAB= move, =RET=
-accepts a selected candidate, =C-g= dismisses. Automatic completion begins after
-three characters; CAPFs may execute Lisp, so use care with untrusted code.
+accepts a selected candidate, =C-g= dismisses. =C-j=/=C-k= move down/up through
+Vertico, Corfu, built-in minibuffer completion, and Transient menus without
+changing ordinary editing. Automatic completion begins after three characters;
+CAPFs may execute Lisp, so use care with untrusted code.
 
 GUI Vertico menus float. Terminal frames use normal minibuffer rendering;
 Corfu uses supported child frames or the built-in completion fallback. In the
@@ -87,11 +97,13 @@ session-only; change =et/default-theme= for a persistent default.
 
 * Dashboard and AI
 
-=SPC d= opens a dependency-free dashboard with Projects, Recent files, Agenda,
-Daily journal and a News placeholder. It reads Projectile/recentf/Org data; it
-does not start a server or fetch a feed. =g= refreshes, =q= quits, and =TAB=/=RET=
-activates a button. =SPC q= quits Emacs; =SPC R= re-tangles =config.org= and
-restarts Emacs after saving buffers.
+The dashboard opens on startup (=initial-buffer-choice=) and remains available at
+=SPC d=. It shows Projects, Recent files, open Agenda tasks, Daily journal, and
+five cached news articles per site. =g= refreshes, =q= quits, and =TAB=/=RET=
+activates a button or link. =SPC q= quits Emacs; =SPC R= re-tangles
+=config.org= and restarts Emacs after saving buffers. Set
+=et/dashboard-on-startup= to nil in =.local/settings.el= to start on scratch
+instead.
 
 =gptel= provides OpenAI, Anthropic and DeepSeek backends. API keys are read from
 =~/.authinfo.gpg= through =gptel-api-key-from-auth-source=; the machine and user
@@ -113,6 +125,26 @@ entry is a placeholder.
 Interactively created capture templates are written to
 =.local/capture-templates.el= with mode 0600 and merged ahead of the built-in
 templates on startup. They contain data only, never credentials.
+
+** News, email and modeline
+
+Elfeed reads the Scientific American syndication feed and the New York Times
+Home/World/U.S./Business/Technology/Science/Health/Sports/Arts feeds. All feeds
+are downloaded; =SPC N s= chooses which topics feed the dashboard's five newest
+articles per site. =SPC N u= updates feeds, =SPC N o= opens Elfeed, and each
+site's dashboard button opens its full Elfeed search. State lives in
+=.local/news.el= and =.local/elfeed/=; startup uses only the cache.
+
+Mu4e is supported but unconfigured. Set =mu4e-maildir= (and any contexts/SMTP)
+in =.local/settings.el=; =SPC M m= opens mail, =u= updates the index, =c=
+composes, and =s= searches. The module adds common mu4e directories to
+=load-path= and gives a clear error instead of loading a broken mail setup.
+
+Doom Modeline supplies colors, Nerd Font icons, VC state, diagnostics, LSP,
+position, and time; Minions collapses the minor-mode list. Install the icon font
+once with =M-x et/install-nerd-fonts=, or set =doom-modeline-icon= to nil for a
+plain terminal. The unconfigured alternative lighter options are =mood-line=,
+=telephone-line=, or =nano-modeline=.
 
 * Projects, workspaces and windows
 
@@ -235,7 +267,7 @@ SQLite files. Each machine rebuilds its own index with =SPC n r u=.
 | SPC n r w             | Weekly review linking seven dailies, without creating missing days |
 | SPC n r b / a / t     | Backlinks / add alias / add subject tag                            |
 | SPC n r g / u         | Explicit graph / rebuild local index                               |
-
+[[id:52099960-9eef-4163-bb0b-0b25fb0d3a3b][org-mode and org-roam hotkeys]]
 Task capture keys: =pi= personal inbox, =pt= personal TODO, =ph= daily personal
 habit, =wi= work inbox, =wt= work TODO, =j= task in an existing project note.
 Choose/create a project note first via roam template =p=. Project capture asks
@@ -317,6 +349,12 @@ and documentation. Corfu displays completion; Vertico still handles prompts.
 Servers are *explicitly started*, not launched by opening or saving files.
 No server binaries, grammars, formatter tools or test runners are auto-installed.
 
+Tree-sitter is built in. Missing grammars fall back to the classic mode, and
+=SPC T i= builds the configured grammars (Python, JavaScript, TypeScript, TSX,
+Java, YAML, Dockerfile, Bash, JSON) into =.local/tree-sitter/=; =SPC T s= reports
+what is ready. The installer needs Git and a C/C++ toolchain and never runs on
+startup.
+
 | Language   | Mode choice                                                       | External server                                                  |
 |------------+-------------------------------------------------------------------+------------------------------------------------------------------|
 | Python     | Built-in python-mode, or python-ts-mode with an installed grammar | basedpyright-langserver (preferred); pyright/pylsp fall back |
@@ -354,6 +392,7 @@ In these buffers, =SPC m= supplies:
 | u     | Test the test at point                                          |
 | v     | Choose Python virtualenv directory (Python buffers only)        |
 | V     | Validate saved local Compose file (Compose buffers only)        |
+| I     | Install tree-sitter grammars                                    |
 
 No format-on-save or test-on-save. =SPC m f= formats through the connected LSP
 server if it advertises the capability. =SPC m F= runs a standalone formatter:
@@ -460,7 +499,10 @@ server is installed on this development host yet.
 
 Git and ripgrep are used by project/Git/search commands. On Arch/Ubuntu the
 search package is =ripgrep=. PDF needs TeX; DOCX needs Pandoc. org-roam needs
-built-in SQLite support. No system packages, language servers, dictionaries,
+built-in SQLite support. Elfeed uses =curl= for feed downloads. mu4e needs the
+system =mu= package (already separate from ELPA); set =mu4e-maildir= in
+=.local/settings.el=. Doom Modeline's Nerd Font glyphs need a one-time
+=M-x et/install-nerd-fonts=. No system packages, language servers, dictionaries,
 or tree-sitter grammars are silently installed. Babel needs the corresponding
 interpreter/database/HTTP service for the blocks you execute.
 
@@ -485,7 +527,10 @@ Tests use disposable notes/repositories, not your real vault. They cover source
 tangling, startup/no installation, labels through both leaders, workspace
 scoping/layouts and fresh-process restoration, safe persistence, completion,
 EditorConfig, structural edits, conservative saves, pop-ups, and Org workflows.
-They do not replace real keyboard/rendering/server/export checks.
+They also cover startup dashboard choice, link following, menu navigation,
+tree-sitter recipes/installation, cached news rendering and selection, mu4e
+configuration errors, and the modeline's presence. They do not replace real
+keyboard/rendering/server/export checks.
 
 Manual acceptance checklist:
 1. Restart offline; check Evil, labels, GUI floating completion and terminal
@@ -511,3 +556,13 @@ Manual acceptance checklist:
    required format with your installed tools. Verify citations/bibliographies
    separately in each output. Source blocks must not run during export; manual
    execution must still ask. Do not use sensitive real HTTP endpoints in tests.
+8. Restart Emacs and confirm the dashboard is the startup buffer. Press RET on
+   a project, recent file, agenda task, news article, and Open full feed. Repeat
+   in an Org buffer on a bracket link and a bare URL; insert state must still
+   insert newlines.
+9. Run SPC N s and choose topics, SPC N u to update feeds, and check five cached
+   articles per site. Install any missing grammar with SPC T i, then SPC T s.
+   Check the modeline icons/colors, VC, diagnostics, LSP, and time. If glyphs are
+   missing, run M-x et/install-nerd-fonts.
+10. Without configuring mail, SPC M m must explain that mu4e-maildir is missing.
+    After setting mu4e-maildir in .local/settings.el, SPC M m opens mu4e.

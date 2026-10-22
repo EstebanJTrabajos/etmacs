@@ -24,6 +24,7 @@
     vertico-posframe guava-themes projectile perspective corfu treemacs
     treemacs-evil treemacs-perspective avy ace-window expand-region crux
     gptel parinfer-rust-mode rainbow-delimiters
+    doom-modeline nerd-icons minions elfeed
     magit diff-hl git-timemachine git-modes hl-todo
     org-roam org-roam-ui org-pomodoro org-drill citar ox-hugo ox-pandoc
     restclient ob-restclient typescript-mode web-mode yaml-mode yara-mode
@@ -58,13 +59,17 @@
 (let ((settings (expand-file-name "settings.el" et/state-directory)))
   (when (file-exists-p settings) (load settings nil 'nomessage)))
 (require 'et-core)
+(require 'et-modeline)
 (require 'et-projects)
 (require 'et-editing)
 (require 'et-org)
 (require 'et-roam)
 (require 'et-dev)
 (require 'et-dashboard)
+(require 'et-links)
+(require 'et-news)
 (require 'et-ai)
+(require 'et-mail)
 (require 'et-pomodoro)
 
 (when-let* ((missing (et/missing-packages)))

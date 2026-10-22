@@ -43,6 +43,29 @@
       (should started)
       (should killed))))
 
+(ert-deftest et/menu-navigation-keys ()
+  (skip-unless (featurep 'vertico))
+  (should (eq (lookup-key vertico-map (kbd "C-j")) 'vertico-next))
+  (should (eq (lookup-key vertico-map (kbd "C-k")) 'vertico-previous))
+  (skip-unless (featurep 'corfu))
+  (should (eq (lookup-key corfu-map (kbd "C-j")) 'corfu-next))
+  (should (eq (lookup-key corfu-map (kbd "C-k")) 'corfu-previous))
+  (should (eq (lookup-key minibuffer-local-completion-map (kbd "C-j"))
+              'next-line-or-history-element))
+  (should (eq (lookup-key minibuffer-local-must-match-map (kbd "C-k"))
+              'previous-line-or-history-element))
+  (require 'transient)
+  (should (eq (lookup-key transient-popup-navigation-map (kbd "C-j"))
+              'transient-forward-button))
+  (should (eq (lookup-key transient-popup-navigation-map (kbd "C-k"))
+              'transient-backward-button)))
+
+(ert-deftest et/modeline-is-active ()
+  (skip-unless (featurep 'doom-modeline))
+  (should (bound-and-true-p doom-modeline-mode))
+  (should (bound-and-true-p minions-mode))
+  (should (commandp 'et/install-nerd-fonts)))
+
 (ert-deftest et/leader-basics ()
   (should (eq (lookup-key et/leader-map (kbd "f f")) 'find-file))
   (should (eq (lookup-key et/leader-map (kbd "f c")) 'et/open-config))
@@ -54,6 +77,10 @@
   (should (eq (lookup-key et/leader-map (kbd "a")) et/ai-map))
   (should (eq (lookup-key et/notes-map (kbd "C")) 'et/capture-template-add))
   (should (eq (lookup-key et/org-map (kbd "P")) 'et/pomodoro-start))
+  (should (eq (lookup-key et/leader-map (kbd "x")) 'et/capture))
+  (should (eq (lookup-key et/leader-map (kbd "M")) et/mail-map))
+  (should (eq (lookup-key et/leader-map (kbd "N")) et/news-map))
+  (should (eq (lookup-key et/leader-map (kbd "T")) et/treesit-map))
   (should (eq (key-binding (kbd "C-c SPC")) et/leader-map)))
 
 (ert-deftest et/mode-local-map-is-buffer-local ()
@@ -115,7 +142,9 @@
                           "lisp/et-projects.el" "lisp/et-editing.el"
                           "lisp/et-org.el" "lisp/et-roam.el" "lisp/et-dev.el"
                           "lisp/et-dashboard.el" "lisp/et-ai.el"
-                          "lisp/et-pomodoro.el"))
+                          "lisp/et-pomodoro.el" "lisp/et-links.el"
+                          "lisp/et-news.el" "lisp/et-mail.el"
+                          "lisp/et-modeline.el"))
             (should
              (equal (with-temp-buffer
                       (insert-file-contents (expand-file-name file directory))
@@ -320,6 +349,7 @@
                      ("p" . "projects") ("n" . "notes") ("g" . "git")
                      ("h" . "help") ("t" . "themes") ("TAB" . "workspaces")
                      ("j" . "jump") ("c" . "edit") ("a" . "AI")
+                     ("M" . "mail") ("N" . "news") ("T" . "tree-sitter")
                      ("m" . "mode commands")))
       (should (equal (cdr (assoc (car entry) bindings)) (concat "group:" (cdr entry)))))))
 
@@ -463,3 +493,6 @@
 (load (expand-file-name "tests/et-dashboard-tests.el" et/test-root) nil t)
 (load (expand-file-name "tests/et-ai-tests.el" et/test-root) nil t)
 (load (expand-file-name "tests/et-pomodoro-tests.el" et/test-root) nil t)
+(load (expand-file-name "tests/et-links-tests.el" et/test-root) nil t)
+(load (expand-file-name "tests/et-news-tests.el" et/test-root) nil t)
+(load (expand-file-name "tests/et-mail-tests.el" et/test-root) nil t)

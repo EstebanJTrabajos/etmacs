@@ -39,17 +39,87 @@
 (dolist (mode et/dev-modes)
   (add-hook (intern (concat (symbol-name mode) "-hook")) #'et/dev-mode-defaults))
 
+(require 'treesit)
+
+(defvar et/treesit-grammars
+  '(python javascript typescript tsx java yaml dockerfile bash json)
+  "Grammars offered by the installation command.")
+(defvar et/treesit-install-directory
+  (expand-file-name "tree-sitter/" et/state-directory)
+  "Local directory for compiled tree-sitter grammars.")
+(defvar et/treesit-map (make-sparse-keymap "tree-sitter"))
+(define-key et/leader-map (kbd "T") (cons "tree-sitter" et/treesit-map))
+
+(setq treesit-extra-load-path (list et/treesit-install-directory)
+      treesit-font-lock-level 4
+      treesit-language-source-alist
+      '((python "https://github.com/tree-sitter/tree-sitter-python" "master" "src")
+        (javascript "https://github.com/tree-sitter/tree-sitter-javascript" "master" "src")
+        (typescript "https://github.com/tree-sitter/tree-sitter-typescript" "master" "typescript/src")
+        (tsx "https://github.com/tree-sitter/tree-sitter-typescript" "master" "tsx/src")
+        (java "https://github.com/tree-sitter/tree-sitter-java" "master" "src")
+        (yaml "https://github.com/tree-sitter-grammars/tree-sitter-yaml" "master" "src")
+        (dockerfile "https://github.com/camdencheek/tree-sitter-dockerfile" "main" "src")
+        (bash "https://github.com/tree-sitter/tree-sitter-bash" "master" "src")
+        (json "https://github.com/tree-sitter/tree-sitter-json" "master" "src")))
+
 (defun et/tree-sitter-ready-p (grammar)
   "Whether GRAMMAR is already available; never install or prompt."
   (and (fboundp 'treesit-ready-p) (treesit-ready-p grammar t)))
 
-(dolist (spec '((python-mode python-ts-mode python) (js-mode js-ts-mode javascript)
-                (typescript-mode typescript-ts-mode typescript)
-                (java-mode java-ts-mode java) (yaml-mode yaml-ts-mode yaml)
-                (dockerfile-mode dockerfile-ts-mode dockerfile)))
-  (pcase-let ((`(,classic ,modern ,grammar) spec))
-    (when (and (fboundp modern) (et/tree-sitter-ready-p grammar))
-      (add-to-list 'major-mode-remap-alist (cons classic modern)))))
+(defun et/treesit-refresh-remaps ()
+  "Enable tree-sitter modes whose grammars are currently available."
+  (dolist (spec '((python-mode python-ts-mode python)
+                  (js-mode js-ts-mode javascript)
+                  (typescript-mode typescript-ts-mode typescript)
+                  (java-mode java-ts-mode java)
+                  (yaml-mode yaml-ts-mode yaml)
+                  (dockerfile-mode dockerfile-ts-mode dockerfile)))
+    (pcase-let ((`(,classic ,modern ,grammar) spec))
+      (when (and (fboundp modern) (et/tree-sitter-ready-p grammar))
+        (add-to-list 'major-mode-remap-alist (cons classic modern)))))
+  (when (and (fboundp 'tsx-ts-mode)
+             (et/tree-sitter-ready-p 'tsx)
+             (et/tree-sitter-ready-p 'typescript))
+    (add-to-list 'auto-mode-alist '("\\.tsx\\'" . tsx-ts-mode))))
+
+(defun et/treesit-status ()
+  "Report which configured tree-sitter grammars are available."
+  (interactive)
+  (let ((missing (seq-remove #'et/tree-sitter-ready-p et/treesit-grammars)))
+    (message "Tree-sitter ready: %s%s"
+             (mapconcat #'symbol-name
+                        (seq-remove (lambda (grammar) (member grammar missing))
+                                    et/treesit-grammars)
+                        ", ")
+             (if missing
+                 (format "; missing: %s"
+                         (mapconcat #'symbol-name missing ", "))
+               "; all configured grammars are ready"))))
+
+(defun et/treesit-install-grammars ()
+  "Install missing grammars into the local state directory."
+  (interactive)
+  (unless (treesit-available-p)
+    (user-error "This Emacs was built without tree-sitter support"))
+  (make-directory et/treesit-install-directory t)
+  (dolist (grammar et/treesit-grammars)
+    (unless (et/tree-sitter-ready-p grammar)
+      (condition-case err
+          (progn
+            (message "Installing tree-sitter grammar: %s" grammar)
+            (treesit-install-language-grammar
+             grammar et/treesit-install-directory))
+        (error
+         (display-warning 'etmacs
+                          (format "Could not install %s: %s"
+                                  grammar (error-message-string err)))))))
+  (et/treesit-refresh-remaps)
+  (message "Tree-sitter installation finished; reopen buffers to use new modes"))
+
+(define-key et/treesit-map (kbd "i") #'et/treesit-install-grammars)
+(define-key et/treesit-map (kbd "s") #'et/treesit-status)
+(et/treesit-refresh-remaps)
 
 (use-package typescript-mode
   :if (locate-library "typescript-mode")
@@ -331,7 +401,8 @@
                    ("C" . projectile-test-project) ("t" . et/dev-test-project)
                    ("T" . et/dev-test-file) ("u" . et/dev-test-point)
                    ("v" . et/python-environment)
-                   ("V" . et/compose-validate)))
+                   ("V" . et/compose-validate)
+                   ("I" . et/treesit-install-grammars)))
   (define-key et/dev-map (kbd (car binding)) (cdr binding)))
 (provide 'et-dev)
 ;;; et-dev.el ends here

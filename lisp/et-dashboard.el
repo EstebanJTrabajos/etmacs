@@ -10,6 +10,8 @@
 (declare-function et/org-refresh-agenda "et-org" (&optional scope))
 
 (defvar et/dashboard-buffer-name "*etmacs-dashboard*")
+(defvar et/dashboard-on-startup t
+  "Whether Emacs starts on the dashboard; set nil in settings.el to disable.")
 (defvar et/dashboard-recent-limit 8)
 (defvar et/dashboard-project-limit 8)
 (defvar et/dashboard-agenda-limit 8)
@@ -23,6 +25,10 @@
     (define-key map (kbd "p") #'et/dashboard-switch-project)
     (define-key map (kbd "c") #'et/capture)
     (define-key map (kbd "n") #'et/dashboard-news)
+    (define-key map (kbd "u") #'et/news-update)
+    (define-key map (kbd "N") #'et/news-open-reader)
+    (define-key map (kbd "RET") #'et/follow-link-at-point)
+    (define-key map (kbd "<return>") #'et/follow-link-at-point)
     map)
   "Keymap for the Etmacs dashboard.")
 
@@ -40,8 +46,8 @@
   "Insert LABEL as a button whose ACTION opens it."
   (insert-text-button label
                       :type 'et/dashboard-button
-                      :action action
-                      :help-echo (or help label)))
+                      'action action
+                      'help-echo (or help label)))
 
 (defun et/dashboard-insert-section (title)
   "Insert a dashboard section heading TITLE."
@@ -64,8 +70,8 @@
    et/dashboard-recent-limit))
 
 (defun et/dashboard-agenda-items ()
-  "Return open agenda tasks without opening the agenda buffer."
-  (let (lines)
+  "Return open agenda tasks as (TEXT FILE POSITION) lists."
+  (let (items)
     (dolist (file (bound-and-true-p org-agenda-files))
       (when (file-readable-p file)
         (condition-case nil
@@ -77,13 +83,22 @@
                      (let ((heading (org-get-heading t t t t))
                            (scheduled (org-entry-get nil "SCHEDULED"))
                            (deadline (org-entry-get nil "DEADLINE")))
-                       (push (concat heading
-                                     (when scheduled (format "  [%s]" scheduled))
-                                     (when deadline (format "  [deadline %s]" deadline)))
-                             lines)))))
+                       (push (list (concat heading
+                                           (when scheduled (format "  [%s]" scheduled))
+                                           (when deadline (format "  [deadline %s]" deadline)))
+                                   (buffer-file-name)
+                                   (point))
+                             items)))))
                nil 'file))
           (error nil))))
-    (seq-take (nreverse lines) et/dashboard-agenda-limit)))
+    (seq-take (nreverse items) et/dashboard-agenda-limit)))
+
+(defun et/dashboard-open-agenda-item (file position)
+  "Open FILE at POSITION and reveal its Org context."
+  (find-file file)
+  (goto-char position)
+  (when (fboundp 'org-show-context) (org-show-context))
+  (recenter))
 
 (defun et/dashboard-daily-file ()
   "Return today's daily file for the current domain."
@@ -136,7 +151,14 @@
     (et/dashboard-insert-section "Agenda")
     (let ((items (et/dashboard-agenda-items)))
       (if items
-          (dolist (item items) (insert "  " item "\n"))
+          (dolist (item items)
+            (insert "  ")
+            (et/dashboard-insert-button
+             (nth 0 item)
+             (lambda (_button)
+               (et/dashboard-open-agenda-item (nth 1 item) (nth 2 item)))
+             (nth 0 item))
+            (insert "\n"))
         (insert "  Nothing scheduled for today.\n"))
       (insert "  ")
       (et/dashboard-insert-button "Open agenda" #'et/dashboard-agenda)
@@ -148,7 +170,35 @@
     (insert "  " (abbreviate-file-name (et/dashboard-daily-file)) "\n")
     (insert "\n")
     (et/dashboard-insert-section "News")
-    (insert "  News feed placeholder (not configured yet).\n")
+    (if (not (and (locate-library "elfeed")
+                  (fboundp 'et/news-entries)
+                  (boundp 'et/news-sites)))
+        (insert "  Install elfeed with SPC h p to enable news feeds.\n")
+      (dolist (site et/news-sites)
+        (let ((entries (condition-case nil
+                           (et/news-entries (car site))
+                         (error nil))))
+          (insert (propertize (format "%s\n" (nth 1 site)) 'face 'bold))
+          (if entries
+              (dolist (entry entries)
+                (insert "  ")
+                (et/dashboard-insert-button
+                 (truncate-string-to-width
+                  (or (elfeed-entry-title entry) "(untitled)") 84 nil nil "…")
+                 (lambda (_button) (et/news-open-article entry))
+                 (or (elfeed-entry-link entry) "No link"))
+                (insert "\n"))
+            (insert "  No cached articles.\n"))
+          (insert "  ")
+          (et/dashboard-insert-button
+           "Open full feed"
+           (lambda (_button) (et/news-open-site (car site))))
+          (insert "  ")
+          (et/dashboard-insert-button "Choose feeds" #'et/news-select-feeds)
+          (insert "\n")))
+      (insert "  ")
+      (et/dashboard-insert-button "Update feeds" #'et/news-update)
+      (insert "\n"))
     (insert "\n")
     (insert (propertize
              "g refresh · q quit · TAB/RET open · d journal · a agenda\n"
@@ -161,18 +211,26 @@
     (user-error "Not in the Etmacs dashboard"))
   (et/dashboard-render))
 
-(defun et/dashboard ()
-  "Open the Etmacs dashboard."
-  (interactive)
+(defun et/dashboard-buffer ()
+  "Return the refreshed dashboard buffer without switching to it."
   (when (fboundp 'et/org-refresh-agenda)
     (condition-case nil
         (et/org-refresh-agenda et/org-agenda-scope)
       (error nil)))
   (let ((buffer (get-buffer-create et/dashboard-buffer-name)))
     (with-current-buffer buffer
-      (et/dashboard-mode)
+      (unless (derived-mode-p 'et/dashboard-mode)
+        (et/dashboard-mode))
       (et/dashboard-refresh))
-    (switch-to-buffer buffer)))
+    buffer))
+
+(defun et/dashboard ()
+  "Open the Etmacs dashboard."
+  (interactive)
+  (switch-to-buffer (et/dashboard-buffer)))
+
+(when et/dashboard-on-startup
+  (setq initial-buffer-choice #'et/dashboard-buffer))
 
 (defun et/dashboard-daily ()
   "Open today's journal entry."
@@ -185,9 +243,11 @@
   (et/org-agenda (et/current-domain)))
 
 (defun et/dashboard-news ()
-  "Placeholder for the future news feed."
+  "Choose which news topics appear on the dashboard."
   (interactive)
-  (message "News feed placeholder: not configured yet"))
+  (if (fboundp 'et/news-select-feeds)
+      (et/news-select-feeds)
+    (user-error "Install elfeed with et/install-packages and restart")))
 
 (define-key et/leader-map (kbd "d") #'et/dashboard)
 (provide 'et-dashboard)

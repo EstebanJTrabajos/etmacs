@@ -68,6 +68,7 @@ package directory first. No global bidi or aggressive GC tweaks.
     vertico-posframe guava-themes projectile perspective corfu treemacs
     treemacs-evil treemacs-perspective avy ace-window expand-region crux
     gptel parinfer-rust-mode rainbow-delimiters
+    doom-modeline nerd-icons minions elfeed
     magit diff-hl git-timemachine git-modes hl-todo
     org-roam org-roam-ui org-pomodoro org-drill citar ox-hugo ox-pandoc
     restclient ob-restclient typescript-mode web-mode yaml-mode yara-mode
@@ -102,13 +103,17 @@ package directory first. No global bidi or aggressive GC tweaks.
 (let ((settings (expand-file-name "settings.el" et/state-directory)))
   (when (file-exists-p settings) (load settings nil 'nomessage)))
 (require 'et-core)
+(require 'et-modeline)
 (require 'et-projects)
 (require 'et-editing)
 (require 'et-org)
 (require 'et-roam)
 (require 'et-dev)
 (require 'et-dashboard)
+(require 'et-links)
+(require 'et-news)
 (require 'et-ai)
+(require 'et-mail)
 (require 'et-pomodoro)
 
 (when-let* ((missing (et/missing-packages)))
@@ -248,6 +253,7 @@ to supply their own bindings without changing every other mode.
 
 (define-key et/leader-map (kbd "q") #'save-buffers-kill-emacs)
 (define-key et/leader-map (kbd "R") #'et/reload-config)
+(define-key et/leader-map (kbd "x") #'et/capture)
 
 (use-package evil
   :if (locate-library "evil")
@@ -266,6 +272,12 @@ to supply their own bindings without changing every other mode.
   :demand t
   :config
   (evil-collection-init))
+
+(use-package evil-easymotion
+  :commands evilem-create evilem-default-keybindings)
+
+(use-package doom-themes
+  :hook (doom-load-theme . doom-themes-org-config))
 #+end_src
 
 * Completion and visual styling
@@ -274,6 +286,10 @@ Vertico presents Emacs completion, Orderless matches words in any order,
 Marginalia annotates candidates, and Consult supplies search and previews.
 File completion keeps partial-completion for path handling. No Company/Corfu
 overlap: Corfu below provides in-buffer completion over standard CAPFs.
+
+=C-j= and =C-k= move down and up through Vertico, Corfu, built-in minibuffer
+completion, and Transient menus; =RET= remains the accept key. They are not bound
+globally, so ordinary editing keeps its normal behavior.
 
 Vertico Posframe checks whether posframes work for the current display, so its
 ordinary Vertico renderer remains available in terminal sessions. Do not gate
@@ -335,8 +351,91 @@ in this document (or machine settings) for a persistent default.
   (mapc #'disable-theme custom-enabled-themes)
   (load-theme et/default-theme t))
 
+;; C-j/C-k navigate completion menus and transient menus.  They are not bound
+;; globally, so ordinary editing keeps its normal C-j/C-k behavior.
+(with-eval-after-load 'vertico
+  (define-key vertico-map (kbd "C-j") #'vertico-next)
+  (define-key vertico-map (kbd "C-k") #'vertico-previous))
+
+(with-eval-after-load 'corfu
+  (define-key corfu-map (kbd "C-j") #'corfu-next)
+  (define-key corfu-map (kbd "C-k") #'corfu-previous))
+
+(with-eval-after-load 'transient
+  (define-key transient-popup-navigation-map (kbd "C-j")
+              #'transient-forward-button)
+  (define-key transient-popup-navigation-map (kbd "C-k")
+              #'transient-backward-button))
+
+(dolist (map '(minibuffer-local-completion-map
+               minibuffer-local-must-match-map))
+  (define-key (symbol-value map) (kbd "C-j")
+              #'next-line-or-history-element)
+  (define-key (symbol-value map) (kbd "C-k")
+              #'previous-line-or-history-element))
+
 (provide 'et-core)
 ;;; et-core.el ends here
+#+end_src
+
+* Modeline
+
+The modeline uses =doom-modeline= with Nerd Font icons, colors, version-control
+state, diagnostics, LSP, position, and time. =minions= collapses the minor-mode
+list so the bar stays readable. The icon font is installed explicitly with
+=M-x et/install-nerd-fonts=; startup never downloads fonts. This is heavier than
+=mood-line= or =nano-modeline= but keeps the information density and visual
+polish of Doom. Set =doom-modeline-icon= to nil in =.local/settings.el= if the
+terminal font lacks Nerd Font glyphs.
+
+#+begin_src emacs-lisp :tangle lisp/et-modeline.el
+;;; et-modeline.el --- Generated from config.org -*- lexical-binding: t; -*-
+(use-package nerd-icons
+  :if (locate-library "nerd-icons")
+  :commands nerd-icons-install-fonts
+  :init
+  (setq nerd-icons-scale-factor 1.0))
+
+(use-package minions
+  :if (locate-library "minions")
+  :demand t
+  :init
+  (setq minions-mode-line-lighter "")
+  :config
+  (minions-mode 1))
+
+(use-package doom-modeline
+  :if (locate-library "doom-modeline")
+  :demand t
+  :init
+  (setq doom-modeline-height 26
+        doom-modeline-bar-width 4
+        doom-modeline-icon t
+        doom-modeline-major-mode-icon t
+        doom-modeline-major-mode-color-icon t
+        doom-modeline-buffer-file-name-style 'relative-from-project
+        doom-modeline-buffer-encoding nil
+        doom-modeline-indent-info nil
+        doom-modeline-enable-word-count nil
+        doom-modeline-minor-modes t
+        doom-modeline-persp-name t
+        doom-modeline-lsp t
+        doom-modeline-check t
+        doom-modeline-time t
+        doom-modeline-time-icon t
+        doom-modeline-github nil)
+  :config
+  (doom-modeline-mode 1))
+
+(defun et/install-nerd-fonts ()
+  "Install the Nerd Fonts glyphs used by the modeline."
+  (interactive)
+  (unless (require 'nerd-icons nil t)
+    (user-error "Install nerd-icons with et/install-packages first"))
+  (nerd-icons-install-fonts))
+
+(provide 'et-modeline)
+;;; et-modeline.el ends here
 #+end_src
 
 * Projects, workspaces, and in-buffer completion
@@ -566,12 +665,13 @@ on demand, not forced into every workspace. Pop-up rules use built-in
 
 * Dashboard
 
-The dashboard is a small, dependency-free =special-mode= buffer. It reads
-Projectile's registered projects, =recentf-list=, and today's Org agenda without
-opening a graph server or contacting the network. Buttons use Emacs's built-in
-=button= library. The news feed is deliberately a placeholder; no feed reader or
-remote request is wired in. Refresh with =g=, quit with =q=, and use =TAB=/=RET=
-to activate a button. =SPC d= opens it.
+The dashboard is a small =special-mode= buffer and the default startup buffer.
+It reads Projectile's registered projects, =recentf-list=, today's Org tasks,
+and Elfeed's cached articles without contacting the network. Buttons use Emacs's
+built-in =button= library; article and task buttons open the browser or the
+original Org heading. Refresh with =g=, quit with =q=, and use =TAB=/=RET= to
+activate a button. =SPC d= opens it; set =et/dashboard-on-startup= to nil to
+start on scratch instead.
 
 #+begin_src emacs-lisp :tangle lisp/et-dashboard.el
 ;;; et-dashboard.el --- Generated from config.org -*- lexical-binding: t; -*-
@@ -586,6 +686,8 @@ to activate a button. =SPC d= opens it.
 (declare-function et/org-refresh-agenda "et-org" (&optional scope))
 
 (defvar et/dashboard-buffer-name "*etmacs-dashboard*")
+(defvar et/dashboard-on-startup t
+  "Whether Emacs starts on the dashboard; set nil in settings.el to disable.")
 (defvar et/dashboard-recent-limit 8)
 (defvar et/dashboard-project-limit 8)
 (defvar et/dashboard-agenda-limit 8)
@@ -599,6 +701,10 @@ to activate a button. =SPC d= opens it.
     (define-key map (kbd "p") #'et/dashboard-switch-project)
     (define-key map (kbd "c") #'et/capture)
     (define-key map (kbd "n") #'et/dashboard-news)
+    (define-key map (kbd "u") #'et/news-update)
+    (define-key map (kbd "N") #'et/news-open-reader)
+    (define-key map (kbd "RET") #'et/follow-link-at-point)
+    (define-key map (kbd "<return>") #'et/follow-link-at-point)
     map)
   "Keymap for the Etmacs dashboard.")
 
@@ -616,8 +722,8 @@ to activate a button. =SPC d= opens it.
   "Insert LABEL as a button whose ACTION opens it."
   (insert-text-button label
                       :type 'et/dashboard-button
-                      :action action
-                      :help-echo (or help label)))
+                      'action action
+                      'help-echo (or help label)))
 
 (defun et/dashboard-insert-section (title)
   "Insert a dashboard section heading TITLE."
@@ -640,8 +746,8 @@ to activate a button. =SPC d= opens it.
    et/dashboard-recent-limit))
 
 (defun et/dashboard-agenda-items ()
-  "Return open agenda tasks without opening the agenda buffer."
-  (let (lines)
+  "Return open agenda tasks as (TEXT FILE POSITION) lists."
+  (let (items)
     (dolist (file (bound-and-true-p org-agenda-files))
       (when (file-readable-p file)
         (condition-case nil
@@ -653,13 +759,22 @@ to activate a button. =SPC d= opens it.
                      (let ((heading (org-get-heading t t t t))
                            (scheduled (org-entry-get nil "SCHEDULED"))
                            (deadline (org-entry-get nil "DEADLINE")))
-                       (push (concat heading
-                                     (when scheduled (format "  [%s]" scheduled))
-                                     (when deadline (format "  [deadline %s]" deadline)))
-                             lines)))))
+                       (push (list (concat heading
+                                           (when scheduled (format "  [%s]" scheduled))
+                                           (when deadline (format "  [deadline %s]" deadline)))
+                                   (buffer-file-name)
+                                   (point))
+                             items)))))
                nil 'file))
           (error nil))))
-    (seq-take (nreverse lines) et/dashboard-agenda-limit)))
+    (seq-take (nreverse items) et/dashboard-agenda-limit)))
+
+(defun et/dashboard-open-agenda-item (file position)
+  "Open FILE at POSITION and reveal its Org context."
+  (find-file file)
+  (goto-char position)
+  (when (fboundp 'org-show-context) (org-show-context))
+  (recenter))
 
 (defun et/dashboard-daily-file ()
   "Return today's daily file for the current domain."
@@ -712,7 +827,14 @@ to activate a button. =SPC d= opens it.
     (et/dashboard-insert-section "Agenda")
     (let ((items (et/dashboard-agenda-items)))
       (if items
-          (dolist (item items) (insert "  " item "\n"))
+          (dolist (item items)
+            (insert "  ")
+            (et/dashboard-insert-button
+             (nth 0 item)
+             (lambda (_button)
+               (et/dashboard-open-agenda-item (nth 1 item) (nth 2 item)))
+             (nth 0 item))
+            (insert "\n"))
         (insert "  Nothing scheduled for today.\n"))
       (insert "  ")
       (et/dashboard-insert-button "Open agenda" #'et/dashboard-agenda)
@@ -724,7 +846,35 @@ to activate a button. =SPC d= opens it.
     (insert "  " (abbreviate-file-name (et/dashboard-daily-file)) "\n")
     (insert "\n")
     (et/dashboard-insert-section "News")
-    (insert "  News feed placeholder (not configured yet).\n")
+    (if (not (and (locate-library "elfeed")
+                  (fboundp 'et/news-entries)
+                  (boundp 'et/news-sites)))
+        (insert "  Install elfeed with SPC h p to enable news feeds.\n")
+      (dolist (site et/news-sites)
+        (let ((entries (condition-case nil
+                           (et/news-entries (car site))
+                         (error nil))))
+          (insert (propertize (format "%s\n" (nth 1 site)) 'face 'bold))
+          (if entries
+              (dolist (entry entries)
+                (insert "  ")
+                (et/dashboard-insert-button
+                 (truncate-string-to-width
+                  (or (elfeed-entry-title entry) "(untitled)") 84 nil nil "…")
+                 (lambda (_button) (et/news-open-article entry))
+                 (or (elfeed-entry-link entry) "No link"))
+                (insert "\n"))
+            (insert "  No cached articles.\n"))
+          (insert "  ")
+          (et/dashboard-insert-button
+           "Open full feed"
+           (lambda (_button) (et/news-open-site (car site))))
+          (insert "  ")
+          (et/dashboard-insert-button "Choose feeds" #'et/news-select-feeds)
+          (insert "\n")))
+      (insert "  ")
+      (et/dashboard-insert-button "Update feeds" #'et/news-update)
+      (insert "\n"))
     (insert "\n")
     (insert (propertize
              "g refresh · q quit · TAB/RET open · d journal · a agenda\n"
@@ -737,18 +887,26 @@ to activate a button. =SPC d= opens it.
     (user-error "Not in the Etmacs dashboard"))
   (et/dashboard-render))
 
-(defun et/dashboard ()
-  "Open the Etmacs dashboard."
-  (interactive)
+(defun et/dashboard-buffer ()
+  "Return the refreshed dashboard buffer without switching to it."
   (when (fboundp 'et/org-refresh-agenda)
     (condition-case nil
         (et/org-refresh-agenda et/org-agenda-scope)
       (error nil)))
   (let ((buffer (get-buffer-create et/dashboard-buffer-name)))
     (with-current-buffer buffer
-      (et/dashboard-mode)
+      (unless (derived-mode-p 'et/dashboard-mode)
+        (et/dashboard-mode))
       (et/dashboard-refresh))
-    (switch-to-buffer buffer)))
+    buffer))
+
+(defun et/dashboard ()
+  "Open the Etmacs dashboard."
+  (interactive)
+  (switch-to-buffer (et/dashboard-buffer)))
+
+(when et/dashboard-on-startup
+  (setq initial-buffer-choice #'et/dashboard-buffer))
 
 (defun et/dashboard-daily ()
   "Open today's journal entry."
@@ -761,13 +919,400 @@ to activate a button. =SPC d= opens it.
   (et/org-agenda (et/current-domain)))
 
 (defun et/dashboard-news ()
-  "Placeholder for the future news feed."
+  "Choose which news topics appear on the dashboard."
   (interactive)
-  (message "News feed placeholder: not configured yet"))
+  (if (fboundp 'et/news-select-feeds)
+      (et/news-select-feeds)
+    (user-error "Install elfeed with et/install-packages and restart")))
 
 (define-key et/leader-map (kbd "d") #'et/dashboard)
 (provide 'et-dashboard)
 ;;; et-dashboard.el ends here
+#+end_src
+
+* News and feeds
+
+=elfeed= reads RSS. The Scientific American feed is their single public
+syndication feed; the New York Times exposes separate topic feeds. All feeds are
+downloaded, while =et/news-select-feeds= controls which topics contribute to the
+dashboard's five newest articles per site. The dashboard reads only elfeed's
+local cache, so startup never fetches the network; =SPC N u= updates feeds.
+Each site's "Open full feed" button opens the elfeed search buffer filtered to
+that site.
+
+#+begin_src emacs-lisp :tangle lisp/et-news.el
+;;; et-news.el --- Generated from config.org -*- lexical-binding: t; -*-
+(require 'seq)
+(require 'subr-x)
+
+(defvar et/news-limit 5)
+(defvar et/news-state-file (expand-file-name "news.el" et/state-directory))
+(defvar et/news-selected nil)
+(defvar et/news--refresh-timer nil)
+(defvar et/news-map (make-sparse-keymap "news"))
+(define-key et/leader-map (kbd "N") (cons "news" et/news-map))
+
+(defconst et/news-sites
+  '((sciam "Scientific American"
+     (("All" "https://www.scientificamerican.com/platform/syndication/rss/" sciam-all)))
+    (nyt "New York Times"
+     (("Home" "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml" nyt-home)
+      ("World" "https://rss.nytimes.com/services/xml/rss/nyt/World.xml" nyt-world)
+      ("U.S." "https://rss.nytimes.com/services/xml/rss/nyt/US.xml" nyt-us)
+      ("Business" "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml" nyt-business)
+      ("Technology" "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml" nyt-technology)
+      ("Science" "https://rss.nytimes.com/services/xml/rss/nyt/Science.xml" nyt-science)
+      ("Health" "https://rss.nytimes.com/services/xml/rss/nyt/Health.xml" nyt-health)
+      ("Sports" "https://rss.nytimes.com/services/xml/rss/nyt/Sports.xml" nyt-sports)
+      ("Arts" "https://rss.nytimes.com/services/xml/rss/nyt/Arts.xml" nyt-arts))))
+  "News sites and their (LABEL URL TAG) feeds.")
+
+(defun et/news-default-selection ()
+  "Return all site topics selected."
+  (mapcar (lambda (site)
+            (cons (car site) (mapcar #'car (nth 2 site))))
+          et/news-sites))
+
+(defun et/news-load-selection ()
+  "Load the saved front-page selection, merging in new topics."
+  (let ((saved (when (file-readable-p et/news-state-file)
+                 (condition-case nil
+                     (with-temp-buffer
+                       (insert-file-contents et/news-state-file)
+                       (goto-char (point-min))
+                       (read (current-buffer)))
+                   (error nil)))))
+    (setq et/news-selected
+          (mapcar
+           (lambda (site)
+             (let* ((id (car site))
+                    (labels (mapcar #'car (nth 2 site)))
+                    (chosen (cdr (assq id saved))))
+               (cons id (seq-filter (lambda (label) (member label labels))
+                                    (or chosen labels)))))
+           et/news-sites))))
+
+(defun et/news-save-selection ()
+  "Persist the front-page selection."
+  (let ((coding-system-for-write 'utf-8-unix))
+    (with-temp-file et/news-state-file
+      (insert ";; Generated by et/news-select-feeds; do not edit by hand.\n")
+      (prin1 et/news-selected (current-buffer))
+      (insert "\n")))
+  (set-file-modes et/news-state-file #o600))
+
+(defun et/news-selected-labels (site)
+  "Return selected topic labels for SITE."
+  (cdr (assq site et/news-selected)))
+
+(defun et/news-selected-urls (site)
+  "Return selected feed URLs for SITE."
+  (let* ((spec (assq site et/news-sites))
+         (labels (et/news-selected-labels site)))
+    (mapcar #'cadr
+            (seq-filter (lambda (feed) (member (car feed) labels))
+                        (nth 2 spec)))))
+
+(defun et/news-elfeed-feeds ()
+  "Return all site feeds in `elfeed-feeds' format."
+  (let (feeds)
+    (dolist (site et/news-sites)
+      (dolist (feed (nth 2 site))
+        (push (list (cadr feed) (car site) (nth 2 feed)) feeds)))
+    (nreverse feeds)))
+
+(defun et/news--ensure-elfeed ()
+  "Load elfeed and its database, or signal a clear error."
+  (unless (require 'elfeed nil t)
+    (user-error "Install elfeed with et/install-packages and restart"))
+  (elfeed-db-ensure))
+
+(defun et/news-entries (site &optional limit)
+  "Return the newest cached entries for SITE, up to LIMIT."
+  (et/news--ensure-elfeed)
+  (let ((urls (et/news-selected-urls site))
+        entries)
+    (maphash
+     (lambda (_id entry)
+       (let ((url (or (elfeed-feed-url (elfeed-entry-feed entry))
+                      (elfeed-entry-feed-id entry))))
+         (when (member url urls)
+           (push entry entries))))
+     elfeed-db-entries)
+    (seq-take
+     (sort entries
+           (lambda (a b)
+             (> (or (elfeed-entry-date a) 0)
+                (or (elfeed-entry-date b) 0))))
+     (or limit et/news-limit))))
+
+(defun et/news-open-article (entry)
+  "Open ENTRY's article in the default browser."
+  (let ((link (elfeed-entry-link entry)))
+    (if link
+        (browse-url link)
+      (user-error "This article has no link"))))
+
+(defun et/news-open-reader ()
+  "Open the Elfeed search buffer."
+  (interactive)
+  (et/news--ensure-elfeed)
+  (elfeed))
+
+(defun et/news-open-site (site)
+  "Open the full elfeed search buffer filtered to SITE."
+  (et/news--ensure-elfeed)
+  (elfeed)
+  (elfeed-search-set-filter (format "+%s" site)))
+
+(defun et/news-update ()
+  "Download all configured news feeds asynchronously."
+  (interactive)
+  (et/news--ensure-elfeed)
+  (elfeed-update)
+  (message "Updating news feeds..."))
+
+(defun et/news-select-feeds ()
+  "Choose which site topics appear on the dashboard and update feeds."
+  (interactive)
+  (let (selection)
+    (dolist (site et/news-sites)
+      (let* ((id (car site))
+             (label (nth 1 site))
+             (labels (mapcar #'car (nth 2 site)))
+             (current (or (et/news-selected-labels id) labels))
+             (chosen (completing-read-multiple
+                      (format "%s topics (comma separated): " label)
+                      labels nil t nil nil
+                      (mapconcat #'identity current ","))))
+        (push (cons id chosen) selection)))
+    (setq et/news-selected (nreverse selection))
+    (et/news-save-selection)
+    (when (fboundp 'et/dashboard-refresh)
+      (when-let* ((buffer (get-buffer et/dashboard-buffer-name)))
+        (with-current-buffer buffer
+          (when (derived-mode-p 'et/dashboard-mode)
+            (et/dashboard-refresh)))))
+    (when (locate-library "elfeed")
+      (et/news-update))
+    (message "News topics updated")))
+
+(defun et/news--schedule-refresh ()
+  "Refresh the dashboard after elfeed finishes updating."
+  (when (timerp et/news--refresh-timer)
+    (cancel-timer et/news--refresh-timer))
+  (setq et/news--refresh-timer
+        (run-at-time
+         1 nil
+         (lambda ()
+           (when-let* ((buffer (get-buffer et/dashboard-buffer-name)))
+             (with-current-buffer buffer
+               (when (derived-mode-p 'et/dashboard-mode)
+                 (et/dashboard-refresh))))))))
+
+(use-package elfeed
+  :if (locate-library "elfeed")
+  :commands (elfeed elfeed-update)
+  :init
+  (setq elfeed-db-directory (expand-file-name "elfeed/" et/state-directory)
+        elfeed-search-filter "+unread")
+  :config
+  (setq elfeed-feeds (et/news-elfeed-feeds))
+  (add-hook 'elfeed-db-update-hook #'et/news--schedule-refresh))
+
+(define-key et/news-map (kbd "o") #'et/news-open-reader)
+(define-key et/news-map (kbd "u") #'et/news-update)
+(define-key et/news-map (kbd "s") #'et/news-select-feeds)
+(et/news-load-selection)
+(provide 'et-news)
+;;; et-news.el ends here
+#+end_src
+
+* Following links
+
+=RET= in Evil normal state follows the thing at point instead of only moving by
+line: dashboard buttons, Org links (including plain URLs), web URLs in any
+buffer, and =file:=, =id:=, or =roam:= links embedded in non-Org text. Insert
+state keeps its ordinary newline behavior; when there is nothing to follow the
+command falls back to =evil-ret= (or =newline= outside Evil). The generic path
+uses =browse-url= for web links and =org-link-open-from-string= for Org-style
+links, so Markdown, code comments, and other text can carry usable links.
+
+#+begin_src emacs-lisp :tangle lisp/et-links.el
+;;; et-links.el --- Generated from config.org -*- lexical-binding: t; -*-
+(require 'button)
+(require 'subr-x)
+
+(defvar et/link-regexp
+  "\\(?:https?\\|file\\|id\\|roam\\):[^][()<> \t\n]+"
+  "Link-like text recognized outside Org buffers.")
+
+(defun et/link-at-point ()
+  "Return the URL or generic link at point, or nil."
+  (or (when-let* ((url (thing-at-point 'url t)))
+        (string-trim url "[[:space:]]+\\|[.,;:]+\\'"))
+      (let ((at (point)))
+        (save-excursion
+          (goto-char (line-beginning-position))
+          (when (re-search-forward et/link-regexp (line-end-position) t)
+            (let ((start (match-beginning 0))
+                  (end (match-end 0)))
+              (when (and (<= start at) (<= at end))
+                (buffer-substring-no-properties start end))))))))
+
+(defun et/org-bracket-link-at-point ()
+  "Return the target of an Org bracket link around point, or nil."
+  (let ((at (point)))
+    (save-excursion
+      (goto-char (line-beginning-position))
+      (when (re-search-forward
+             "\\[\\[\\([^]]+\\)\\]\\(?:\\[\\([^]]*\\)\\]\\)?\\]"
+             (line-end-position) t)
+        (let ((start (match-beginning 0))
+              (link-end (match-end 0))
+              (target (match-string 1)))
+          (when (and (<= start at) (<= at link-end))
+            target))))))
+
+(defun et/markdown-link-at-point ()
+  "Return the URL of a Markdown inline link around point, or nil."
+  (let ((at (point)))
+    (save-excursion
+      (goto-char (line-beginning-position))
+      (when (re-search-forward
+             "\\[[^]]*\\](\\([^)]+\\))" (line-end-position) t)
+        (let ((start (match-beginning 0))
+              (link-end (match-end 0))
+              (url (match-string 1)))
+          (when (and (<= start at) (<= at link-end))
+            url))))))
+
+(defun et/ret-fallback ()
+  "Preserve the ordinary RET behavior when point is not on a link."
+  (cond
+   ((and (bound-and-true-p evil-mode) (evil-normal-state-p))
+    (evil-ret))
+   (buffer-read-only (forward-line 1))
+   (t (newline))))
+
+(defun et/open-generic-link (link)
+  "Open LINK with the appropriate browser or Org link handler."
+  (cond
+   ((string-match-p "\\`https?:" link) (browse-url link))
+   ((string-prefix-p "roam:" link)
+    (require 'org-roam)
+    (org-roam-node-open (org-roam-node-from-id (substring link 5))))
+   (t
+    (require 'ol)
+    (org-link-open-from-string link))))
+
+(defun et/follow-link-at-point ()
+  "Follow a button, Org link, URL, or embedded link at point.
+In Evil normal state this is bound to RET; insert state is
+unchanged.  Falls back to the normal RET behavior when there is
+nothing to follow."
+  (interactive)
+  (cond
+   ((button-at (point)) (push-button))
+   ((derived-mode-p 'org-mode)
+    (cond
+     ((and (boundp 'org-link-any-re)
+           (org-in-regexp org-link-any-re))
+      (org-open-at-point))
+     ((thing-at-point 'url t)
+      (browse-url (thing-at-point 'url t)))
+     (t (et/ret-fallback))))
+   ((et/org-bracket-link-at-point)
+    (et/open-generic-link (et/org-bracket-link-at-point)))
+   ((et/markdown-link-at-point)
+    (browse-url (et/markdown-link-at-point)))
+   ((et/link-at-point)
+    (et/open-generic-link (et/link-at-point)))
+   (t (et/ret-fallback))))
+
+(with-eval-after-load 'evil
+  (define-key evil-normal-state-map (kbd "RET") #'et/follow-link-at-point))
+
+(with-eval-after-load 'et-dashboard
+  (define-key et/dashboard-mode-map (kbd "RET") #'et/follow-link-at-point)
+  (define-key et/dashboard-mode-map (kbd "<return>") #'et/follow-link-at-point))
+
+(define-key et/leader-map (kbd "RET") #'et/follow-link-at-point)
+(provide 'et-links)
+;;; et-links.el ends here
+#+end_src
+
+* Email
+
+=mu4e= is supported but intentionally unconfigured: maildir, contexts, SMTP,
+and credentials belong in =.local/settings.el=, not this repository. The module
+adds common mu4e install directories to =load-path= and loads its autoloads when
+present. Every command checks =mu4e-maildir= first and explains what to set
+instead of failing inside mu4e. =SPC M= is the mail group.
+
+#+begin_src emacs-lisp :tangle lisp/et-mail.el
+;;; et-mail.el --- Generated from config.org -*- lexical-binding: t; -*-
+(require 'seq)
+
+(defvar et/mail-map (make-sparse-keymap "mail"))
+(define-key et/leader-map (kbd "M") (cons "mail" et/mail-map))
+
+(defvar et/mu4e-directories
+  '("/usr/share/emacs/site-lisp/mu4e"
+    "/usr/local/share/emacs/site-lisp/mu4e"
+    "~/.emacs.d/mu4e")
+  "Candidate directories containing mu4e.")
+
+(dolist (directory et/mu4e-directories)
+  (let ((directory (expand-file-name directory)))
+    (when (file-directory-p directory)
+      (add-to-list 'load-path directory)
+      (load "mu4e-autoloads" t t))))
+
+(defun et/mail--ensure ()
+  "Signal a clear error unless mu4e is installed and configured."
+  (unless (locate-library "mu4e")
+    (user-error "Install the mu package, then run et/install-packages or add mu4e to load-path"))
+  (unless (and (boundp 'mu4e-maildir)
+               mu4e-maildir
+               (file-directory-p (expand-file-name mu4e-maildir)))
+    (user-error "Set mu4e-maildir in .local/settings.el, then restart Emacs")))
+
+(defun et/mail--load ()
+  "Ensure configuration, then load mu4e."
+  (et/mail--ensure)
+  (require 'mu4e))
+
+(defun et/mail ()
+  "Open mu4e."
+  (interactive)
+  (et/mail--load)
+  (mu4e))
+
+(defun et/mail-update ()
+  "Update the mu index."
+  (interactive)
+  (et/mail--load)
+  (mu4e-update-index))
+
+(defun et/mail-compose ()
+  "Compose a new message."
+  (interactive)
+  (et/mail--load)
+  (mu4e-compose-new))
+
+(defun et/mail-search ()
+  "Search mail with mu4e."
+  (interactive)
+  (et/mail--load)
+  (mu4e-search))
+
+(define-key et/mail-map (kbd "m") #'et/mail)
+(define-key et/mail-map (kbd "u") #'et/mail-update)
+(define-key et/mail-map (kbd "c") #'et/mail-compose)
+(define-key et/mail-map (kbd "s") #'et/mail-search)
+(provide 'et-mail)
+;;; et-mail.el ends here
 #+end_src
 
 * AI assistance
@@ -1141,8 +1686,9 @@ Domain defaults are workspace-local when Perspective is active and can be set
 with =SPC n D=. A domain-specific note overrides the workspace default. General
 notes are shared organizationally, not by a privacy/security boundary.
 
-Capture keys: =pi= personal inbox, =pt= personal TODO, =ph= daily personal habit,
-=wi= work inbox, =wt= work TODO, =j= project task. Only the habit template
+Capture keys: =SPC x= opens the general menu; =pi= personal inbox, =pt= personal
+TODO, =ph= daily personal habit, =wi= work inbox, =wt= work TODO, =j= project
+task. Only the habit template
 introduces a schedule/repeater; normal TODOs have no invented dates/deadlines.
 The initial daily habit schedule is editable before finalizing.
 
@@ -2223,17 +2769,87 @@ provided by Eglot/Flymake.
 (dolist (mode et/dev-modes)
   (add-hook (intern (concat (symbol-name mode) "-hook")) #'et/dev-mode-defaults))
 
+(require 'treesit)
+
+(defvar et/treesit-grammars
+  '(python javascript typescript tsx java yaml dockerfile bash json)
+  "Grammars offered by the installation command.")
+(defvar et/treesit-install-directory
+  (expand-file-name "tree-sitter/" et/state-directory)
+  "Local directory for compiled tree-sitter grammars.")
+(defvar et/treesit-map (make-sparse-keymap "tree-sitter"))
+(define-key et/leader-map (kbd "T") (cons "tree-sitter" et/treesit-map))
+
+(setq treesit-extra-load-path (list et/treesit-install-directory)
+      treesit-font-lock-level 4
+      treesit-language-source-alist
+      '((python "https://github.com/tree-sitter/tree-sitter-python" "master" "src")
+        (javascript "https://github.com/tree-sitter/tree-sitter-javascript" "master" "src")
+        (typescript "https://github.com/tree-sitter/tree-sitter-typescript" "master" "typescript/src")
+        (tsx "https://github.com/tree-sitter/tree-sitter-typescript" "master" "tsx/src")
+        (java "https://github.com/tree-sitter/tree-sitter-java" "master" "src")
+        (yaml "https://github.com/tree-sitter-grammars/tree-sitter-yaml" "master" "src")
+        (dockerfile "https://github.com/camdencheek/tree-sitter-dockerfile" "main" "src")
+        (bash "https://github.com/tree-sitter/tree-sitter-bash" "master" "src")
+        (json "https://github.com/tree-sitter/tree-sitter-json" "master" "src")))
+
 (defun et/tree-sitter-ready-p (grammar)
   "Whether GRAMMAR is already available; never install or prompt."
   (and (fboundp 'treesit-ready-p) (treesit-ready-p grammar t)))
 
-(dolist (spec '((python-mode python-ts-mode python) (js-mode js-ts-mode javascript)
-                (typescript-mode typescript-ts-mode typescript)
-                (java-mode java-ts-mode java) (yaml-mode yaml-ts-mode yaml)
-                (dockerfile-mode dockerfile-ts-mode dockerfile)))
-  (pcase-let ((`(,classic ,modern ,grammar) spec))
-    (when (and (fboundp modern) (et/tree-sitter-ready-p grammar))
-      (add-to-list 'major-mode-remap-alist (cons classic modern)))))
+(defun et/treesit-refresh-remaps ()
+  "Enable tree-sitter modes whose grammars are currently available."
+  (dolist (spec '((python-mode python-ts-mode python)
+                  (js-mode js-ts-mode javascript)
+                  (typescript-mode typescript-ts-mode typescript)
+                  (java-mode java-ts-mode java)
+                  (yaml-mode yaml-ts-mode yaml)
+                  (dockerfile-mode dockerfile-ts-mode dockerfile)))
+    (pcase-let ((`(,classic ,modern ,grammar) spec))
+      (when (and (fboundp modern) (et/tree-sitter-ready-p grammar))
+        (add-to-list 'major-mode-remap-alist (cons classic modern)))))
+  (when (and (fboundp 'tsx-ts-mode)
+             (et/tree-sitter-ready-p 'tsx)
+             (et/tree-sitter-ready-p 'typescript))
+    (add-to-list 'auto-mode-alist '("\\.tsx\\'" . tsx-ts-mode))))
+
+(defun et/treesit-status ()
+  "Report which configured tree-sitter grammars are available."
+  (interactive)
+  (let ((missing (seq-remove #'et/tree-sitter-ready-p et/treesit-grammars)))
+    (message "Tree-sitter ready: %s%s"
+             (mapconcat #'symbol-name
+                        (seq-remove (lambda (grammar) (member grammar missing))
+                                    et/treesit-grammars)
+                        ", ")
+             (if missing
+                 (format "; missing: %s"
+                         (mapconcat #'symbol-name missing ", "))
+               "; all configured grammars are ready"))))
+
+(defun et/treesit-install-grammars ()
+  "Install missing grammars into the local state directory."
+  (interactive)
+  (unless (treesit-available-p)
+    (user-error "This Emacs was built without tree-sitter support"))
+  (make-directory et/treesit-install-directory t)
+  (dolist (grammar et/treesit-grammars)
+    (unless (et/tree-sitter-ready-p grammar)
+      (condition-case err
+          (progn
+            (message "Installing tree-sitter grammar: %s" grammar)
+            (treesit-install-language-grammar
+             grammar et/treesit-install-directory))
+        (error
+         (display-warning 'etmacs
+                          (format "Could not install %s: %s"
+                                  grammar (error-message-string err)))))))
+  (et/treesit-refresh-remaps)
+  (message "Tree-sitter installation finished; reopen buffers to use new modes"))
+
+(define-key et/treesit-map (kbd "i") #'et/treesit-install-grammars)
+(define-key et/treesit-map (kbd "s") #'et/treesit-status)
+(et/treesit-refresh-remaps)
 
 (use-package typescript-mode
   :if (locate-library "typescript-mode")
@@ -2515,7 +3131,8 @@ provided by Eglot/Flymake.
                    ("C" . projectile-test-project) ("t" . et/dev-test-project)
                    ("T" . et/dev-test-file) ("u" . et/dev-test-point)
                    ("v" . et/python-environment)
-                   ("V" . et/compose-validate)))
+                   ("V" . et/compose-validate)
+                   ("I" . et/treesit-install-grammars)))
   (define-key et/dev-map (kbd (car binding)) (cdr binding)))
 (provide 'et-dev)
 ;;; et-dev.el ends here
