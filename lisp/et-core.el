@@ -57,6 +57,11 @@
       (dired et/notes-directory)
     (user-error "Notes directory does not exist: %s" et/notes-directory)))
 
+(defun et/open-scratch ()
+  "Open the scratch buffer."
+  (interactive)
+  (scratch-buffer))
+
 (define-key et/leader-map (kbd "SPC") #'execute-extended-command)
 (define-key et/leader-map (kbd "u") #'universal-argument)
 (define-key et/leader-map (kbd ".") #'find-file)
@@ -116,7 +121,8 @@
 
 (define-key et/leader-map (kbd "q") #'save-buffers-kill-emacs)
 (define-key et/leader-map (kbd "R") #'et/reload-config)
-(define-key et/leader-map (kbd "x") #'et/capture)
+(define-key et/leader-map (kbd "x") #'et/open-scratch)
+(define-key et/leader-map (kbd "X") #'et/capture)
 
 (use-package evil
   :if (locate-library "evil")

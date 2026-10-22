@@ -68,7 +68,7 @@ Custom functions *and variables* use =et/=. File and feature names retain =et-=
 | SPC w u / SPC w r           | Winner layout undo / redo                 |
 | SPC s / SPC /               | Buffer search / project-directory ripgrep |
 | SPC t t                     | Theme picker with live preview            |
-| SPC x                       | General Org capture menu                  |
+| SPC x / SPC X               | Open scratch / general Org capture menu   |
 | SPC M m / u / c / s         | mu4e open / update / compose / search     |
 | SPC N o / u / s             | Elfeed open / update / choose news topics |
 | SPC T i / s                 | Install / report tree-sitter grammars     |

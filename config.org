@@ -194,6 +194,11 @@ to supply their own bindings without changing every other mode.
       (dired et/notes-directory)
     (user-error "Notes directory does not exist: %s" et/notes-directory)))
 
+(defun et/open-scratch ()
+  "Open the scratch buffer."
+  (interactive)
+  (scratch-buffer))
+
 (define-key et/leader-map (kbd "SPC") #'execute-extended-command)
 (define-key et/leader-map (kbd "u") #'universal-argument)
 (define-key et/leader-map (kbd ".") #'find-file)
@@ -253,7 +258,8 @@ to supply their own bindings without changing every other mode.
 
 (define-key et/leader-map (kbd "q") #'save-buffers-kill-emacs)
 (define-key et/leader-map (kbd "R") #'et/reload-config)
-(define-key et/leader-map (kbd "x") #'et/capture)
+(define-key et/leader-map (kbd "x") #'et/open-scratch)
+(define-key et/leader-map (kbd "X") #'et/capture)
 
 (use-package evil
   :if (locate-library "evil")
@@ -1686,7 +1692,7 @@ Domain defaults are workspace-local when Perspective is active and can be set
 with =SPC n D=. A domain-specific note overrides the workspace default. General
 notes are shared organizationally, not by a privacy/security boundary.
 
-Capture keys: =SPC x= opens the general menu; =pi= personal inbox, =pt= personal
+Capture keys: =SPC X= opens the general menu; =pi= personal inbox, =pt= personal
 TODO, =ph= daily personal habit, =wi= work inbox, =wt= work TODO, =j= project
 task. Only the habit template
 introduces a schedule/repeater; normal TODOs have no invented dates/deadlines.
