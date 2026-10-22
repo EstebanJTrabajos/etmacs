@@ -185,3 +185,25 @@
                   ("d" . et/news-narrow-date) ("m" . et/news-mark-read)
                   ("M" . et/news-mark-unread) ("r" . et/news-create-roam-node)))
     (should (eq (lookup-key et/news-map (kbd (car spec))) (cdr spec)))))
+
+(ert-deftest et/news-dashboard-collapse-is-per-feed ()
+  (et/with-test-vault
+    (et/with-fake-news
+      (let ((projectile-known-projects nil)
+            (recentf-list nil)
+            (org-agenda-files nil)
+            (et/org-domain "personal")
+            (et/dashboard-news-collapsed nil))
+        (et/dashboard)
+        (with-current-buffer et/dashboard-buffer-name
+          (should (string-match-p "SciAm story 6" (buffer-string)))
+          (should (string-match-p "NYT story 6" (buffer-string)))
+          (goto-char (point-min))
+          (search-forward "Scientific American")
+          (et/dashboard-toggle-news-feed)
+          (should-not (string-match-p "SciAm story 6" (buffer-string)))
+          (should (string-match-p "NYT story 6" (buffer-string)))
+          (goto-char (point-min))
+          (search-forward "Scientific American")
+          (et/dashboard-toggle-news-feed)
+          (should (string-match-p "SciAm story 6" (buffer-string))))))))

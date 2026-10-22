@@ -127,7 +127,7 @@
             (funcall (button-get button 'action) button))
           (should agenda))))))
 
-(ert-deftest et/dashboard-news-collapses-and-expands-with-tab ()
+(ert-deftest et/dashboard-news-tab-collapses-one-feed ()
   (et/with-test-vault
     (let ((projectile-known-projects nil)
           (recentf-list nil)
@@ -135,14 +135,24 @@
           (elfeed-db t)
           (elfeed-db-entries (make-hash-table :test #'equal))
           (et/org-domain "personal")
-          (et/dashboard-news-expanded t))
+          (et/dashboard-news-collapsed nil))
       (et/dashboard)
       (with-current-buffer et/dashboard-buffer-name
-        (should (string-match-p "Hide articles" (buffer-string)))
-        (et/dashboard-toggle-news)
-        (should (string-match-p "Show articles" (buffer-string)))
-        (should-not (string-match-p "No cached articles" (buffer-string)))
-        (et/dashboard-toggle-news)
-        (should (string-match-p "Hide articles" (buffer-string))))
-      (should (eq (lookup-key et/dashboard-mode-map (kbd "TAB"))
-                  'et/dashboard-toggle-news)))))
+        (should (eq (lookup-key et/dashboard-mode-map (kbd "TAB"))
+                    'et/dashboard-toggle-news-feed))
+        (should (= 7 (count-matches "No cached articles"
+                                    (point-min) (point-max))))
+        (goto-char (point-min))
+        (search-forward "Scientific American")
+        (should (eq (et/dashboard-news-site-at-point) 'sciam))
+        (et/dashboard-toggle-news-feed)
+        (should (member 'sciam et/dashboard-news-collapsed))
+        (should (= 6 (count-matches "No cached articles"
+                                    (point-min) (point-max))))
+        (should (string-match-p "New York Times" (buffer-string)))
+        (goto-char (point-min))
+        (search-forward "Scientific American")
+        (et/dashboard-toggle-news-feed)
+        (should-not (member 'sciam et/dashboard-news-collapsed))
+        (should (= 7 (count-matches "No cached articles"
+                                    (point-min) (point-max))))))))

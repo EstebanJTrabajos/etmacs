@@ -102,7 +102,8 @@ session-only; change =et/default-theme= for a persistent default.
 The dashboard opens on startup (=initial-buffer-choice=) and remains available at
 =SPC d=. It shows Projects, Recent files, open Agenda tasks, Daily journal, and
 five cached news articles per site. =g= refreshes, =q= quits, =RET= activates a
-button or link, and =TAB= collapses or expands the article lists. =SPC q= quits Emacs; =SPC R= re-tangles
+button or link, and =TAB= collapses or expands the article list for the feed at
+point. =SPC q= quits Emacs; =SPC R= re-tangles
 =config.org= and restarts Emacs after saving buffers. Set
 =et/dashboard-on-startup= to nil in =.local/settings.el= to start on scratch
 instead.
@@ -136,8 +137,9 @@ ArsTechnica Security, TechNet/Microsoft Security, SecurityWeek, and
 BleepingComputer. All feeds are downloaded; =SPC N s= chooses which topics feed
 the dashboard's five newest articles per site. =SPC N u= updates feeds, =SPC N o=
 opens Elfeed, and each site's dashboard button opens its full Elfeed search.
-=TAB= in the dashboard collapses or expands the article lists. State lives in
-=.local/news.el= and =.local/elfeed/=; startup uses only the cache.
+=TAB= in the dashboard collapses or expands the article list for the feed at
+point. State lives in =.local/news.el= and =.local/elfeed/=; startup uses only
+the cache.
 
 In an Elfeed search buffer, the same leader prefix adds =SPC N /= (keyword
 search), =SPC N f= (narrow to feed), =SPC N d= (date range), =SPC N m= / =SPC N M=
