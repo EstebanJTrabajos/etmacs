@@ -21,7 +21,17 @@
       ("Science" "https://rss.nytimes.com/services/xml/rss/nyt/Science.xml" nyt-science)
       ("Health" "https://rss.nytimes.com/services/xml/rss/nyt/Health.xml" nyt-health)
       ("Sports" "https://rss.nytimes.com/services/xml/rss/nyt/Sports.xml" nyt-sports)
-      ("Arts" "https://rss.nytimes.com/services/xml/rss/nyt/Arts.xml" nyt-arts))))
+      ("Arts" "https://rss.nytimes.com/services/xml/rss/nyt/Arts.xml" nyt-arts)))
+    (decipher "Decipher"
+     (("All" "https://decipher.sc/feed/" decipher-all)))
+    (arstechnica "ArsTechnica Security"
+     (("Security" "https://arstechnica.com/security/feed/" arstechnica-security)))
+    (technet "TechNet / Microsoft Security"
+     (("All" "https://www.microsoft.com/en-us/security/blog/feed/" technet-all)))
+    (securityweek "SecurityWeek"
+     (("All" "https://www.securityweek.com/feed/" securityweek-all)))
+    (bleepingcomputer "BleepingComputer"
+     (("All" "https://www.bleepingcomputer.com/feed/" bleepingcomputer-all))))
   "News sites and their (LABEL URL TAG) feeds.")
 
 (defun et/news-default-selection ()
@@ -129,6 +139,98 @@
   (elfeed-update)
   (message "Updating news feeds..."))
 
+(defun et/news--selected-entries ()
+  "Return the selected Elfeed entries, or signal a clear error."
+  (unless (derived-mode-p 'elfeed-search-mode)
+    (user-error "Open Elfeed with SPC N o and select an article first"))
+  (let ((selected (elfeed-search-selected :ignore-region)))
+    (cond ((listp selected) selected)
+          (selected (list selected))
+          (t (user-error "No article selected")))))
+
+(defun et/news-search (query)
+  "Open Elfeed filtered by QUERY."
+  (interactive (list (read-string "News search: ")))
+  (et/news-open-reader)
+  (elfeed-search-set-filter query)
+  (message "News filter: %s" query))
+
+(defun et/news-narrow-feed (feed)
+  "Open Elfeed narrowed to FEED's URL."
+  (interactive
+   (list (completing-read "Feed: " (mapcar #'car (et/news-elfeed-feeds)) nil t)))
+  (et/news-open-reader)
+  (elfeed-search-set-filter (format "=%s" (regexp-quote feed))))
+
+(defun et/news-narrow-date (start end)
+  "Open Elfeed narrowed to articles between START and END dates."
+  (interactive
+   (list (org-read-date nil nil nil "From date: " nil
+                        (format-time-string
+                         "%Y-%m-%d"
+                         (time-subtract (current-time) (days-to-time 7))))
+         (org-read-date nil nil nil "To date: " nil
+                        (format-time-string "%Y-%m-%d"))))
+  (et/news-open-reader)
+  (elfeed-search-set-filter (format "@%s--%s" start end)))
+
+(defun et/news-mark-read ()
+  "Remove the unread tag from selected Elfeed entries."
+  (interactive)
+  (let ((entries (et/news--selected-entries)))
+    (dolist (entry entries) (elfeed-untag entry 'unread))
+    (elfeed-search-update :force)
+    (message "Marked %d article(s) read" (length entries))))
+
+(defun et/news-mark-unread ()
+  "Add the unread tag to selected Elfeed entries."
+  (interactive)
+  (let ((entries (et/news--selected-entries)))
+    (dolist (entry entries) (elfeed-tag entry 'unread))
+    (elfeed-search-update :force)
+    (message "Marked %d article(s) unread" (length entries))))
+
+(defvar et/news-roam-ai-hook nil
+  "Hook run with the new news buffer for AI summaries and keywords.")
+
+(defun et/news-create-roam-node ()
+  "Create an Org-roam reference node from the selected article.
+The body includes an AI-summary placeholder; `et/news-roam-ai-hook' is
+run with the new buffer so a later AI pass can fill it and add tags."
+  (interactive)
+  (require 'org-roam)
+  (let* ((entry (car (et/news--selected-entries)))
+         (title (or (elfeed-entry-title entry) "Untitled article"))
+         (link (or (elfeed-entry-link entry) ""))
+         (feed (or (elfeed-feed-title (elfeed-entry-feed entry)) "News"))
+         (date (format-time-string
+                "%Y-%m-%d"
+                (seconds-to-time (or (elfeed-entry-date entry) (float-time)))))
+         (domain (et/current-domain))
+         (slug (org-roam-node-slugify title))
+         (file (expand-file-name
+                (concat domain "/references/"
+                        (format-time-string "%Y%m%d%H%M%S") "-" slug ".org")
+                et/roam-directory)))
+    (make-directory (file-name-directory file) t)
+    (with-current-buffer (find-file-noselect file)
+      (insert (format "#+title: %s\n#+filetags: :news:reference:\n"
+                      title))
+      (insert ":PROPERTIES:\n")
+      (insert (format ":ID: %s\n" (org-id-new)))
+      (insert (format ":ROAM_REFS: %s\n" link))
+      (insert ":END:\n\n")
+      (insert "* Summary\nAI summary placeholder; run the AI workflow in a later iteration.\n\n")
+      (insert "* Article\n")
+      (insert (format "- Feed: %s\n- Date: %s\n- Link: %s\n" feed date link))
+      (org-mode)
+      (save-buffer)
+      (run-hook-with-args 'et/news-roam-ai-hook (current-buffer))
+      (when (fboundp 'org-roam-db-update-file)
+        (org-roam-db-update-file file)))
+    (find-file file)
+    (message "Created news note: %s" title)))
+
 (defun et/news-select-feeds ()
   "Choose which site topics appear on the dashboard and update feeds."
   (interactive)
@@ -172,7 +274,11 @@
   :commands (elfeed elfeed-update)
   :init
   (setq elfeed-db-directory (expand-file-name "elfeed/" et/state-directory)
-        elfeed-search-filter "+unread")
+        elfeed-search-filter "+unread"
+        ;; Some publishers reject non-browser user agents; the feeds remain
+        ;; ordinary public RSS, not authenticated content.
+        elfeed-user-agent
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36")
   :config
   (setq elfeed-feeds (et/news-elfeed-feeds))
   (add-hook 'elfeed-db-update-hook #'et/news--schedule-refresh))
@@ -180,6 +286,12 @@
 (define-key et/news-map (kbd "o") #'et/news-open-reader)
 (define-key et/news-map (kbd "u") #'et/news-update)
 (define-key et/news-map (kbd "s") #'et/news-select-feeds)
+(define-key et/news-map (kbd "/") #'et/news-search)
+(define-key et/news-map (kbd "f") #'et/news-narrow-feed)
+(define-key et/news-map (kbd "d") #'et/news-narrow-date)
+(define-key et/news-map (kbd "m") #'et/news-mark-read)
+(define-key et/news-map (kbd "M") #'et/news-mark-unread)
+(define-key et/news-map (kbd "r") #'et/news-create-roam-node)
 (et/news-load-selection)
 (provide 'et-news)
 ;;; et-news.el ends here

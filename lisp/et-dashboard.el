@@ -12,6 +12,8 @@
 (defvar et/dashboard-buffer-name "*etmacs-dashboard*")
 (defvar et/dashboard-on-startup t
   "Whether Emacs starts on the dashboard; set nil in settings.el to disable.")
+(defvar et/dashboard-news-expanded t
+  "Whether the dashboard news article list is expanded.")
 (defvar et/dashboard-recent-limit 8)
 (defvar et/dashboard-project-limit 8)
 (defvar et/dashboard-agenda-limit 8)
@@ -25,6 +27,8 @@
     (define-key map (kbd "p") #'et/dashboard-switch-project)
     (define-key map (kbd "c") #'et/capture)
     (define-key map (kbd "n") #'et/dashboard-news)
+    (define-key map (kbd "TAB") #'et/dashboard-toggle-news)
+    (define-key map (kbd "<tab>") #'et/dashboard-toggle-news)
     (define-key map (kbd "u") #'et/news-update)
     (define-key map (kbd "N") #'et/news-open-reader)
     (define-key map (kbd "RET") #'et/follow-link-at-point)
@@ -161,47 +165,59 @@
             (insert "\n"))
         (insert "  Nothing scheduled for today.\n"))
       (insert "  ")
-      (et/dashboard-insert-button "Open agenda" #'et/dashboard-agenda)
+      (et/dashboard-insert-button
+       "Open agenda" (lambda (_button) (et/dashboard-agenda)))
       (insert "\n"))
     (insert "\n")
     (et/dashboard-insert-section "Daily journal")
     (insert "  ")
-    (et/dashboard-insert-button "Open today's journal" #'et/dashboard-daily)
+    (et/dashboard-insert-button
+     "Open today's journal" (lambda (_button) (et/dashboard-daily)))
     (insert "  " (abbreviate-file-name (et/dashboard-daily-file)) "\n")
     (insert "\n")
     (et/dashboard-insert-section "News")
+    (insert "  ")
+    (et/dashboard-insert-button
+     (if et/dashboard-news-expanded
+         "Hide articles [TAB]"
+       "Show articles [TAB]")
+     #'et/dashboard-toggle-news)
+    (insert "\n")
     (if (not (and (locate-library "elfeed")
                   (fboundp 'et/news-entries)
                   (boundp 'et/news-sites)))
         (insert "  Install elfeed with SPC h p to enable news feeds.\n")
-      (dolist (site et/news-sites)
-        (let ((entries (condition-case nil
-                           (et/news-entries (car site))
-                         (error nil))))
-          (insert (propertize (format "%s\n" (nth 1 site)) 'face 'bold))
-          (if entries
-              (dolist (entry entries)
-                (insert "  ")
-                (et/dashboard-insert-button
-                 (truncate-string-to-width
-                  (or (elfeed-entry-title entry) "(untitled)") 84 nil nil "…")
-                 (lambda (_button) (et/news-open-article entry))
-                 (or (elfeed-entry-link entry) "No link"))
-                (insert "\n"))
-            (insert "  No cached articles.\n"))
-          (insert "  ")
-          (et/dashboard-insert-button
-           "Open full feed"
-           (lambda (_button) (et/news-open-site (car site))))
-          (insert "  ")
-          (et/dashboard-insert-button "Choose feeds" #'et/news-select-feeds)
-          (insert "\n")))
-      (insert "  ")
-      (et/dashboard-insert-button "Update feeds" #'et/news-update)
-      (insert "\n"))
+      (when et/dashboard-news-expanded
+        (dolist (site et/news-sites)
+          (let ((entries (condition-case nil
+                             (et/news-entries (car site))
+                           (error nil))))
+            (insert (propertize (format "%s\n" (nth 1 site)) 'face 'bold))
+            (if entries
+                (dolist (entry entries)
+                  (insert "  ")
+                  (et/dashboard-insert-button
+                   (truncate-string-to-width
+                    (or (elfeed-entry-title entry) "(untitled)") 84 nil nil "…")
+                   (lambda (_button) (et/news-open-article entry))
+                   (or (elfeed-entry-link entry) "No link"))
+                  (insert "\n"))
+              (insert "  No cached articles.\n"))
+            (insert "  ")
+            (et/dashboard-insert-button
+             "Open full feed"
+             (lambda (_button) (et/news-open-site (car site))))
+            (insert "  ")
+            (et/dashboard-insert-button
+             "Choose feeds" (lambda (_button) (et/news-select-feeds)))
+            (insert "\n")))
+        (insert "  ")
+        (et/dashboard-insert-button
+         "Update feeds" (lambda (_button) (et/news-update)))
+        (insert "\n")))
     (insert "\n")
     (insert (propertize
-             "g refresh · q quit · TAB/RET open · d journal · a agenda\n"
+             "g refresh · q quit · TAB news · RET open · d journal · a agenda\n"
              'face 'shadow))))
 
 (defun et/dashboard-refresh ()
@@ -248,6 +264,14 @@
   (if (fboundp 'et/news-select-feeds)
       (et/news-select-feeds)
     (user-error "Install elfeed with et/install-packages and restart")))
+
+(defun et/dashboard-toggle-news (&optional _button)
+  "Expand or collapse the dashboard news article lists."
+  (interactive)
+  (unless (derived-mode-p 'et/dashboard-mode)
+    (user-error "Not in the Etmacs dashboard"))
+  (setq et/dashboard-news-expanded (not et/dashboard-news-expanded))
+  (et/dashboard-refresh))
 
 (define-key et/leader-map (kbd "d") #'et/dashboard)
 (provide 'et-dashboard)

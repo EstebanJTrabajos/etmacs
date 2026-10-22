@@ -119,3 +119,69 @@
                (lambda () (setq updated t))))
       (et/news-update))
     (should updated)))
+
+(ert-deftest et/news-cyber-feed-catalog ()
+  (let ((feeds (mapcar #'car (et/news-elfeed-feeds))))
+    (dolist (needle '("decipher.sc" "arstechnica.com/security"
+                      "microsoft.com/en-us/security/blog"
+                      "securityweek.com" "bleepingcomputer.com"))
+      (should (seq-some (lambda (feed) (string-match-p needle feed)) feeds)))))
+
+(ert-deftest et/news-search-and-narrow-commands ()
+  (let (filter)
+    (cl-letf (((symbol-function 'et/news-open-reader) #'ignore)
+              ((symbol-function 'elfeed-search-set-filter)
+               (lambda (value) (setq filter value))))
+      (et/news-search "ransomware")
+      (should (equal filter "ransomware"))
+      (et/news-narrow-feed "https://example.test/feed")
+      (should (equal filter (format "=%s" (regexp-quote "https://example.test/feed"))))
+      (et/news-narrow-date "2026-10-01" "2026-10-22")
+      (should (equal filter "@2026-10-01--2026-10-22")))))
+
+(ert-deftest et/news-mark-read-and-unread-selected-entries ()
+  (let ((entries (list (elfeed-entry--create :id "one")
+                       (elfeed-entry--create :id "two")))
+        read unread)
+    (cl-letf (((symbol-function 'et/news--selected-entries)
+               (lambda () entries))
+              ((symbol-function 'elfeed-untag)
+               (lambda (entry tag) (push (cons entry tag) read)))
+              ((symbol-function 'elfeed-tag)
+               (lambda (entry tag) (push (cons entry tag) unread)))
+              ((symbol-function 'elfeed-search-update) #'ignore))
+      (et/news-mark-read)
+      (et/news-mark-unread))
+    (should (= (length read) 2))
+    (should (= (length unread) 2))))
+
+(ert-deftest et/news-create-roam-node-from-article ()
+  (skip-unless (and (locate-library "org-roam") (sqlite-available-p)))
+  (et/with-test-vault
+    (let* ((entry (elfeed-entry--create
+                   :id "roam-news" :title "Important Security Story"
+                   :link "https://example.test/story" :date (float-time)
+                   :feed-id "sciam-feed"))
+           (elfeed-db-feeds (make-hash-table :test #'equal)))
+      (puthash "sciam-feed"
+               (elfeed-feed--create :id "sciam-feed"
+                                    :url "https://example.test/feed"
+                                    :title "Test Feed")
+               elfeed-db-feeds)
+      (cl-letf (((symbol-function 'et/news--selected-entries)
+                 (lambda () (list entry))))
+        (et/news-create-roam-node))
+      (let ((file (seq-find (lambda (path)
+                              (string-match-p "important.security.story" path))
+                            (directory-files-recursively et/roam-directory "\\.org\\'"))))
+        (should file)
+        (let ((text (et/test-file-text file)))
+          (should (string-match-p "Important Security Story" text))
+          (should (string-match-p "AI summary placeholder" text))
+          (should (string-match-p "https://example.test/story" text)))))))
+
+(ert-deftest et/news-command-bindings ()
+  (dolist (spec '(("/" . et/news-search) ("f" . et/news-narrow-feed)
+                  ("d" . et/news-narrow-date) ("m" . et/news-mark-read)
+                  ("M" . et/news-mark-unread) ("r" . et/news-create-roam-node)))
+    (should (eq (lookup-key et/news-map (kbd (car spec))) (cdr spec)))))
