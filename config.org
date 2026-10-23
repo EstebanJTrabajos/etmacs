@@ -695,6 +695,7 @@ feed actions remain available. =SPC d= opens the dashboard; set
 (declare-function et/org-agenda "et-org" (scope))
 (declare-function et/org-open-tasks "et-org" (&optional files))
 (declare-function et/org-refresh-agenda "et-org" (&optional scope))
+(declare-function et/org-state-face "et-org" (state))
 (declare-function et/org-task-due-label "et-org" (task))
 (declare-function et/org-task-sort-predicate "et-org" (a b))
 
@@ -858,8 +859,9 @@ is sorted by importance and date, then limited to
             (dolist (task tasks)
               (let ((task task))
                 (insert "    ")
-                (insert (propertize (format "%-4s " (plist-get task :state))
-                                    'face 'org-todo))
+                (let ((state (plist-get task :state)))
+                  (insert (propertize (format "%-12s " state)
+                                      'face (et/org-state-face state))))
                 (et/dashboard-insert-button
                  (plist-get task :heading)
                  (lambda (_button)
@@ -1979,6 +1981,10 @@ The initial daily habit schedule is editable before finalizing.
     ("IDEA" . et/org-todo-blue-alt)
     ("SHOWSTOPPER" . et/org-todo-showstopper))
   "Per-state TODO faces for Org and org-modern.")
+
+(defun et/org-state-face (state)
+  "Return the display face for TODO STATE."
+  (or (cdr (assoc state et/org-todo-faces)) 'org-todo))
 
 (defvar et/org-open-task-states
   '("TODO" "NEXT" "WAIT" "IN-PROGRESS" "VALIDATION" "HOLD" "BLOCKED"

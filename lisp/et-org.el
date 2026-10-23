@@ -96,6 +96,10 @@
     ("SHOWSTOPPER" . et/org-todo-showstopper))
   "Per-state TODO faces for Org and org-modern.")
 
+(defun et/org-state-face (state)
+  "Return the display face for TODO STATE."
+  (or (cdr (assoc state et/org-todo-faces)) 'org-todo))
+
 (defvar et/org-open-task-states
   '("TODO" "NEXT" "WAIT" "IN-PROGRESS" "VALIDATION" "HOLD" "BLOCKED"
     "IDEA" "SHOWSTOPPER")

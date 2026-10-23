@@ -110,6 +110,35 @@
         (should (member "Reviewing" headings))
         (should (= 5 (length headings)))))))
 
+(ert-deftest et/dashboard-uses-per-state-todo-faces ()
+  (et/with-test-vault
+    (let* ((file (expand-file-name "personal/tasks.org" et/notes-directory))
+           (org-agenda-files (list file))
+           (projectile-known-projects nil)
+           (recentf-list nil)
+           (elfeed-db t)
+           (elfeed-db-entries (make-hash-table :test #'equal))
+           (et/org-domain "personal"))
+      (make-directory (file-name-directory file) t)
+      (with-temp-file file
+        (insert "* SHOWSTOPPER Critical\n")
+        (insert "* IN-PROGRESS Working\n")
+        (insert "* NEXT Next task\n"))
+      (et/dashboard)
+      (with-current-buffer et/dashboard-buffer-name
+        (goto-char (point-min))
+        (search-forward "SHOWSTOPPER")
+        (should (eq (get-text-property (match-beginning 0) 'face)
+                    'et/org-todo-showstopper))
+        (goto-char (point-min))
+        (search-forward "IN-PROGRESS")
+        (should (eq (get-text-property (match-beginning 0) 'face)
+                    'et/org-todo-green))
+        (goto-char (point-min))
+        (search-forward "NEXT")
+        (should (eq (get-text-property (match-beginning 0) 'face)
+                    'et/org-todo-yellow))))))
+
 (ert-deftest et/dashboard-renders-personal-and-work-groups ()
   (et/with-test-vault
     (let* ((personal (expand-file-name "roam/personal/daily/2026-10-23.org"
