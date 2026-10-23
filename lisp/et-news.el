@@ -31,7 +31,19 @@
     (securityweek "SecurityWeek"
      (("All" "https://www.securityweek.com/feed/" securityweek-all)))
     (bleepingcomputer "BleepingComputer"
-     (("All" "https://www.bleepingcomputer.com/feed/" bleepingcomputer-all))))
+     (("All" "https://www.bleepingcomputer.com/feed/" bleepingcomputer-all)))
+    (emacs "Emacs"
+     (("r/emacs" "https://www.reddit.com/r/emacs/.rss" emacs-reddit)
+      ("Planet Emacslife" "https://planet.emacslife.com/atom.xml"
+       planet-emacslife)
+      ("Emacs News" "https://sachachua.com/blog/category/emacs-news/feed"
+       emacs-news)
+      ("Mastering Emacs" "https://www.masteringemacs.org/feed"
+       mastering-emacs)
+      ("System Crafters" "https://systemcrafters.net/rss/"
+       system-crafters)
+      ("Emacs Stack Exchange" "https://emacs.stackexchange.com/feeds"
+       emacs-stackexchange))))
   "News sites and their (LABEL URL TAG) feeds.")
 
 (defun et/news-default-selection ()

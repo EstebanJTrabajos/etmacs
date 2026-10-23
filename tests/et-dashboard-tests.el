@@ -240,19 +240,19 @@
       (with-current-buffer et/dashboard-buffer-name
         (should (eq (lookup-key et/dashboard-mode-map (kbd "TAB"))
                     'et/dashboard-toggle-news-feed))
-        (should (= 7 (count-matches "No cached articles"
+        (should (= 8 (count-matches "No cached articles"
                                     (point-min) (point-max))))
         (goto-char (point-min))
         (search-forward "Scientific American")
         (should (eq (et/dashboard-news-site-at-point) 'sciam))
         (et/dashboard-toggle-news-feed)
         (should (member 'sciam et/dashboard-news-collapsed))
-        (should (= 6 (count-matches "No cached articles"
+        (should (= 7 (count-matches "No cached articles"
                                     (point-min) (point-max))))
         (should (string-match-p "New York Times" (buffer-string)))
         (goto-char (point-min))
         (search-forward "Scientific American")
         (et/dashboard-toggle-news-feed)
         (should-not (member 'sciam et/dashboard-news-collapsed))
-        (should (= 7 (count-matches "No cached articles"
+        (should (= 8 (count-matches "No cached articles"
                                     (point-min) (point-max))))))))

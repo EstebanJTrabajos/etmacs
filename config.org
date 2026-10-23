@@ -1150,9 +1150,11 @@ is sorted by importance and date, then limited to
 =elfeed= reads RSS. Scientific American has one public syndication feed; the
 New York Times exposes separate topic feeds; Decipher, ArsTechnica Security,
 TechNet/Microsoft Security, SecurityWeek, and BleepingComputer supply the
-cybersecurity feeds. All feeds are downloaded, while =et/news-select-feeds=
-controls which topics contribute to the dashboard's five newest articles per
-site. The dashboard reads only Elfeed's local cache, so startup never fetches the
+cybersecurity feeds. The Emacs site combines r/emacs, Planet Emacslife, Sacha
+Chua's Emacs News, Mastering Emacs, System Crafters, and Emacs Stack Exchange;
+toggle individual sources with =et/news-select-feeds=. All feeds are
+downloaded, while =et/news-select-feeds= controls which topics contribute to the
+dashboard's five newest articles per site. The dashboard reads only Elfeed's local cache, so startup never fetches the
 network; =SPC N u= updates feeds. Each site's "Open full feed" button opens the
 Elfeed search buffer filtered to that site. In an Elfeed search buffer,
 =SPC N /= searches by keyword, =SPC N f= narrows to a feed, =SPC N d= narrows to a
@@ -1194,7 +1196,19 @@ reference note with an AI-summary placeholder (extension hook:
     (securityweek "SecurityWeek"
      (("All" "https://www.securityweek.com/feed/" securityweek-all)))
     (bleepingcomputer "BleepingComputer"
-     (("All" "https://www.bleepingcomputer.com/feed/" bleepingcomputer-all))))
+     (("All" "https://www.bleepingcomputer.com/feed/" bleepingcomputer-all)))
+    (emacs "Emacs"
+     (("r/emacs" "https://www.reddit.com/r/emacs/.rss" emacs-reddit)
+      ("Planet Emacslife" "https://planet.emacslife.com/atom.xml"
+       planet-emacslife)
+      ("Emacs News" "https://sachachua.com/blog/category/emacs-news/feed"
+       emacs-news)
+      ("Mastering Emacs" "https://www.masteringemacs.org/feed"
+       mastering-emacs)
+      ("System Crafters" "https://systemcrafters.net/rss/"
+       system-crafters)
+      ("Emacs Stack Exchange" "https://emacs.stackexchange.com/feeds"
+       emacs-stackexchange))))
   "News sites and their (LABEL URL TAG) feeds.")
 
 (defun et/news-default-selection ()

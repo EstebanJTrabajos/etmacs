@@ -156,8 +156,10 @@ templates on startup. They contain data only, never credentials.
 Elfeed reads Scientific American, the New York Times
 Home/World/U.S./Business/Technology/Science/Health/Sports/Arts feeds, Decipher,
 ArsTechnica Security, TechNet/Microsoft Security, SecurityWeek, and
-BleepingComputer. All feeds are downloaded; =SPC N s= chooses which topics feed
-the dashboard's five newest articles per site. =SPC N u= updates feeds, =SPC N o=
+BleepingComputer. A combined Emacs site reads r/emacs, Planet Emacslife, Sacha
+Chua's Emacs News, Mastering Emacs, System Crafters, and Emacs Stack Exchange.
+All feeds are downloaded; =SPC N s= chooses which topics feed the dashboard's
+five newest articles per site. =SPC N u= updates feeds, =SPC N o=
 opens Elfeed, and each site's dashboard button opens its full Elfeed search.
 =TAB= in the dashboard collapses or expands the article list for the feed at
 point. State lives in =.local/news.el= and =.local/elfeed/=; startup uses only

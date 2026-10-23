@@ -104,6 +104,20 @@
         (et/news-open-site 'sciam))
       (should (equal filter "+sciam")))))
 
+(ert-deftest et/news-emacs-site-includes-requested-feeds ()
+  (let ((feeds (et/news-elfeed-feeds)))
+    (dolist (url '("https://www.reddit.com/r/emacs/.rss"
+                   "https://planet.emacslife.com/atom.xml"
+                   "https://sachachua.com/blog/category/emacs-news/feed"
+                   "https://www.masteringemacs.org/feed"
+                   "https://systemcrafters.net/rss/"
+                   "https://emacs.stackexchange.com/feeds"))
+      (should (member url (mapcar #'car feeds))))
+    (should (equal '("r/emacs" "Planet Emacslife" "Emacs News"
+                     "Mastering Emacs" "System Crafters"
+                     "Emacs Stack Exchange")
+                   (mapcar #'car (nth 2 (assq 'emacs et/news-sites)))))))
+
 (ert-deftest et/news-bindings ()
   (should (eq (lookup-key et/leader-map (kbd "N")) et/news-map))
   (should (eq (lookup-key et/news-map (kbd "o")) 'et/news-open-reader))
