@@ -57,6 +57,11 @@
       (dired et/notes-directory)
     (user-error "Notes directory does not exist: %s" et/notes-directory)))
 
+(defun et/open-scratch ()
+  "Open the scratch buffer."
+  (interactive)
+  (scratch-buffer))
+
 (define-key et/leader-map (kbd "SPC") #'execute-extended-command)
 (define-key et/leader-map (kbd "u") #'universal-argument)
 (define-key et/leader-map (kbd ".") #'find-file)
@@ -98,6 +103,27 @@
 (define-key et/help-map (kbd "p") #'et/install-packages)
 (global-set-key (kbd "C-c SPC") et/leader-map)
 
+(defun et/reload-config ()
+  "Re-tangle config.org, then restart Emacs."
+  (interactive)
+  (when (save-some-buffers t)
+    (et/tangle-config)
+    (let ((program (expand-file-name invocation-name invocation-directory))
+          (default-directory et/config-directory))
+      (condition-case err
+          (progn
+            (start-process "etmacs-restart" nil program
+                           "--init-directory" et/config-directory)
+            (kill-emacs))
+        (error
+         (user-error "Tangle complete, but restart failed: %s; restart Emacs manually"
+                     (error-message-string err)))))))
+
+(define-key et/leader-map (kbd "q") #'save-buffers-kill-emacs)
+(define-key et/leader-map (kbd "R") #'et/reload-config)
+(define-key et/leader-map (kbd "x") #'et/open-scratch)
+(define-key et/leader-map (kbd "X") #'et/capture)
+
 (use-package evil
   :if (locate-library "evil")
   :demand t
@@ -115,6 +141,12 @@
   :demand t
   :config
   (evil-collection-init))
+
+(use-package evil-easymotion
+  :commands evilem-create evilem-default-keybindings)
+
+(use-package doom-themes
+  :hook (doom-load-theme . doom-themes-org-config))
 
 (use-package vertico
   :if (locate-library "vertico")
@@ -163,6 +195,29 @@
 (when (memq et/default-theme (custom-available-themes))
   (mapc #'disable-theme custom-enabled-themes)
   (load-theme et/default-theme t))
+
+;; C-j/C-k navigate completion menus and transient menus.  They are not bound
+;; globally, so ordinary editing keeps its normal C-j/C-k behavior.
+(with-eval-after-load 'vertico
+  (define-key vertico-map (kbd "C-j") #'vertico-next)
+  (define-key vertico-map (kbd "C-k") #'vertico-previous))
+
+(with-eval-after-load 'corfu
+  (define-key corfu-map (kbd "C-j") #'corfu-next)
+  (define-key corfu-map (kbd "C-k") #'corfu-previous))
+
+(with-eval-after-load 'transient
+  (define-key transient-popup-navigation-map (kbd "C-j")
+              #'transient-forward-button)
+  (define-key transient-popup-navigation-map (kbd "C-k")
+              #'transient-backward-button))
+
+(dolist (map '(minibuffer-local-completion-map
+               minibuffer-local-must-match-map))
+  (define-key (symbol-value map) (kbd "C-j")
+              #'next-line-or-history-element)
+  (define-key (symbol-value map) (kbd "C-k")
+              #'previous-line-or-history-element))
 
 (provide 'et-core)
 ;;; et-core.el ends here

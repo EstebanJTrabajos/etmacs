@@ -118,6 +118,174 @@
     (et/org-refresh-agenda "all")
     (should (= (length org-agenda-files) 5))))
 
+(ert-deftest et/org-agenda-includes-daily-notes ()
+  (et/with-test-vault
+    (let ((daily (expand-file-name "roam/personal/daily/2026-10-23.org"
+                                   et/notes-directory)))
+      (make-directory (file-name-directory daily) t)
+      (with-temp-file daily (insert "* TODO From daily\n"))
+      (et/org-refresh-agenda "personal")
+      (should (member daily org-agenda-files)))))
+
+(ert-deftest et/org-agenda-ignores-lock-and-autosave-files ()
+  (et/with-test-vault
+    (let* ((daily-dir (expand-file-name "roam/personal/daily/" et/notes-directory))
+           (daily (expand-file-name "2026-10-23.org" daily-dir))
+           (lock (expand-file-name ".#2026-10-23.org" daily-dir))
+           (auto (expand-file-name "#2026-10-23.org#" daily-dir)))
+      (make-directory daily-dir t)
+      (with-temp-file daily (insert "* TODO Real\n"))
+      (make-symbolic-link "user@host.1234:0" lock)
+      (with-temp-file auto (insert "* TODO Autosave\n"))
+      (et/org-refresh-agenda "personal")
+      (should (member daily org-agenda-files))
+      (should-not (member lock org-agenda-files))
+      (should-not (member auto org-agenda-files)))))
+
+(ert-deftest et/org-open-tasks-reads-priority-and-dates ()
+  (et/with-test-vault
+    (let* ((file (expand-file-name "personal/tasks.org" et/notes-directory))
+           (org-agenda-files (list file)))
+      (make-directory (file-name-directory file) t)
+      (with-temp-file file
+        (insert "* TODO [#A] Important\nDEADLINE: <2026-10-24 Sat>\n")
+        (insert "* TODO Plain\n"))
+      (let ((tasks (et/org-open-tasks)))
+        (should (= 2 (length tasks)))
+        (should (equal "A"
+                       (plist-get (seq-find (lambda (task)
+                                              (string= (plist-get task :heading)
+                                                       "Important"))
+                                            tasks)
+                                  :priority)))
+        (should-not (plist-get (seq-find (lambda (task)
+                                           (string= (plist-get task :heading)
+                                                    "Plain"))
+                                         tasks)
+                               :priority))))))
+
+(ert-deftest et/org-agenda-defaults-to-two-weeks ()
+  (let* ((command (assoc "d" org-agenda-custom-commands))
+         (blocks (nth 2 command))
+         (block (assoc 'alltodo blocks))
+         (settings (nth 2 block)))
+    (should command)
+    (should (equal "Daily dashboard" (nth 1 command)))
+    (should (eq 'et/org-agenda-skip-outside-window
+                (eval (cadr (assoc 'org-agenda-skip-function settings)) t)))
+    (should (equal "Tasks due within two weeks"
+                   (cadr (assoc 'org-agenda-overriding-header settings))))
+    (should (equal '(priority-down deadline-up scheduled-up)
+                   (eval (cadr (assoc 'org-agenda-sorting-strategy settings))
+                         t)))))
+
+(ert-deftest et/org-agenda-two-week-skip-window-and-undated-next ()
+  (with-temp-buffer
+    (org-mode)
+    (insert "* TODO Dated\nDEADLINE: "
+            (format-time-string "<%Y-%m-%d %a>" (time-add (current-time) 86400))
+            "\n")
+    (insert "* TODO Far future\nDEADLINE: "
+            (format-time-string "<%Y-%m-%d %a>" (time-add (current-time) (* 30 86400)))
+            "\n")
+    (insert "* NEXT Undated next action\n")
+    (insert "* TODO Undated plain\n")
+    (goto-char (point-min))
+    (search-forward "Dated")
+    (org-back-to-heading t)
+    (should-not (et/org-agenda-skip-outside-window))
+    (goto-char (point-min))
+    (search-forward "Far future")
+    (org-back-to-heading t)
+    (should (et/org-agenda-skip-outside-window))
+    (goto-char (point-min))
+    (search-forward "Undated next action")
+    (org-back-to-heading t)
+    (should-not (et/org-agenda-skip-outside-window))
+    (goto-char (point-min))
+    (search-forward "Undated plain")
+    (org-back-to-heading t)
+    (should (et/org-agenda-skip-outside-window))))
+
+(ert-deftest et/org-todo-states-and-faces ()
+  (let ((states (apply #'append (mapcar #'cdr org-todo-keywords))))
+    (dolist (state '("IN-PROGRESS(p)" "VALIDATION(v)" "HOLD(h)" "BLOCKED(b)"
+                     "IDEA(i)" "SHOWSTOPPER(s)"))
+      (should (member state states)))
+    (dolist (state '("IN-PROGRESS" "VALIDATION" "HOLD" "BLOCKED" "IDEA"
+                     "SHOWSTOPPER" "WAIT" "NEXT"))
+      (should (assoc state org-todo-keyword-faces))))
+  (should (eq 'et/org-todo-green
+              (cdr (assoc "IN-PROGRESS" org-todo-keyword-faces))))
+  (should (equal "#1ea01e"
+                 (face-attribute 'et/org-todo-green :foreground)))
+  (should (eq 'et/org-todo-showstopper
+              (cdr (assoc "SHOWSTOPPER" org-todo-keyword-faces))))
+  (should (face-attribute 'et/org-todo-showstopper :underline))
+  (dolist (state '("IN-PROGRESS" "VALIDATION" "HOLD" "BLOCKED" "IDEA"
+                   "SHOWSTOPPER"))
+    (should (member state et/org-open-task-states))))
+
+(ert-deftest et/org-task-importance-includes-new-states ()
+  (should (< (et/org-task-importance '(:state "SHOWSTOPPER"))
+             (et/org-task-importance '(:state "BLOCKED"))))
+  (should (< (et/org-task-importance '(:state "BLOCKED"))
+             (et/org-task-importance '(:state "IN-PROGRESS"))))
+  (should (< (et/org-task-importance '(:state "IN-PROGRESS"))
+             (et/org-task-importance '(:state "NEXT"))))
+  (should (< (et/org-task-importance '(:state "NEXT"))
+             (et/org-task-importance '(:state "TODO"))))
+  (should (< (et/org-task-importance '(:state "TODO"))
+             (et/org-task-importance '(:state "WAIT")))))
+
+(ert-deftest et/org-agenda-keeps-undated-actionable-states ()
+  (with-temp-buffer
+    (org-mode)
+    (dolist (state '("SHOWSTOPPER" "BLOCKED" "IN-PROGRESS" "VALIDATION"
+                     "NEXT" "WAIT" "HOLD" "IDEA" "TODO"))
+      (insert (format "* %s Undated %s\n" state state)))
+    (dolist (state '("SHOWSTOPPER" "BLOCKED" "IN-PROGRESS" "VALIDATION"
+                     "NEXT" "WAIT"))
+      (goto-char (point-min))
+      (search-forward (format "Undated %s" state))
+      (org-back-to-heading t)
+      (should-not (et/org-agenda-skip-outside-window)))
+    (dolist (state '("HOLD" "IDEA" "TODO"))
+      (goto-char (point-min))
+      (search-forward (format "Undated %s" state))
+      (org-back-to-heading t)
+      (should (et/org-agenda-skip-outside-window)))))
+
+(ert-deftest et/org-heading-promote-demote-keys-and-behavior ()
+  (should (eq (lookup-key et/org-map (kbd "<")) 'et/org-promote-heading))
+  (should (eq (lookup-key et/org-map (kbd ">")) 'et/org-demote-heading))
+  (with-temp-buffer
+    (org-mode)
+    (insert "* Parent\n** Child\n")
+    (goto-char (point-min))
+    (search-forward "Child")
+    (org-back-to-heading t)
+    (et/org-promote-heading)
+    (should (looking-at "\\* Child"))
+    (et/org-demote-heading)
+    (should (looking-at "\\*\\* Child")))
+  (when (fboundp 'evil-normal-state)
+    (with-temp-buffer
+      (org-mode)
+      (evil-normal-state)
+      (should (eq (key-binding (kbd "<<")) 'et/org-promote-heading))
+      (should (eq (key-binding (kbd ">>")) 'et/org-demote-heading)))))
+
+(ert-deftest et/org-enhanced-agenda-packages-when-installed ()
+  (when (locate-library "org-super-agenda")
+    (should (bound-and-true-p org-super-agenda-mode))
+    (should org-super-agenda-groups))
+  (when (locate-library "org-modern")
+    (should (equal et/org-todo-faces org-modern-todo-faces))
+    (with-temp-buffer
+      (org-mode)
+      (should (bound-and-true-p org-modern-mode)))))
+
 (ert-deftest et/roam-capture-alias-tag-filter-and-rebuild ()
   (skip-unless (and (locate-library "org-roam") (sqlite-available-p)))
   (et/with-test-vault
@@ -389,3 +557,25 @@
   (should (equal (et/roam-node-hierarchy
                   (org-roam-node-create :level 1 :file "/notes/untitled.org" :title "Heading"))
                  "untitled -> Heading")))
+
+(ert-deftest et/capture-templates-persist-and-merge ()
+  (et/with-test-vault
+    (let* ((state (expand-file-name "capture-templates.el" directory))
+           (et/capture-template-state-file state)
+           (et/custom-capture-templates nil)
+           (org-capture-templates et/default-capture-templates)
+           (file (expand-file-name "personal/inbox.org" et/notes-directory)))
+      (et/capture-template-add "z" "Custom template" 'entry
+                               "file+headline" file "Inbox" "* %?\n")
+      (should (file-exists-p state))
+      (should (= (logand (file-modes state) #o777) #o600))
+      (should (assoc "z" org-capture-templates))
+      (should (assoc "z" et/custom-capture-templates))
+      (setq et/custom-capture-templates nil)
+      (setq org-capture-templates et/default-capture-templates)
+      (et/load-capture-templates)
+      (should (assoc "z" org-capture-templates))
+      (et/capture "z")
+      (insert "Custom entry")
+      (org-capture-finalize)
+      (should (string-match-p "Custom entry" (et/test-file-text file))))))

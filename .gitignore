@@ -5,3 +5,5 @@ doom-conf/
 .#*
 *~
 /projectile-frecency.eld
+/handoff.md
+/session.sh

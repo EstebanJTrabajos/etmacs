@@ -5,6 +5,12 @@
 (require 'compile)
 (require 'python)
 
+;; Prefer IPython for the interactive Python REPL; fall back to plain python.
+(setq python-shell-interpreter
+      (if (executable-find "ipython3") "ipython3" "python3")
+      python-shell-interpreter-args
+      (if (executable-find "ipython3") "--simple-prompt -i" "-i"))
+
 (defvar et/dev-map (make-sparse-keymap "development"))
 (defvar et/dev-modes
   '(python-mode python-ts-mode js-mode js-ts-mode typescript-mode
@@ -33,17 +39,87 @@
 (dolist (mode et/dev-modes)
   (add-hook (intern (concat (symbol-name mode) "-hook")) #'et/dev-mode-defaults))
 
+(require 'treesit)
+
+(defvar et/treesit-grammars
+  '(python javascript typescript tsx java yaml dockerfile bash json)
+  "Grammars offered by the installation command.")
+(defvar et/treesit-install-directory
+  (expand-file-name "tree-sitter/" et/state-directory)
+  "Local directory for compiled tree-sitter grammars.")
+(defvar et/treesit-map (make-sparse-keymap "tree-sitter"))
+(define-key et/leader-map (kbd "T") (cons "tree-sitter" et/treesit-map))
+
+(setq treesit-extra-load-path (list et/treesit-install-directory)
+      treesit-font-lock-level 4
+      treesit-language-source-alist
+      '((python "https://github.com/tree-sitter/tree-sitter-python" "master" "src")
+        (javascript "https://github.com/tree-sitter/tree-sitter-javascript" "master" "src")
+        (typescript "https://github.com/tree-sitter/tree-sitter-typescript" "master" "typescript/src")
+        (tsx "https://github.com/tree-sitter/tree-sitter-typescript" "master" "tsx/src")
+        (java "https://github.com/tree-sitter/tree-sitter-java" "master" "src")
+        (yaml "https://github.com/tree-sitter-grammars/tree-sitter-yaml" "master" "src")
+        (dockerfile "https://github.com/camdencheek/tree-sitter-dockerfile" "main" "src")
+        (bash "https://github.com/tree-sitter/tree-sitter-bash" "master" "src")
+        (json "https://github.com/tree-sitter/tree-sitter-json" "master" "src")))
+
 (defun et/tree-sitter-ready-p (grammar)
   "Whether GRAMMAR is already available; never install or prompt."
   (and (fboundp 'treesit-ready-p) (treesit-ready-p grammar t)))
 
-(dolist (spec '((python-mode python-ts-mode python) (js-mode js-ts-mode javascript)
-                (typescript-mode typescript-ts-mode typescript)
-                (java-mode java-ts-mode java) (yaml-mode yaml-ts-mode yaml)
-                (dockerfile-mode dockerfile-ts-mode dockerfile)))
-  (pcase-let ((`(,classic ,modern ,grammar) spec))
-    (when (and (fboundp modern) (et/tree-sitter-ready-p grammar))
-      (add-to-list 'major-mode-remap-alist (cons classic modern)))))
+(defun et/treesit-refresh-remaps ()
+  "Enable tree-sitter modes whose grammars are currently available."
+  (dolist (spec '((python-mode python-ts-mode python)
+                  (js-mode js-ts-mode javascript)
+                  (typescript-mode typescript-ts-mode typescript)
+                  (java-mode java-ts-mode java)
+                  (yaml-mode yaml-ts-mode yaml)
+                  (dockerfile-mode dockerfile-ts-mode dockerfile)))
+    (pcase-let ((`(,classic ,modern ,grammar) spec))
+      (when (and (fboundp modern) (et/tree-sitter-ready-p grammar))
+        (add-to-list 'major-mode-remap-alist (cons classic modern)))))
+  (when (and (fboundp 'tsx-ts-mode)
+             (et/tree-sitter-ready-p 'tsx)
+             (et/tree-sitter-ready-p 'typescript))
+    (add-to-list 'auto-mode-alist '("\\.tsx\\'" . tsx-ts-mode))))
+
+(defun et/treesit-status ()
+  "Report which configured tree-sitter grammars are available."
+  (interactive)
+  (let ((missing (seq-remove #'et/tree-sitter-ready-p et/treesit-grammars)))
+    (message "Tree-sitter ready: %s%s"
+             (mapconcat #'symbol-name
+                        (seq-remove (lambda (grammar) (member grammar missing))
+                                    et/treesit-grammars)
+                        ", ")
+             (if missing
+                 (format "; missing: %s"
+                         (mapconcat #'symbol-name missing ", "))
+               "; all configured grammars are ready"))))
+
+(defun et/treesit-install-grammars ()
+  "Install missing grammars into the local state directory."
+  (interactive)
+  (unless (treesit-available-p)
+    (user-error "This Emacs was built without tree-sitter support"))
+  (make-directory et/treesit-install-directory t)
+  (dolist (grammar et/treesit-grammars)
+    (unless (et/tree-sitter-ready-p grammar)
+      (condition-case err
+          (progn
+            (message "Installing tree-sitter grammar: %s" grammar)
+            (treesit-install-language-grammar
+             grammar et/treesit-install-directory))
+        (error
+         (display-warning 'etmacs
+                          (format "Could not install %s: %s"
+                                  grammar (error-message-string err)))))))
+  (et/treesit-refresh-remaps)
+  (message "Tree-sitter installation finished; reopen buffers to use new modes"))
+
+(define-key et/treesit-map (kbd "i") #'et/treesit-install-grammars)
+(define-key et/treesit-map (kbd "s") #'et/treesit-status)
+(et/treesit-refresh-remaps)
 
 (use-package typescript-mode
   :if (locate-library "typescript-mode")
@@ -77,9 +153,31 @@
 (add-to-list 'eglot-server-programs
              '((web-mode :language-id "typescriptreact") . ("typescript-language-server" "--stdio")))
 
+;; Prefer basedpyright for Python; fall back to pyright, then pylsp.
+(defun et/python-lsp-contact (&rest _)
+  "Return the first available Python server command, preferring basedpyright."
+  (let ((candidates '(("basedpyright-langserver" "--stdio")
+                      ("pyright-langserver" "--stdio")
+                      ("pylsp"))))
+    (or (catch 'found
+          (dolist (candidate candidates)
+            (when (executable-find (car candidate))
+              (throw 'found candidate))))
+        '("basedpyright-langserver" "--stdio"))))
+(setq eglot-server-programs
+      (cons (cons '(python-mode python-ts-mode) #'et/python-lsp-contact)
+            (assoc-delete-all '(python-mode python-ts-mode) eglot-server-programs)))
+
 (defun et/dev-project-root ()
   "Return the Projectile root or the current directory without prompting."
   (or (when (featurep 'projectile) (projectile-project-root)) default-directory))
+
+(defun et/dev-buffer-env ()
+  "Return (PROCESS-ENVIRONMENT . EXEC-PATH) for the current buffer."
+  (cons (or (buffer-local-value 'process-environment (current-buffer))
+            process-environment)
+        (or (buffer-local-value 'exec-path (current-buffer))
+            exec-path)))
 
 (defun et/dev-node-environment ()
   "Explicitly use trusted local project Node tools for this buffer, if present."
@@ -100,19 +198,26 @@
     (user-error "Configure remote Python environments explicitly on the remote host"))
   (let* ((root (directory-file-name (expand-file-name directory)))
          (bin (expand-file-name "bin/" root))
-         (python (expand-file-name "python" bin)))
+         (python (expand-file-name "python" bin))
+         (ipython (expand-file-name "ipython3" bin))
+         (repl (if (file-executable-p ipython) ipython python)))
     (unless (file-executable-p python) (user-error "No executable bin/python in %s" root))
     (et/dev-prepend-path bin et/python-environment-bin)
     (setq-local et/python-environment-bin bin)
     (setenv "VIRTUAL_ENV" root)
-    (setq-local python-shell-interpreter python)
-    (message "Buffer Python: %s (restart any existing Eglot/REPL process)" python)))
+    (setq-local python-shell-interpreter repl)
+    (setq-local python-shell-interpreter-args
+                (if (string-match-p "ipython" repl) "--simple-prompt -i" "-i"))
+    (message "Buffer Python REPL: %s (restart any existing Eglot/REPL process)" repl)))
 
 (defun et/lsp-start ()
   "Explicitly start Eglot using separately installed/configured server tools."
   (interactive)
   (et/dev-node-environment)
-  (call-interactively #'eglot))
+  (let* ((env (et/dev-buffer-env))
+         (process-environment (car env))
+         (exec-path (cdr env)))
+    (call-interactively #'eglot)))
 
 (defun et/lsp-format ()
   "Format explicitly with the connected server; never format automatically."
@@ -127,6 +232,145 @@
   (interactive)
   (unless (eglot-managed-p) (user-error "No Eglot server for this buffer"))
   (eglot-shutdown (eglot-current-server)))
+
+(defun et/dev-lang ()
+  "Return :python, :javascript, or nil for the current buffer's language family."
+  (cond ((derived-mode-p 'python-mode 'python-ts-mode) :python)
+        ((derived-mode-p 'js-mode 'js-ts-mode 'typescript-mode
+                         'typescript-ts-mode 'tsx-ts-mode 'web-mode) :javascript)
+        (t nil)))
+
+(defun et/dev-package-json (root)
+  "Return package.json from ROOT as an alist, or nil if absent or invalid."
+  (let ((file (expand-file-name "package.json" root)))
+    (when (file-readable-p file)
+      (condition-case nil
+          (with-temp-buffer
+            (insert-file-contents file)
+            (json-parse-buffer :object-type 'alist))
+        (error nil)))))
+
+(defun et/dev-js-runner (root)
+  "Return :vitest, :jest, or nil for the JS/TS test runner in ROOT."
+  (let* ((pkg (et/dev-package-json root))
+         (deps (append (cdr (assq 'dependencies pkg))
+                       (cdr (assq 'devDependencies pkg))))
+         (scripts (cdr (assq 'scripts pkg)))
+         (test-script (cdr (assq 'test scripts))))
+    (cond ((assq 'vitest deps) :vitest)
+          ((assq 'jest deps) :jest)
+          ((and (stringp test-script) (string-match-p "\\bvitest\\b" test-script)) :vitest)
+          ((and (stringp test-script) (string-match-p "\\bjest\\b" test-script)) :jest)
+          (t nil))))
+
+(defun et/python-test-target ()
+  "Return \"file::class::method\" for the test enclosing point, or the file."
+  (let ((file (or buffer-file-name (user-error "Save the buffer before testing")))
+        (method nil) (class nil))
+    (save-excursion
+      (end-of-line)
+      (when (re-search-backward "^[ \t]*def[ \t]+\\(test_[A-Za-z0-9_]*\\)" nil t)
+        (setq method (match-string 1))
+        (save-excursion
+          (when (re-search-backward "^[ \t]*class[ \t]+\\([A-Za-z_][A-Za-z0-9_]*\\)" nil t)
+            (setq class (match-string 1))))))
+    (concat file (and class (concat "::" class)) (and method (concat "::" method)))))
+
+(defun et/python-test-argv (scope)
+  "Return argv to run pytest for SCOPE (:project, :file, or :point)."
+  (pcase scope
+    (:project '("python" "-m" "pytest"))
+    (:file (list "python" "-m" "pytest"
+                 (or buffer-file-name (user-error "Save the buffer before testing"))))
+    (:point (list "python" "-m" "pytest" (et/python-test-target)))
+    (_ (user-error "Unknown test scope: %S" scope))))
+
+(defun et/js-test-name-at-point ()
+  "Return the name of the enclosing JS/TS test, or nil."
+  (save-excursion
+    (end-of-line)
+    (when (re-search-backward
+           "\\(?:\\btest\\b\\|\\bit\\b\\|\\bdescribe\\b\\)[ \t]*([\"'`]\\([^\"'`\n]+\\)[\"'`]"
+           nil t)
+      (match-string 1))))
+
+(defun et/js-test-argv (scope)
+  "Return argv to run JS/TS tests for SCOPE in the current buffer."
+  (let* ((root (et/dev-project-root))
+         (runner (et/dev-js-runner root)))
+    (unless runner
+      (if (eq scope :project)
+          (setq runner :npm)
+        (user-error "Cannot detect a Jest/Vitest runner; add one to package.json")))
+    (let* ((base (pcase runner
+                   (:vitest '("vitest" "run"))
+                   (:jest '("jest"))
+                   (:npm '("npm" "test"))
+                   (_ (user-error "Unknown runner: %S" runner))))
+           (file (or buffer-file-name (user-error "Save the buffer before testing"))))
+      (pcase scope
+        (:project base)
+        (:file (append base (list file)))
+        (:point (let ((name (et/js-test-name-at-point)))
+                  (if name (append base (list file "-t" name))
+                    (append base (list file)))))
+        (_ (user-error "Unknown test scope: %S" scope))))))
+
+(defun et/dev-test-argv (scope)
+  "Return argv for running SCOPE tests in the current buffer's language."
+  (pcase (et/dev-lang)
+    (:python (et/python-test-argv scope))
+    (:javascript (et/js-test-argv scope))
+    (_ (user-error "No test command for this language"))))
+
+(defun et/dev-run (argv &optional name)
+  "Run ARGV (list of strings) in the project root with this buffer's environment."
+  (let* ((env (et/dev-buffer-env))
+         (default-directory (file-name-as-directory (et/dev-project-root)))
+         (process-environment (car env))
+         (exec-path (cdr env)))
+    (compilation-start
+     (mapconcat #'shell-quote-argument argv " ")
+     nil (lambda (_mode) (or name (concat "*" (car argv) "*"))))))
+
+(defun et/dev-test (scope)
+  "Run SCOPE tests for this buffer's language in a compilation buffer."
+  (let ((lang (et/dev-lang)))
+    (unless lang (user-error "No test command for this buffer"))
+    (when (eq lang :javascript) (et/dev-node-environment))
+    (et/dev-run (et/dev-test-argv scope) "*etmacs-test*")))
+
+(defun et/dev-test-project () "Run the project's test suite." (interactive) (et/dev-test :project))
+(defun et/dev-test-file () "Run tests for the current file." (interactive) (et/dev-test :file))
+(defun et/dev-test-point () "Run the test at point." (interactive) (et/dev-test :point))
+
+(defun et/dev-format-file (file argv)
+  "Synchronously format FILE with ARGV, then reload the buffer from disk."
+  (unless (executable-find (car argv))
+    (user-error "Formatter %s not found in PATH" (car argv)))
+  (when (buffer-modified-p)
+    (unless (yes-or-no-p "Save the buffer before formatting? ")
+      (user-error "Formatting cancelled"))
+    (save-buffer))
+  (let* ((env (et/dev-buffer-env))
+         (default-directory (file-name-as-directory (et/dev-project-root)))
+         (process-environment (car env))
+         (exec-path (cdr env))
+         (exit (apply #'call-process (car argv) nil " *etmacs-format*" nil
+                      (append (cdr argv) (list file)))))
+    (if (zerop exit)
+        (progn (revert-buffer t t t) (message "Formatted %s with %s" file (car argv)))
+      (user-error "Formatter %s failed (exit %s)" (car argv) exit))))
+
+(defun et/dev-format ()
+  "Format the current file with its standalone formatter (Ruff or Prettier)."
+  (interactive)
+  (let ((file (or buffer-file-name (user-error "Save the buffer before formatting"))))
+    (pcase (et/dev-lang)
+      (:python (et/dev-format-file file '("ruff" "format")))
+      (:javascript (et/dev-node-environment)
+                   (et/dev-format-file file '("prettier" "--write")))
+      (_ (user-error "No standalone formatter for this language")))))
 
 (defun et/compose-validate ()
   "Validate a saved local Compose file without starting/deploying containers."
@@ -148,13 +392,17 @@
   :commands docker
   :init (define-key et/project-map (kbd "D") #'docker))
 (dolist (binding '(("l" . et/lsp-start) ("q" . et/lsp-stop) ("f" . et/lsp-format)
+                   ("F" . et/dev-format)
                    ("r" . eglot-rename) ("a" . eglot-code-actions)
                    ("d" . xref-find-definitions) ("R" . xref-find-references)
                    ("h" . eldoc-doc-buffer) ("e" . flymake-show-buffer-diagnostics)
                    ("E" . flymake-show-project-diagnostics) ("n" . flymake-goto-next-error)
                    ("p" . flymake-goto-prev-error) ("c" . projectile-compile-project)
-                   ("t" . projectile-test-project) ("v" . et/python-environment)
-                   ("V" . et/compose-validate)))
+                   ("C" . projectile-test-project) ("t" . et/dev-test-project)
+                   ("T" . et/dev-test-file) ("u" . et/dev-test-point)
+                   ("v" . et/python-environment)
+                   ("V" . et/compose-validate)
+                   ("I" . et/treesit-install-grammars)))
   (define-key et/dev-map (kbd (car binding)) (cdr binding)))
 (provide 'et-dev)
 ;;; et-dev.el ends here

@@ -32,11 +32,56 @@
   (should (equal et/notes-directory (expand-file-name "~/org/")))
   (should (equal et/roam-directory (expand-file-name "~/org/roam/"))))
 
+(ert-deftest et/reload-config-tangles-and-restarts ()
+  (let (tangled started killed)
+    (cl-letf (((symbol-function 'save-some-buffers) (lambda (&rest _) t))
+              ((symbol-function 'et/tangle-config) (lambda () (setq tangled t)))
+              ((symbol-function 'start-process) (lambda (&rest _) (setq started t)))
+              ((symbol-function 'kill-emacs) (lambda (&rest _) (setq killed t))))
+      (et/reload-config)
+      (should tangled)
+      (should started)
+      (should killed))))
+
+(ert-deftest et/menu-navigation-keys ()
+  (skip-unless (featurep 'vertico))
+  (should (eq (lookup-key vertico-map (kbd "C-j")) 'vertico-next))
+  (should (eq (lookup-key vertico-map (kbd "C-k")) 'vertico-previous))
+  (skip-unless (featurep 'corfu))
+  (should (eq (lookup-key corfu-map (kbd "C-j")) 'corfu-next))
+  (should (eq (lookup-key corfu-map (kbd "C-k")) 'corfu-previous))
+  (should (eq (lookup-key minibuffer-local-completion-map (kbd "C-j"))
+              'next-line-or-history-element))
+  (should (eq (lookup-key minibuffer-local-must-match-map (kbd "C-k"))
+              'previous-line-or-history-element))
+  (require 'transient)
+  (should (eq (lookup-key transient-popup-navigation-map (kbd "C-j"))
+              'transient-forward-button))
+  (should (eq (lookup-key transient-popup-navigation-map (kbd "C-k"))
+              'transient-backward-button)))
+
+(ert-deftest et/modeline-is-active ()
+  (skip-unless (featurep 'doom-modeline))
+  (should (bound-and-true-p doom-modeline-mode))
+  (should (bound-and-true-p minions-mode))
+  (should (commandp 'et/install-nerd-fonts)))
+
 (ert-deftest et/leader-basics ()
   (should (eq (lookup-key et/leader-map (kbd "f f")) 'find-file))
   (should (eq (lookup-key et/leader-map (kbd "f c")) 'et/open-config))
   (should (eq (lookup-key et/leader-map (kbd "w u")) 'winner-undo))
   (should (eq (lookup-key et/leader-map (kbd "p")) et/project-map))
+  (should (eq (lookup-key et/leader-map (kbd "d")) 'et/dashboard))
+  (should (eq (lookup-key et/leader-map (kbd "q")) 'save-buffers-kill-emacs))
+  (should (eq (lookup-key et/leader-map (kbd "R")) 'et/reload-config))
+  (should (eq (lookup-key et/leader-map (kbd "a")) et/ai-map))
+  (should (eq (lookup-key et/notes-map (kbd "C")) 'et/capture-template-add))
+  (should (eq (lookup-key et/org-map (kbd "P")) 'et/pomodoro-start))
+  (should (eq (lookup-key et/leader-map (kbd "x")) 'et/open-scratch))
+  (should (eq (lookup-key et/leader-map (kbd "X")) 'et/capture))
+  (should (eq (lookup-key et/leader-map (kbd "M")) et/mail-map))
+  (should (eq (lookup-key et/leader-map (kbd "N")) et/news-map))
+  (should (eq (lookup-key et/leader-map (kbd "T")) et/treesit-map))
   (should (eq (key-binding (kbd "C-c SPC")) et/leader-map)))
 
 (ert-deftest et/mode-local-map-is-buffer-local ()
@@ -96,7 +141,11 @@
           (org-babel-tangle-file (expand-file-name "config.org" directory))
           (dolist (file '("early-init.el" "init.el" "lisp/et-core.el"
                           "lisp/et-projects.el" "lisp/et-editing.el"
-                          "lisp/et-org.el" "lisp/et-roam.el" "lisp/et-dev.el"))
+                          "lisp/et-org.el" "lisp/et-roam.el" "lisp/et-dev.el"
+                          "lisp/et-dashboard.el" "lisp/et-ai.el"
+                          "lisp/et-pomodoro.el" "lisp/et-links.el"
+                          "lisp/et-news.el" "lisp/et-mail.el"
+                          "lisp/et-modeline.el"))
             (should
              (equal (with-temp-buffer
                       (insert-file-contents (expand-file-name file directory))
@@ -300,7 +349,9 @@
     (dolist (entry '(("f" . "files") ("b" . "buffers") ("w" . "windows")
                      ("p" . "projects") ("n" . "notes") ("g" . "git")
                      ("h" . "help") ("t" . "themes") ("TAB" . "workspaces")
-                     ("j" . "jump") ("c" . "edit") ("m" . "mode commands")))
+                     ("j" . "jump") ("c" . "edit") ("a" . "AI")
+                     ("M" . "mail") ("N" . "news") ("T" . "tree-sitter")
+                     ("m" . "mode commands")))
       (should (equal (cdr (assoc (car entry) bindings)) (concat "group:" (cdr entry)))))))
 
 (ert-deftest et/which-key-labels-through-both-leaders ()
@@ -374,19 +425,26 @@
             (should-not (buffer-modified-p))))
       (when (buffer-live-p buffer) (kill-buffer buffer)))))
 
-(ert-deftest et/pairing-engines-do-not-overlap ()
-  (skip-unless (locate-library "smartparens"))
+(ert-deftest et/lisp-parinfer-and-rainbow-without-electric-pair ()
+  (skip-unless (locate-library "parinfer-rust-mode"))
   (with-temp-buffer
     (emacs-lisp-mode)
-    (should (bound-and-true-p smartparens-mode))
-    (should-not (bound-and-true-p smartparens-strict-mode))
+    (should (memq #'et/lisp-editing-defaults emacs-lisp-mode-hook))
+    (should (fboundp 'parinfer-rust-mode))
+    (should (bound-and-true-p rainbow-delimiters-mode))
     (should-not (bound-and-true-p electric-pair-mode))
+    (should-not (bound-and-true-p smartparens-mode))
     (should (eq et/local-leader-map et/lisp-edit-map))
-    (should (eq (lookup-key et/leader-map (kbd "m >")) 'sp-forward-slurp-sexp)))
+    (should (eq (lookup-key et/leader-map (kbd "m f")) 'forward-sexp)))
   (with-temp-buffer
     (python-mode)
     (should (bound-and-true-p electric-pair-mode))
-    (should-not (bound-and-true-p smartparens-mode))))
+    (should-not (bound-and-true-p rainbow-delimiters-mode))))
+
+(ert-deftest et/lisp-editing-uses-parinfer-hooks ()
+  (should (memq #'et/lisp-editing-defaults lisp-interaction-mode-hook))
+  (should (memq #'et/lisp-editing-defaults lisp-mode-hook))
+  (should (commandp 'et/install-parinfer-rust)))
 
 (ert-deftest et/diff-highlighting-does-not-start-remote-processes ()
   (with-temp-buffer
@@ -408,17 +466,6 @@
     (should (commandp (lookup-key et/leader-map (kbd key)))))
   (should (eq (lookup-key et/leader-map (kbd "g s")) 'magit-status))
   (should (memq #'diff-hl-magit-post-refresh magit-post-refresh-hook)))
-
-(ert-deftest et/lisp-structural-editing-preserves-contents ()
-  (skip-unless (locate-library "smartparens"))
-  (with-temp-buffer
-    (emacs-lisp-mode)
-    (insert "(one) two")
-    (goto-char 2)
-    (sp-forward-slurp-sexp)
-    (should (equal (buffer-string) "(one two)"))
-    (sp-forward-barf-sexp)
-    (should (equal (buffer-string) "(one) two"))))
 
 (ert-deftest et/magit-status-opens-without-changing-repository ()
   (skip-unless (and (locate-library "magit") (executable-find "git")))
@@ -444,3 +491,9 @@
 
 (load (expand-file-name "tests/et-org-tests.el" et/test-root) nil t)
 (load (expand-file-name "tests/et-dev-tests.el" et/test-root) nil t)
+(load (expand-file-name "tests/et-dashboard-tests.el" et/test-root) nil t)
+(load (expand-file-name "tests/et-ai-tests.el" et/test-root) nil t)
+(load (expand-file-name "tests/et-pomodoro-tests.el" et/test-root) nil t)
+(load (expand-file-name "tests/et-links-tests.el" et/test-root) nil t)
+(load (expand-file-name "tests/et-news-tests.el" et/test-root) nil t)
+(load (expand-file-name "tests/et-mail-tests.el" et/test-root) nil t)

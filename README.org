@@ -2,8 +2,10 @@
 #+options: toc:2
 
 A personal, literate Emacs configuration—not a Doom or Prelude clone. Includes
-Evil, discoverable leader keys, completion, Projectile/Perspective workspaces,
-Treemacs, Git tools, conservative editing defaults, and Org/roam workflows.
+Evil, discoverable leader keys, a startup dashboard, gptel AI integration,
+Elfeed news, mu4e support, doom-modeline, completion, Projectile/Perspective
+workspaces, Treemacs, Git tools, conservative editing defaults, and Org/roam
+workflows.
 The source of truth and package rationales are in [[file:config.org][config.org]]. Maintained project
 documentation uses Org format. Old session/planning artifacts are not runtime
 dependencies and are not part of the proposed configuration commit.
@@ -56,33 +58,107 @@ Custom functions *and variables* use =et/=. File and feature names retain =et-=
 
 * Core keys and completion
 
-| Keys | Action |
-|------+--------|
-| SPC SPC | Commands |
-| SPC f f / SPC f s / SPC f c | Find file / save / open config |
-| SPC b b / SPC b B | Workspace buffers / all buffers |
-| SPC w v / SPC w s | Split right / below |
-| SPC w h/j/k/l | Move between windows |
-| SPC w u / SPC w r | Winner layout undo / redo |
-| SPC s / SPC / | Buffer search / project-directory ripgrep |
-| SPC t t | Theme picker with live preview |
+| Keys                        | Action                                    |
+|-----------------------------+-------------------------------------------|
+| SPC SPC                     | Commands                                  |
+| SPC f f / SPC f s / SPC f c | Find file / save / open config            |
+| SPC b b / SPC b B           | Workspace buffers / all buffers           |
+| SPC w v / SPC w s           | Split right / below                       |
+| SPC w h/j/k/l               | Move between windows                      |
+| SPC w u / SPC w r           | Winner layout undo / redo                 |
+| SPC s / SPC /               | Buffer search / project-directory ripgrep |
+| SPC t t                     | Theme picker with live preview            |
+| SPC x / SPC X               | Open scratch / general Org capture menu   |
+| SPC M m / u / c / s         | mu4e open / update / compose / search     |
+| SPC N o / u / s             | Elfeed open / update / choose news topics |
+| SPC N / / f / d             | Search / narrow to feed / narrow to dates |
+| SPC N m / M / r             | Mark read / unread / create a roam note   |
+| SPC T i / s                 | Install / report tree-sitter grammars     |
+| RET (Evil normal)           | Follow button, Org link, URL, or id link  |
+| C-j / C-k (menus)           | Next / previous completion or menu item   |
 
 =SPC= is a leader in Evil normal/visual/motion states; ordinary Space inserts
 spaces in insert state. =C-c SPC= is the alternative leader. Which Key groups
 are labelled files, buffers, windows, projects, notes, git, help, themes,
-workspaces, jump, edit and mode commands—not just "prefix".
+workspaces, jump, edit, AI, mail, news, tree-sitter and mode commands—not just
+"prefix".
 
 Vertico handles minibuffer completion; Corfu handles in-buffer CAPFs. They do
 not compete. Company/Cape are not installed without a specific need. Try Lisp
 completion by typing =(messag= and pressing =C-M-i=. =TAB=/=S-TAB= move, =RET=
-accepts a selected candidate, =C-g= dismisses. Automatic completion begins after
-three characters; CAPFs may execute Lisp, so use care with untrusted code.
+accepts a selected candidate, =C-g= dismisses. =C-j=/=C-k= move down/up through
+Vertico, Corfu, built-in minibuffer completion, and Transient menus without
+changing ordinary editing. Automatic completion begins after three characters;
+CAPFs may execute Lisp, so use care with untrusted code.
 
 GUI Vertico menus float. Terminal frames use normal minibuffer rendering;
 Corfu uses supported child frames or the built-in completion fallback. In the
 theme picker, =C-n=/=C-p= preview, =RET= accepts, and =C-g= restores the previous
 theme. Only trusted installed theme code should be previewed. Selection is
 session-only; change =et/default-theme= for a persistent default.
+
+* Dashboard and AI
+
+The dashboard opens on startup (=initial-buffer-choice=) and remains available at
+=SPC d=. It shows Projects, Recent files, up to five Personal and five Work
+tasks, Daily journal, and five cached news articles per site. Tasks are sorted
+by state and explicit priority, then by deadline/schedule, with undated tasks
+last; overflow is reported as =+N more=. =g= refreshes, =q= quits, =RET=
+activates a button or link, and =TAB= collapses or expands the article list for
+the feed at point. =SPC q= quits Emacs; =SPC R= re-tangles
+=config.org= and restarts Emacs after saving buffers. Set
+=et/dashboard-on-startup= to nil in =.local/settings.el= to start on scratch
+instead.
+
+=gptel= provides OpenAI, Anthropic and DeepSeek backends. API keys are read from
+=~/.authinfo.gpg= through =gptel-api-key-from-auth-source=; the machine and user
+are prompted for at first use and cached for the session. Reasoning text is
+hidden by default because reasoning tokens are billed as output. The OpenCode
+entry is a placeholder.
+
+| Keys                  | Action                                                     |
+|-----------------------+------------------------------------------------------------|
+| SPC d                 | Open the dashboard                                         |
+| SPC q / SPC R         | Quit Emacs / re-tangle and restart                         |
+| SPC a g / SPC a s     | gptel chat / send                                          |
+| SPC a m               | gptel menu                                                 |
+| SPC a k               | Prompt for and cache auth-source keys                      |
+| SPC a r               | Toggle reasoning output for this session                   |
+| SPC a o               | OpenCode placeholder                                       |
+| SPC n C               | Create and persist an Org capture template                 |
+
+Interactively created capture templates are written to
+=.local/capture-templates.el= with mode 0600 and merged ahead of the built-in
+templates on startup. They contain data only, never credentials.
+
+** News, email and modeline
+
+Elfeed reads Scientific American, the New York Times
+Home/World/U.S./Business/Technology/Science/Health/Sports/Arts feeds, Decipher,
+ArsTechnica Security, TechNet/Microsoft Security, SecurityWeek, and
+BleepingComputer. All feeds are downloaded; =SPC N s= chooses which topics feed
+the dashboard's five newest articles per site. =SPC N u= updates feeds, =SPC N o=
+opens Elfeed, and each site's dashboard button opens its full Elfeed search.
+=TAB= in the dashboard collapses or expands the article list for the feed at
+point. State lives in =.local/news.el= and =.local/elfeed/=; startup uses only
+the cache.
+
+In an Elfeed search buffer, the same leader prefix adds =SPC N /= (keyword
+search), =SPC N f= (narrow to feed), =SPC N d= (date range), =SPC N m= / =SPC N M=
+(mark read / unread), and =SPC N r= (create an Org-roam reference note). The note
+contains the article URL, feed, date, and an AI summary placeholder;
+=et/news-roam-ai-hook= is the extension point for the next AI iteration.
+
+Mu4e is supported but unconfigured. Set =mu4e-maildir= (and any contexts/SMTP)
+in =.local/settings.el=; =SPC M m= opens mail, =u= updates the index, =c=
+composes, and =s= searches. The module adds common mu4e directories to
+=load-path= and gives a clear error instead of loading a broken mail setup.
+
+Doom Modeline supplies colors, Nerd Font icons, VC state, diagnostics, LSP,
+position, and time; Minions collapses the minor-mode list. Install the icon font
+once with =M-x et/install-nerd-fonts=, or set =doom-modeline-icon= to nil for a
+plain terminal. The unconfigured alternative lighter options are =mood-line=,
+=telephone-line=, or =nano-modeline=.
 
 * Projects, workspaces and windows
 
@@ -91,16 +167,16 @@ workspace buffers and layouts. Same-basename projects receive distinct
 =name#hash= workspaces. This is organizational isolation, not a sandbox: an
 explicit file open may share a buffer between workspaces.
 
-| Keys | Action |
-|------+--------|
-| SPC p a / SPC p p | Register / switch project |
-| SPC p w | Activate current project's workspace |
-| SPC p f / SPC p s | Project files / Consult project search |
-| SPC p c / SPC p t | Build / test (project commands may need configuration) |
-| SPC TAB . / SPC TAB TAB | Choose / previous workspace |
-| SPC TAB a / SPC TAB d | Add / forget a buffer, without deleting its file |
-| SPC TAB S / SPC TAB L | Explicit session save / restore |
-| SPC e / SPC p e | Toggle tree / display only the current project in tree |
+| Keys                    | Action                                                 |
+|-------------------------+--------------------------------------------------------|
+| SPC p a / SPC p p       | Register / switch project                              |
+| SPC p w                 | Activate current project's workspace                   |
+| SPC p f / SPC p s       | Project files / Consult project search                 |
+| SPC p c / SPC p t       | Build / test (project commands may need configuration) |
+| SPC TAB . / SPC TAB TAB | Choose / previous workspace                            |
+| SPC TAB a / SPC TAB d   | Add / forget a buffer, without deleting its file       |
+| SPC TAB S / SPC TAB L   | Explicit session save / restore                        |
+| SPC e / SPC p e         | Toggle tree / display only the current project in tree |
 
 Discovery is explicit, not a recursive startup scan. Treemacs uses Evil
 bindings and Perspective scopes. Help opens right, compilation/warnings below;
@@ -117,30 +193,29 @@ with a short empty session. Do not enable desktop restoration over these layouts
 
 We adopt capabilities from [[https://github.com/bbatsov/prelude][Prelude]], not its startup framework or global keymap.
 
-| Capability | Choice and reason |
-|------------+-------------------|
-| Project indentation | Built-in EditorConfig honors the project |
-| Search counts, buffer names, pairing display, scrolling | Built-ins |
-| External file changes | Local unmodified-file auto-revert, no remote polling |
-| Recent files | recentf + Consult; excludes remote/auth/encrypted/internal paths |
-| Visible-text/window navigation | Avy + Ace Window, current frame |
-| Semantic selection | expand-region complements Evil text objects |
-| Explicit editing/file helpers | Selected Crux commands, no automatic edit advice |
-| Lisp structure | Non-strict Smartparens only in Lisp; electric-pair elsewhere |
-| Source TODO/FIXME markers | hl-todo, not an alternative task database |
-| Git operations/change markers/history | Magit, diff-hl, git-timemachine, git-modes |
+| Capability                                              | Choice and reason                                                |
+|---------------------------------------------------------+------------------------------------------------------------------|
+| Project indentation                                     | Built-in EditorConfig honors the project                         |
+| Search counts, buffer names, pairing display, scrolling | Built-ins                                                        |
+| External file changes                                   | Local unmodified-file auto-revert, no remote polling             |
+| Recent files                                            | recentf + Consult; excludes remote/auth/encrypted/internal paths |
+| Visible-text/window navigation                          | Avy + Ace Window, current frame                                  |
+| Semantic selection                                      | expand-region complements Evil text objects                      |
+| Explicit editing/file helpers                           | Selected Crux commands, no automatic edit advice                 |
+| Lisp structure                                          | Parinfer (parinfer-rust-mode) + rainbow delimiters; electric-pair elsewhere |
+| Source TODO/FIXME markers                               | hl-todo, not an alternative task database                        |
+| Git operations/change markers/history                   | Magit, diff-hl, git-timemachine, git-modes                       |
 
-| Keys | Action |
-|------+--------|
-| SPC j j / SPC j w / SPC j l | Two-character / word / line jump |
-| SPC w w | Ace Window; existing directional bindings and C-x o stay intact |
-| SPC c e / SPC c E | Expand / contract selection |
-| SPC c o/O / SPC c d | Open line below/above / duplicate line or region |
-| SPC f R / SPC f r | Explicit file+buffer rename / global recent files |
-| SPC g s / SPC g v | Magit status / built-in VC |
-| SPC g f / SPC g l / SPC g b / SPC g t | File actions / log / blame / time machine |
-| SPC m > / SPC m < / SPC m s (Lisp) | Slurp / barf / splice |
-| SPC m f/b (Lisp) | Move over forms |
+| Keys                                  | Action                                                          |
+|---------------------------------------+-----------------------------------------------------------------|
+| SPC j j / SPC j w / SPC j l           | Two-character / word / line jump                                |
+| SPC w w                               | Ace Window; existing directional bindings and C-x o stay intact |
+| SPC c e / SPC c E                     | Expand / contract selection                                     |
+| SPC c o/O / SPC c d                   | Open line below/above / duplicate line or region                |
+| SPC f R / SPC f r                     | Explicit file+buffer rename / global recent files               |
+| SPC g s / SPC g v                     | Magit status / built-in VC                                      |
+| SPC g f / SPC g l / SPC g b / SPC g t | File actions / log / blame / time machine                       |
+| SPC m f/b (Lisp)                      | Forward/backward form; Parinfer handles parens                  |
 
 Intentionally not enabled: super-save, midnight cleanup, persisted kill rings,
 global whitespace cleanup or format-on-save, pasted-text reindentation,
@@ -167,8 +242,10 @@ Default layout (created only as captures need it):
 One org-roam graph indexes all three domains in =~/org/roam=. Nothing migrates
 existing notes/IDs. Unknown-layout legacy nodes are accessible with all-domain
 lookup. Ordinary task files stay outside roam. Project tasks live inside their
-project notes, not duplicated into daily files. Add existing other task files
-to =et/org-extra-agenda-files=; these appear in the all-domain agenda.
+project notes, not duplicated into daily files. TODOs written in =daily/= notes
+are agenda files too, so a dated task can be captured where it is discussed.
+Add existing other task files to =et/org-extra-agenda-files=; these appear in the
+all-domain agenda. Emacs lock files (=.#*=) and autosave files (=#*#=) are ignored.
 
 Roam completion shows file nodes by title and heading nodes by their full path:
 =Document title -> Heading -> Subheading=. Ancestors need not have IDs. This
@@ -192,20 +269,21 @@ SQLite files. Each machine rebuilds its own index with =SPC n r u=.
 
 ** Capture and daily use
 
-| Keys | Action |
-|------+--------|
-| SPC n c / C-c c | Task/inbox capture menu |
-| SPC n a / C-c a | Choose agenda domain and open daily dashboard |
-| SPC n D | Set workspace default domain |
-| SPC n d | Browse the existing Org root |
-| SPC n r c | Choose domain, title, then a roam note template |
-| SPC n r f / SPC n r i | Find note / insert ID link; uppercase F/I include all domains |
-| SPC n r s / SPC n r S | Scoped / all-domain full-text search |
-| SPC n r d | Today's journal/log/meeting; SPC u then SPC n r d chooses a domain |
-| SPC n r w | Weekly review linking seven dailies, without creating missing days |
-| SPC n r b / a / t | Backlinks / add alias / add subject tag |
-| SPC n r g / u | Explicit graph / rebuild local index |
-
+| Keys                  | Action                                                             |
+|-----------------------+--------------------------------------------------------------------|
+| SPC n c / C-c c       | Task/inbox capture menu                                            |
+| SPC n C               | Create and persist a new capture template                          |
+| SPC n a / C-c a       | Choose agenda domain and open daily dashboard                      |
+| SPC n D               | Set workspace default domain                                       |
+| SPC n d               | Browse the existing Org root                                       |
+| SPC n r c             | Choose domain, title, then a roam note template                    |
+| SPC n r f / SPC n r i | Find note / insert ID link; uppercase F/I include all domains      |
+| SPC n r s / SPC n r S | Scoped / all-domain full-text search                               |
+| SPC n r d             | Today's journal/log/meeting; SPC u then SPC n r d chooses a domain |
+| SPC n r w             | Weekly review linking seven dailies, without creating missing days |
+| SPC n r b / a / t     | Backlinks / add alias / add subject tag                            |
+| SPC n r g / u         | Explicit graph / rebuild local index                               |
+[[id:52099960-9eef-4163-bb0b-0b25fb0d3a3b][org-mode and org-roam hotkeys]]
 Task capture keys: =pi= personal inbox, =pt= personal TODO, =ph= daily personal
 habit, =wi= work inbox, =wt= work TODO, =j= task in an existing project note.
 Choose/create a project note first via roam template =p=. Project capture asks
@@ -225,32 +303,72 @@ the real task. Vocabulary notes contain a drill-tagged question and Answer
 heading; Arabic editing/bidi is preserved. Multilingual spelling is a later stage.
 
 Agenda views include general projects plus the chosen personal/work domain, or
-all domains. Only designated project directories are scanned. States are TODO,
-NEXT, WAIT, DONE and CANCELLED; completion/wait logging lives in LOGBOOK drawers.
-Use Org repeaters for recurring tasks, and the habit STYLE property for habits.
+all domains; the interactive prompt defaults to all. The scanned set is
+=inbox.org=, =tasks.org=, =projects/= and =daily/=
+for the selected domains; lock and autosave files are ignored. The default =d=
+agenda collects open tasks with a deadline or schedule in the next two weeks,
+plus undated actionable states, and groups them into Overdue, Today, Next two
+weeks, Showstoppers, Blocked, In progress, Validation, Next actions, and Waiting
+with =org-super-agenda=. =org-modern= styles TODO keywords, tags and dates.
+completion/wait logging lives in LOGBOOK drawers. Use Org repeaters for
+recurring tasks, and the habit STYLE property for habits.
+
+| State       | Key | Color / face    |
+|-------------+-----+-----------------|
+| TODO        | t   | default         |
+| NEXT        | n   | yellow          |
+| WAIT        | w   | orange          |
+| IN-PROGRESS | p   | green           |
+| VALIDATION  | v   | blue            |
+| HOLD        | h   | orange          |
+| BLOCKED     | b   | red             |
+| IDEA        | i   | blue            |
+| SHOWSTOPPER | s   | red, underlined |
+| DONE        | d   | default         |
+| CANCELLED   | c   | default         |
+
+Colors live in =org-todo-keyword-faces= and are tuned for the current light
+theme; adjust =et/org-todo-faces= for a different theme. Dashboard importance
+order is SHOWSTOPPER, BLOCKED, IN-PROGRESS, VALIDATION, NEXT, TODO, HOLD, WAIT,
+IDEA, then any other open state.
 
 ** Org-local commands, research and export
 
 In Org buffers =SPC m= offers:
-| Key | Action |
-|-----+--------|
-| c / a / t | Capture / agenda / TODO state |
-| s / d / r | Schedule / deadline / refile |
-| i / l | Create ID / store link |
-| k / K / p | Clock in / out / Pomodoro |
-| F f / F t / F a | Drill file / subtree / resume |
-| C | Insert citation through Citar |
-| b / T | Execute source block / explicitly tangle this file |
-| e e | Org export dispatcher |
-| e h / e p / e d / e H | HTML / PDF / DOCX / Hugo |
+| Key                   | Action                                             |
+|-----------------------+----------------------------------------------------|
+| c / a / t             | Capture / agenda / TODO state                      |
+| s / d / r             | Schedule / deadline / refile                       |
+| i / l                 | Create ID / store link                             |
+| k / K / p             | Clock in / out / org-pomodoro                      |
+| P / S                 | Start / stop the Etmacs pomodoro helper            |
+| L                     | Log pomodoros for an Org date range                |
+| < / >                 | Promote / demote current heading                   |
+| << / >>               | Evil: promote / demote heading, else shift indent  |
+| H / G                 | New habit / restart an archived habit              |
+| F f / F t / F a       | Drill file / subtree / resume                      |
+| C                     | Insert citation through Citar                      |
+| b / T                 | Execute source block / explicitly tangle this file |
+| e e                   | Org export dispatcher                              |
+| e h / e p / e d / e H | HTML / PDF / DOCX / Hugo                           |
 
 Org, habits, agenda, capture, clocks, Babel and exporters are built in.
 =org-roam= adds the linked-note index; =org-roam-ui= adds the browser graph.
-=org-pomodoro= adds focus cycles and =org-drill= spaced repetition. =citar=
-provides reference insertion/opening over Org Cite and your own BibTeX files;
-set =et/bibliography-files= before startup. Zotero can maintain those files but
-is not mandatory. PDF viewing initially uses Emacs's available built-in viewer;
-pdf-tools/annotation integrations can be added separately.
+=org-super-agenda= groups the agenda and =org-modern= provides the modern
+TODO/tag/date styling; run =M-x et/install-packages= and restart after adding
+them to a new machine. =org-pomodoro= remains at =SPC m p= and =org-drill= adds
+spaced repetition.
+The separate =et/pomodoro-start= helper at =SPC m P= records each work segment as
+a TODO in =DOMAIN/pomodoro.org=, prompts for "Planned work" and "What was
+achieved?", follows 25/5 × 4 then 30, and logs a date range with Org's date
+selector. Compare both helpers and keep the preferred one.
+=et/new-habit= records a frequency and objective; reaching the objective archives
+the habit under =DOMAIN/habits-archive.org=, and =et/restart-habit= brings it
+back. =et/pomodoro-trial-habit= creates five weekly weekday habits for the
+one-month comparison. =citar= provides reference insertion/opening over Org Cite and your own
+BibTeX files; set =et/bibliography-files= before startup. Zotero can maintain
+those files but is not mandatory. PDF viewing initially uses Emacs's available
+built-in viewer; pdf-tools/annotation integrations can be added separately.
 
 HTML uses Org; PDF uses Org's LaTeX exporter and an external TeX toolchain.
 HTML source blocks fall back to plain text if optional =htmlize= is absent.
@@ -277,18 +395,24 @@ and documentation. Corfu displays completion; Vertico still handles prompts.
 Servers are *explicitly started*, not launched by opening or saving files.
 No server binaries, grammars, formatter tools or test runners are auto-installed.
 
-| Language | Mode choice | External server |
-|----------+-------------+-----------------|
-| Python | Built-in python-mode, or python-ts-mode with an installed grammar | basedpyright-langserver, pylsp or another Eglot-supported choice |
-| JavaScript | Built-in js-mode / js-ts-mode | typescript-language-server --stdio |
-| TypeScript | typescript-mode; built-in TS modes when grammars are ready | typescript-language-server --stdio |
-| TSX | web-mode fallback; tsx-ts-mode with installed grammars | Same TypeScript server |
-| YAML | yaml-mode; built-in yaml-ts-mode with grammar | yaml-language-server --stdio |
-| Java | Built-in java-mode / java-ts-mode | jdtls with a compatible JDK, or java-language-server |
-| SQL | Built-in sql-mode and optional sql.el REPL | sqls; dialect/connection setup remains explicit |
-| YARA | yara-mode (.yar/.yara) | yr-ls via Emacs 31's Eglot mapping |
-| Dockerfile | dockerfile-mode / dockerfile-ts-mode | docker-langserver --stdio |
-| Compose | Small YAML-derived et/compose-mode | yaml-language-server --stdio |
+Tree-sitter is built in. Missing grammars fall back to the classic mode, and
+=SPC T i= builds the configured grammars (Python, JavaScript, TypeScript, TSX,
+Java, YAML, Dockerfile, Bash, JSON) into =.local/tree-sitter/=; =SPC T s= reports
+what is ready. The installer needs Git and a C/C++ toolchain and never runs on
+startup.
+
+| Language   | Mode choice                                                       | External server                                                  |
+|------------+-------------------------------------------------------------------+------------------------------------------------------------------|
+| Python     | Built-in python-mode, or python-ts-mode with an installed grammar | basedpyright-langserver (preferred); pyright/pylsp fall back |
+| JavaScript | Built-in js-mode / js-ts-mode                                     | typescript-language-server --stdio                               |
+| TypeScript | typescript-mode; built-in TS modes when grammars are ready        | typescript-language-server --stdio                               |
+| TSX        | web-mode fallback; tsx-ts-mode with installed grammars            | Same TypeScript server                                           |
+| YAML       | yaml-mode; built-in yaml-ts-mode with grammar                     | yaml-language-server --stdio                                     |
+| Java       | Built-in java-mode / java-ts-mode                                 | jdtls with a compatible JDK, or java-language-server             |
+| SQL        | Built-in sql-mode and optional sql.el REPL                        | sqls; dialect/connection setup remains explicit                  |
+| YARA       | yara-mode (.yar/.yara)                                            | yr-ls via Emacs 31's Eglot mapping                               |
+| Dockerfile | dockerfile-mode / dockerfile-ts-mode                              | docker-langserver --stdio                                        |
+| Compose    | Small YAML-derived et/compose-mode                                | yaml-language-server --stdio                                     |
 
 Package reasons: TypeScript, YAML, YARA and Dockerfile modes fill built-in
 fallback gaps without requiring native grammar compilation; web-mode handles
@@ -299,26 +423,38 @@ uses a small derived YAML mode instead of another bootstrap system. It detects
 Dockerfile variants such as =Dockerfile.dev= and =*.dockerfile= are recognized.
 
 In these buffers, =SPC m= supplies:
-| Key | Action |
-|-----+--------|
-| l / q | Start Eglot / shut down the current project's server |
-| d / R | Definition / references |
-| r / a | Rename symbol / code actions |
-| h | Eldoc documentation buffer |
-| e / E | Buffer / project Flymake diagnostics |
-| n / p | Next / previous diagnostic |
-| f | Explicit server formatting (region if active, otherwise buffer) |
-| c / t | Projectile build / test commands |
-| v | Choose Python virtualenv directory (Python buffers only) |
-| V | Validate saved local Compose file (Compose buffers only) |
+| Key   | Action                                                          |
+|-------+-----------------------------------------------------------------|
+| l / q | Start Eglot / shut down the current project's server            |
+| d / R | Definition / references                                         |
+| r / a | Rename symbol / code actions                                    |
+| h     | Eldoc documentation buffer                                      |
+| e / E | Buffer / project Flymake diagnostics                            |
+| n / p | Next / previous diagnostic                                      |
+| f     | LSP formatting (region if active, otherwise buffer)             |
+| F     | Standalone formatting (Ruff / Prettier)                         |
+| c / C | Projectile build / arbitrary test command                       |
+| t / T | Test project / file                                             |
+| u     | Test the test at point                                          |
+| v     | Choose Python virtualenv directory (Python buffers only)        |
+| V     | Validate saved local Compose file (Compose buffers only)        |
+| I     | Install tree-sitter grammars                                    |
 
-No format-on-save. Formatting requires a connected server that advertises the
-capability: a missing formatter is a clear limitation, not silently replaced by
-another framework. Build/test commands are yours to configure; no pytest/Jest/
-Maven/Gradle choice is imposed. YARA rules are not run against samples on save.
-SQL does not connect to a database on opening a file. Schema-aware Compose
-diagnostics require deliberate YAML-server schema configuration; plain YAML
-syntax support alone is not a guarantee of Compose schema validation.
+No format-on-save or test-on-save. =SPC m f= formats through the connected LSP
+server if it advertises the capability. =SPC m F= runs a standalone formatter:
+Ruff (=ruff format=) for Python and Prettier (=prettier --write=) for JS/TS,
+refusing unsaved buffers and reloading only on success; a missing formatter is a
+clear error, never an auto-install.
+
+=SPC m t= runs the project's test suite, =SPC m T= the current file, and
+=SPC m u= the test at point. Python uses =python -m pytest= (the selected venv's
+interpreter); JS/TS detects =vitest= or =jest= from =package.json= and falls back
+to =npm test= for the whole suite. Results appear in a compilation buffer. No
+pytest/Jest/Vitest choice is silently imposed beyond these defaults; =SPC m c=
+(Projectile) runs any command you prefer. YARA rules are not run against samples
+on save. SQL does not connect to a database on opening a file. Schema-aware
+Compose diagnostics require deliberate YAML-server schema configuration; plain
+YAML syntax support alone is not a guarantee of Compose schema validation.
 
 ** Installing tools separately
 
@@ -330,19 +466,27 @@ the configuration executes. Server versions must support your Node/JDK runtime.
 npm install -g typescript typescript-language-server yaml-language-server dockerfile-language-server-nodejs
 # Example Python tooling in a chosen development environment:
 python -m pip install basedpyright ruff pytest
+# JS/TS project-local test runner and formatter (run in the project):
+npm install --save-dev vitest prettier   # or: jest
 #+end_src
 
-=ruff= and =pytest= above are optional tooling examples, not currently wired
-into an automatic linter/formatter/test UI. Install JDT LS, sqls and yr-ls using
-their supported distribution instructions; check runtime requirements. Ensure
-the selected server executable is visible in Emacs's PATH, not just a shell.
+=basedpyright-langserver= is the preferred Python server; =pytest= and =ruff=
+drive =SPC m t/T/u= and =SPC m F= respectively. For JS/TS, install =jest= or
+=vitest= (project-local =devDependencies=) plus =prettier= for =SPC m F=. Install
+JDT LS, sqls and yr-ls using their supported distribution instructions; check
+runtime requirements. Ensure each server/runner executable is visible in Emacs's
+PATH (or the selected venv / project =node_modules/.bin=), not just a shell.
 
 =SPC m v= selects an existing local virtualenv's =bin/python= and adjusts PATH
 and =exec-path= *for this buffer*. It does not guess uv/Poetry/Conda layouts or
-change all project buffers. Select the environment before starting Eglot/REPL;
-restart already-running processes after changing it. Invoking =SPC m l= in a
-local JS/TS project opts into that project's =node_modules/.bin=, so only use it
-in trusted projects. Repeated selection replaces rather than stacks paths.
+change all project buffers. The interactive Python REPL uses =ipython3= (with
+=--simple-prompt=) when available, falling back to plain =python=. The selected
+environment is propagated to the Eglot
+server process via =VIRTUAL_ENV=, so basedpyright analyses against that venv.
+Select the environment before starting Eglot/REPL; restart already-running
+processes after changing it. Invoking =SPC m l=, a test command, or =SPC m F= in
+a local JS/TS project opts into that project's =node_modules/.bin=, so only use
+it in trusted projects. Repeated selection replaces rather than stacks paths.
 Other project buffers may need the same selection explicitly.
 
 ** Docker and Compose
@@ -373,25 +517,38 @@ they have not been verified end-to-end against your hosts yet.
    Trigger completion; introduce a type error; inspect Flymake; navigate to
    definition/references; rename a symbol. Check unsupported-server errors are
    clear. =SPC m q= must stop it. No connection should start on file open alone.
-3. Request formatting only when the server supports it. Verify ordinary saves
-   do not format. Run your actual build/test command with =SPC m c/t= and inspect
-   compilation output; no project-specific command has been assumed.
-4. Select two Python environments and check buffer-local interpreter/PATH and
-   process restart behavior. Test Node tools in a trusted local project.
-5. Validate a disposable Compose file, confirm errors go to compilation output,
+3. Request formatting only when the server supports it; verify ordinary saves do
+   not format. Run =SPC m F= in Python/JS files with =ruff=/=prettier= installed;
+   confirm unsaved buffers are refused and the buffer reloads on success.
+4. Run =SPC m t/T/u= in a Python project (virtualenv selected, =pytest= installed)
+   and a JS/TS project (=jest= or =vitest= in =devDependencies=); check the
+   project/file/test-at-point commands and their compilation output. Verify the
+   =SPC m t= -> =npm test= fallback when no runner is detected.
+5. Select two Python environments and check buffer-local interpreter/PATH, that a
+   restarted Eglot uses the selected venv, and process restart behavior. Test
+   Node tools in a trusted local project.
+6. Validate a disposable Compose file, confirm errors go to compilation output,
    and ensure no containers were started. Test Docker management separately.
 
 Automated tests cover mode/filename detection, no automatic servers, command
-bindings, isolated environments, Compose validation/cancellation, and a real
-Eglot JSON-RPC connection to a deterministic test fixture for CAPF, Flymake,
-Xref and formatting. This fixture does *not* verify production language-server
-behavior. No production server is installed on this development host yet.
+bindings, isolated environments and their propagation to the server process,
+basedpyright preference, pytest/Jest/Vitest command construction and runner
+detection, standalone formatting and reload, Compose validation/cancellation,
+and a real Eglot JSON-RPC connection to a deterministic test fixture for CAPF,
+Flymake, Xref and formatting. Dashboard sections and buttons, gptel auth-source
+prompting and reasoning defaults, persistent capture templates, pomodoro
+segments/logging, and habit archive/restart behavior also have offline tests.
+This fixture does *not* verify production language-server behavior. No production
+server is installed on this development host yet.
 
 * External dependencies and remaining stages
 
 Git and ripgrep are used by project/Git/search commands. On Arch/Ubuntu the
 search package is =ripgrep=. PDF needs TeX; DOCX needs Pandoc. org-roam needs
-built-in SQLite support. No system packages, language servers, dictionaries,
+built-in SQLite support. Elfeed uses =curl= for feed downloads. mu4e needs the
+system =mu= package (already separate from ELPA); set =mu4e-maildir= in
+=.local/settings.el=. Doom Modeline's Nerd Font glyphs need a one-time
+=M-x et/install-nerd-fonts=. No system packages, language servers, dictionaries,
 or tree-sitter grammars are silently installed. Babel needs the corresponding
 interpreter/database/HTTP service for the blocks you execute.
 
@@ -400,10 +557,10 @@ distribution's formats and LaTeX packages must also be installed/configured.
 An error about missing =pdflatex.fmt= is a system TeX setup problem, not an Org
 export setting. Fix that distribution setup before verifying PDF output.
 
-Production-server tuning, richer testing/standalone formatting, remote/container
-development, vterm, AI, spelling/grammar, deeper citation/PDF workflows and optional Forge
-remain separate stages. Do not load another completion or diagnostic framework
-globally over the current one without a concrete reason.
+Production-server tuning, remote/container development, vterm,
+spelling/grammar, deeper citation/PDF workflows and optional Forge remain
+separate stages. Do not load another completion or diagnostic framework globally
+over the current one without a concrete reason.
 
 * Verification
 
@@ -416,7 +573,10 @@ Tests use disposable notes/repositories, not your real vault. They cover source
 tangling, startup/no installation, labels through both leaders, workspace
 scoping/layouts and fresh-process restoration, safe persistence, completion,
 EditorConfig, structural edits, conservative saves, pop-ups, and Org workflows.
-They do not replace real keyboard/rendering/server/export checks.
+They also cover startup dashboard choice, link following, menu navigation,
+tree-sitter recipes/installation, cached news rendering and selection, mu4e
+configuration errors, and the modeline's presence. They do not replace real
+keyboard/rendering/server/export checks.
 
 Manual acceptance checklist:
 1. Restart offline; check Evil, labels, GUI floating completion and terminal
@@ -430,8 +590,11 @@ Manual acceptance checklist:
    Ordinary buffer switches must not save, and saves must not trim unrelated
    trailing spaces. Check compilation ANSI colors and help placement.
 4. Capture personal/work TODOs and a habit. Create a project note and capture
-   its task; verify the right scoped/combined agenda and refile destinations.
-   Complete a recurring task; verify its repeater and LOGBOOK behavior.
+   its task, then add a dated TODO to a daily note. Verify the dashboard shows
+   up to five Personal and five Work tasks and that the default agenda shows
+   the two-week window; check the right scoped/combined agenda and refile
+   destinations. Complete a recurring task; verify its repeater and LOGBOOK
+   behavior.
 5. Create notes in two domains and general. Add aliases/tags, insert an ID
    link, view backlinks, compare scoped/all search, then rebuild the index.
    IDs and source notes must remain intact. Open the graph explicitly.
@@ -442,3 +605,13 @@ Manual acceptance checklist:
    required format with your installed tools. Verify citations/bibliographies
    separately in each output. Source blocks must not run during export; manual
    execution must still ask. Do not use sensitive real HTTP endpoints in tests.
+8. Restart Emacs and confirm the dashboard is the startup buffer. Press RET on
+   a project, recent file, agenda task, news article, and Open full feed. Repeat
+   in an Org buffer on a bracket link and a bare URL; insert state must still
+   insert newlines.
+9. Run SPC N s and choose topics, SPC N u to update feeds, and check five cached
+   articles per site. Install any missing grammar with SPC T i, then SPC T s.
+   Check the modeline icons/colors, VC, diagnostics, LSP, and time. If glyphs are
+   missing, run M-x et/install-nerd-fonts.
+10. Without configuring mail, SPC M m must explain that mu4e-maildir is missing.
+    After setting mu4e-maildir in .local/settings.el, SPC M m opens mu4e.

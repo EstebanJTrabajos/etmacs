@@ -51,7 +51,7 @@
 (defun et/program-editing-defaults ()
   "Use conservative pairing and comment-only fill in programming buffers."
   (setq-local comment-auto-fill-only-comments t)
-  ;; Lisp gets non-strict Smartparens below, never two pairing engines.
+  ;; Lisp gets Parinfer and rainbow delimiters below, never two pairing engines.
   (unless (derived-mode-p 'emacs-lisp-mode 'lisp-interaction-mode 'lisp-mode 'scheme-mode)
     (electric-pair-local-mode 1)))
 (add-hook 'prog-mode-hook #'et/program-editing-defaults)
@@ -110,12 +110,29 @@
   (define-key et/edit-map (kbd "d") #'crux-duplicate-current-line-or-region)
   (define-key et/file-map (kbd "R") #'crux-rename-file-and-buffer))
 
+(with-eval-after-load 'parinfer-rust-mode
+  (setq parinfer-rust-library-directory
+        (expand-file-name "parinfer-rust/" et/state-directory)
+        parinfer-rust-library
+        (expand-file-name parinfer-rust--lib-name
+                          parinfer-rust-library-directory)
+        ;; Lisp buffers disable electric-pair explicitly; indent-tabs-mode is a
+        ;; variable, not a competing structural mode, so neither should prompt.
+        parinfer-rust-troublesome-modes
+        (delq 'indent-tabs-mode
+              (delq 'electric-pair-mode parinfer-rust-troublesome-modes))
+        parinfer-rust-check-before-enable nil))
+
 (defun et/lisp-editing-defaults ()
-  "Enable non-strict Lisp pairing and a buffer-local structural command map."
-  (when (require 'smartparens nil t)
-    (electric-pair-local-mode -1)
-    (smartparens-mode 1)
-    (setq-local et/local-leader-map et/lisp-edit-map)))
+  "Enable Parinfer and rainbow delimiters in Lisp buffers."
+  (electric-pair-local-mode -1)
+  (when (require 'rainbow-delimiters nil t)
+    (rainbow-delimiters-mode 1))
+  (when (require 'parinfer-rust-mode nil t)
+    ;; Batch sessions must not prompt for a network download.
+    (when (or (file-exists-p parinfer-rust-library) (not noninteractive))
+      (parinfer-rust-mode 1)))
+  (setq-local et/local-leader-map et/lisp-edit-map))
 (dolist (hook '(emacs-lisp-mode-hook lisp-interaction-mode-hook lisp-mode-hook scheme-mode-hook))
   (add-hook hook #'et/lisp-editing-defaults))
 ;; *scratch* may have entered Lisp mode before this module was loaded.
@@ -123,12 +140,19 @@
   (with-current-buffer scratch
     (when (derived-mode-p 'lisp-interaction-mode)
       (et/lisp-editing-defaults))))
-(with-eval-after-load 'smartparens
-  (define-key et/lisp-edit-map (kbd "f") #'sp-forward-sexp)
-  (define-key et/lisp-edit-map (kbd "b") #'sp-backward-sexp)
-  (define-key et/lisp-edit-map (kbd ">") #'sp-forward-slurp-sexp)
-  (define-key et/lisp-edit-map (kbd "<") #'sp-forward-barf-sexp)
-  (define-key et/lisp-edit-map (kbd "s") #'sp-splice-sexp))
+(define-key et/lisp-edit-map (kbd "f") #'forward-sexp)
+(define-key et/lisp-edit-map (kbd "b") #'backward-sexp)
+
+(defun et/install-parinfer-rust ()
+  "Download the parinfer-rust dynamic library used by Lisp buffers."
+  (interactive)
+  (unless (require 'parinfer-rust-mode nil t)
+    (user-error "Install parinfer-rust-mode with et/install-packages first"))
+  (parinfer-rust--download-from-github
+   (car parinfer-rust-supported-versions)
+   parinfer-rust-library
+   parinfer-rust--lib-name)
+  (message "parinfer-rust installed; restart Emacs and reopen a Lisp buffer"))
 
 (use-package hl-todo
   :if (locate-library "hl-todo")
