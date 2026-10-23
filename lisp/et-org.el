@@ -412,6 +412,28 @@ are prompted for interactively.  TARGET-TYPE is either
         ((fboundp 'evil-shift-right-line) (evil-shift-right-line 1))
         (t (indent-rigidly (line-beginning-position) (line-end-position) 2))))
 
+(defvar et/org-agenda-map
+  (let ((map (make-sparse-keymap "Org agenda")))
+    (define-key map (kbd "j") #'org-agenda-next-line)
+    (define-key map (kbd "k") #'org-agenda-previous-line)
+    (define-key map (kbd "g") #'org-agenda-redo)
+    (define-key map (kbd "d") #'org-agenda-day-view)
+    (define-key map (kbd "w") #'org-agenda-week-view)
+    (define-key map (kbd "m") #'org-agenda-month-view)
+    (define-key map (kbd "t") #'org-agenda-todo)
+    (define-key map (kbd "s") #'org-agenda-schedule)
+    (define-key map (kbd "D") #'org-agenda-deadline)
+    (define-key map (kbd "r") #'org-agenda-refile)
+    (define-key map (kbd "a") #'org-agenda-archive)
+    (define-key map (kbd "S") #'org-agenda-show)
+    (define-key map (kbd "RET") #'org-agenda-switch-to)
+    (define-key map (kbd "TAB") #'org-agenda-goto)
+    (define-key map (kbd "x") #'org-agenda-exit)
+    (define-key map (kbd "q") #'org-agenda-quit)
+    map)
+  "Leader menu for `org-agenda-mode' buffers.")
+(et/register-package-leader 'org-agenda-mode et/org-agenda-map)
+
 (defun et/org-mode-defaults ()
   "Use Org's own indentation and the mode-local leader map."
   (org-indent-mode 1)

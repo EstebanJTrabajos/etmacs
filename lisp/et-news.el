@@ -292,6 +292,7 @@ run with the new buffer so a later AI pass can fill it and add tags."
 (define-key et/news-map (kbd "m") #'et/news-mark-read)
 (define-key et/news-map (kbd "M") #'et/news-mark-unread)
 (define-key et/news-map (kbd "r") #'et/news-create-roam-node)
+(et/register-package-leader 'elfeed-search-mode et/news-map)
 (et/news-load-selection)
 (provide 'et-news)
 ;;; et-news.el ends here

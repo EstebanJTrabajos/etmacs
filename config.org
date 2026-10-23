@@ -130,10 +130,12 @@ Use built-in history, saved cursor positions, Which Key, and window layout undo.
 Do not persist the kill ring. All histories may contain private paths/input; delete =.local/= state
 selectively when needed. Never sync this directory with notes.
 
-Leader maps are ordinary keymaps, not a macro framework. =SPC= works in Evil
-normal/visual/motion states; =C-c SPC= is available in insert/Emacs states too.
-=SPC m= resolves a buffer-local map, allowing later Org and language modules
-to supply their own bindings without changing every other mode.
+Leader maps are ordinary keymaps, not a macro framework. =SPC= is the leader in
+Evil normal/visual/motion states in every buffer, including package buffers
+where Evil Collection binds =SPC= to a package command. =C-c SPC= remains
+available in insert/Emacs states. =SPC m= resolves a buffer-local or registered
+package menu, and =SPC ?= opens Which Key for the active mappings. Evil
+Collection supplies j/k/h/l navigation in package buffers.
 
 #+begin_src emacs-lisp :tangle lisp/et-core.el
 ;;; et-core.el --- Generated from config.org -*- lexical-binding: t; -*-
@@ -201,6 +203,7 @@ to supply their own bindings without changing every other mode.
   (scratch-buffer))
 
 (define-key et/leader-map (kbd "SPC") #'execute-extended-command)
+(define-key et/leader-map (kbd "?") #'which-key-show-top-level)
 (define-key et/leader-map (kbd "u") #'universal-argument)
 (define-key et/leader-map (kbd ".") #'find-file)
 ;; Keymap prompts alone are not Which Key descriptions.  Named bindings keep
@@ -241,6 +244,93 @@ to supply their own bindings without changing every other mode.
 (define-key et/help-map (kbd "p") #'et/install-packages)
 (global-set-key (kbd "C-c SPC") et/leader-map)
 
+(defvar et/package-leader-maps nil
+  "Alist mapping major modes to `SPC m' leader keymaps.")
+
+(defun et/package-leader-map ()
+  "Return the package leader keymap matching the current major mode."
+  (or (cdr (assq major-mode et/package-leader-maps))
+      (seq-some (lambda (entry)
+                  (when (derived-mode-p (car entry))
+                    (cdr entry)))
+                et/package-leader-maps)))
+
+(defun et/package-leader-defaults ()
+  "Install the package leader menu for the current buffer."
+  (let ((map (et/package-leader-map)))
+    (when map (setq-local et/local-leader-map map))))
+
+(defun et/register-package-leader (mode map)
+  "Use MAP as the `SPC m' menu for MODE and its derived modes."
+  (setq et/package-leader-maps
+        (cons (cons mode map)
+              (assq-delete-all mode et/package-leader-maps)))
+  (add-hook (intern (concat (symbol-name mode) "-hook"))
+            #'et/package-leader-defaults))
+
+(defvar et/leader-intercept-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "SPC") et/leader-map)
+    map)
+  "Evil state map that keeps `SPC' on the leader in every buffer.")
+
+(defun et/install-leader-intercept ()
+  "Make `SPC' take priority over package-local Evil bindings."
+  (add-to-list 'emulation-mode-map-alists
+               (list (cons 'evil-normal-state-local-minor-mode
+                           et/leader-intercept-map)
+                     (cons 'evil-visual-state-local-minor-mode
+                           et/leader-intercept-map)
+                     (cons 'evil-motion-state-local-minor-mode
+                           et/leader-intercept-map))))
+
+(defvar et/help-buffer-map
+  (let ((map (make-sparse-keymap "Help buffer")))
+    (define-key map (kbd "b") #'help-go-back)
+    (define-key map (kbd "f") #'help-go-forward)
+    (define-key map (kbd "v") #'help-view-source)
+    (define-key map (kbd "RET") #'push-button)
+    (define-key map (kbd "q") #'quit-window)
+    map)
+  "Leader menu for `help-mode' buffers.")
+(et/register-package-leader 'help-mode et/help-buffer-map)
+
+(defvar et/dired-map
+  (let ((map (make-sparse-keymap "Dired")))
+    (define-key map (kbd "f") #'dired-find-file)
+    (define-key map (kbd "o") #'dired-find-file-other-window)
+    (define-key map (kbd "d") #'dired-flag-file-deletion)
+    (define-key map (kbd "x") #'dired-do-delete)
+    (define-key map (kbd "R") #'dired-do-rename)
+    (define-key map (kbd "C") #'dired-do-copy)
+    (define-key map (kbd "q") #'quit-window)
+    map)
+  "Leader menu for `dired-mode'.")
+(et/register-package-leader 'dired-mode et/dired-map)
+
+(defvar et/compilation-map
+  (let ((map (make-sparse-keymap "Compilation")))
+    (define-key map (kbd "g") #'recompile)
+    (define-key map (kbd "n") #'next-error-no-select)
+    (define-key map (kbd "p") #'previous-error-no-select)
+    (define-key map (kbd "RET") #'compile-goto-error)
+    (define-key map (kbd "q") #'quit-window)
+    map)
+  "Leader menu for `compilation-mode'.")
+(et/register-package-leader 'compilation-mode et/compilation-map)
+
+(defvar et/ibuffer-map
+  (let ((map (make-sparse-keymap "Ibuffer")))
+    (define-key map (kbd "RET") #'ibuffer-visit-buffer)
+    (define-key map (kbd "x") #'ibuffer-do-delete)
+    (define-key map (kbd "s") #'ibuffer-do-save)
+    (define-key map (kbd "t") #'ibuffer-toggle-marks)
+    (define-key map (kbd "u") #'ibuffer-unmark-all)
+    (define-key map (kbd "q") #'quit-window)
+    map)
+  "Leader menu for `ibuffer-mode'.")
+(et/register-package-leader 'ibuffer-mode et/ibuffer-map)
+
 (defun et/reload-config ()
   "Re-tangle config.org, then restart Emacs."
   (interactive)
@@ -272,13 +362,15 @@ to supply their own bindings without changing every other mode.
         evil-undo-system 'undo-redo)
   :config
   (evil-mode 1)
-  (evil-define-key '(normal visual motion) 'global (kbd "SPC") et/leader-map))
+  (evil-define-key '(normal visual motion) 'global (kbd "SPC") et/leader-map)
+  (et/install-leader-intercept))
 
 (use-package evil-collection
   :if (and (featurep 'evil) (locate-library "evil-collection"))
   :demand t
   :config
-  (evil-collection-init))
+  (evil-collection-init)
+  (et/install-leader-intercept))
 
 (use-package evil-easymotion
   :commands evilem-create evilem-default-keybindings)
@@ -635,6 +727,22 @@ on demand, not forced into every workspace. Pop-up rules use built-in
   (define-key corfu-map (kbd "S-TAB") #'corfu-previous)
   (define-key corfu-map (kbd "<backtab>") #'corfu-previous)
   (define-key corfu-map (kbd "RET") #'corfu-insert))
+
+(defvar et/treemacs-map
+  (let ((map (make-sparse-keymap "Treemacs")))
+    (define-key map (kbd "j") #'treemacs-next-line)
+    (define-key map (kbd "k") #'treemacs-previous-line)
+    (define-key map (kbd "a") #'treemacs-add-project-to-workspace)
+    (define-key map (kbd "R") #'treemacs-remove-project-from-workspace)
+    (define-key map (kbd "r") #'treemacs-refresh)
+    (define-key map (kbd "f") #'treemacs-create-file)
+    (define-key map (kbd "d") #'treemacs-create-dir)
+    (define-key map (kbd "RET") #'treemacs-RET-action)
+    (define-key map (kbd "TAB") #'treemacs-TAB-action)
+    (define-key map (kbd "q") #'treemacs-quit)
+    map)
+  "Leader menu for Treemacs buffers.")
+(et/register-package-leader 'treemacs-mode et/treemacs-map)
 
 (use-package treemacs
   :if (locate-library "treemacs")
@@ -1314,6 +1422,7 @@ run with the new buffer so a later AI pass can fill it and add tags."
 (define-key et/news-map (kbd "m") #'et/news-mark-read)
 (define-key et/news-map (kbd "M") #'et/news-mark-unread)
 (define-key et/news-map (kbd "r") #'et/news-create-roam-node)
+(et/register-package-leader 'elfeed-search-mode et/news-map)
 (et/news-load-selection)
 (provide 'et-news)
 ;;; et-news.el ends here
@@ -1823,6 +1932,26 @@ an external dependency; Forge/hosting integration is deferred until wanted.
 Diff highlighting is local-only here to avoid automatic remote Git processes.
 
 #+begin_src emacs-lisp :tangle lisp/et-editing.el
+(defvar et/magit-map
+  (let ((map (make-sparse-keymap "Magit")))
+    (define-key map (kbd "j") #'magit-section-forward)
+    (define-key map (kbd "k") #'magit-section-backward)
+    (define-key map (kbd "g") #'magit-refresh)
+    (define-key map (kbd "TAB") #'magit-section-toggle)
+    (define-key map (kbd "RET") #'magit-visit-thing)
+    (define-key map (kbd "s") #'magit-stage)
+    (define-key map (kbd "u") #'magit-unstage)
+    (define-key map (kbd "c") #'magit-commit)
+    (define-key map (kbd "P") #'magit-push)
+    (define-key map (kbd "F") #'magit-pull)
+    (define-key map (kbd "l") #'magit-log)
+    (define-key map (kbd "d") #'magit-diff)
+    (define-key map (kbd "b") #'magit-branch)
+    (define-key map (kbd "q") #'magit-mode-bury-buffer)
+    map)
+  "Leader menu for Magit buffers.")
+(et/register-package-leader 'magit-mode et/magit-map)
+
 (use-package magit
   :if (locate-library "magit")
   :commands (magit-status magit-file-dispatch magit-log-buffer-file magit-blame-addition)
@@ -2297,6 +2426,28 @@ are prompted for interactively.  TARGET-TYPE is either
   (cond ((org-at-heading-p) (org-do-demote))
         ((fboundp 'evil-shift-right-line) (evil-shift-right-line 1))
         (t (indent-rigidly (line-beginning-position) (line-end-position) 2))))
+
+(defvar et/org-agenda-map
+  (let ((map (make-sparse-keymap "Org agenda")))
+    (define-key map (kbd "j") #'org-agenda-next-line)
+    (define-key map (kbd "k") #'org-agenda-previous-line)
+    (define-key map (kbd "g") #'org-agenda-redo)
+    (define-key map (kbd "d") #'org-agenda-day-view)
+    (define-key map (kbd "w") #'org-agenda-week-view)
+    (define-key map (kbd "m") #'org-agenda-month-view)
+    (define-key map (kbd "t") #'org-agenda-todo)
+    (define-key map (kbd "s") #'org-agenda-schedule)
+    (define-key map (kbd "D") #'org-agenda-deadline)
+    (define-key map (kbd "r") #'org-agenda-refile)
+    (define-key map (kbd "a") #'org-agenda-archive)
+    (define-key map (kbd "S") #'org-agenda-show)
+    (define-key map (kbd "RET") #'org-agenda-switch-to)
+    (define-key map (kbd "TAB") #'org-agenda-goto)
+    (define-key map (kbd "x") #'org-agenda-exit)
+    (define-key map (kbd "q") #'org-agenda-quit)
+    map)
+  "Leader menu for `org-agenda-mode' buffers.")
+(et/register-package-leader 'org-agenda-mode et/org-agenda-map)
 
 (defun et/org-mode-defaults ()
   "Use Org's own indentation and the mode-local leader map."
