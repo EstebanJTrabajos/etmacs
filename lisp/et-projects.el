@@ -155,6 +155,22 @@
   (define-key corfu-map (kbd "<backtab>") #'corfu-previous)
   (define-key corfu-map (kbd "RET") #'corfu-insert))
 
+(defvar et/treemacs-map
+  (let ((map (make-sparse-keymap "Treemacs")))
+    (define-key map (kbd "j") #'treemacs-next-line)
+    (define-key map (kbd "k") #'treemacs-previous-line)
+    (define-key map (kbd "a") #'treemacs-add-project-to-workspace)
+    (define-key map (kbd "R") #'treemacs-remove-project-from-workspace)
+    (define-key map (kbd "r") #'treemacs-refresh)
+    (define-key map (kbd "f") #'treemacs-create-file)
+    (define-key map (kbd "d") #'treemacs-create-dir)
+    (define-key map (kbd "RET") #'treemacs-RET-action)
+    (define-key map (kbd "TAB") #'treemacs-TAB-action)
+    (define-key map (kbd "q") #'treemacs-quit)
+    map)
+  "Leader menu for Treemacs buffers.")
+(et/register-package-leader 'treemacs-mode et/treemacs-map)
+
 (use-package treemacs
   :if (locate-library "treemacs")
   :commands (treemacs treemacs-add-and-display-current-project-exclusively)

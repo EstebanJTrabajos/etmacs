@@ -222,6 +222,8 @@
   (should (eq 'et/org-todo-showstopper
               (cdr (assoc "SHOWSTOPPER" org-todo-keyword-faces))))
   (should (face-attribute 'et/org-todo-showstopper :underline))
+  (should (eq 'et/org-todo-red (et/org-state-face "BLOCKED")))
+  (should (eq 'org-todo (et/org-state-face "TODO")))
   (dolist (state '("IN-PROGRESS" "VALIDATION" "HOLD" "BLOCKED" "IDEA"
                    "SHOWSTOPPER"))
     (should (member state et/org-open-task-states))))

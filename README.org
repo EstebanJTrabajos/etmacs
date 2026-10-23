@@ -61,6 +61,8 @@ Custom functions *and variables* use =et/=. File and feature names retain =et-=
 | Keys                        | Action                                    |
 |-----------------------------+-------------------------------------------|
 | SPC SPC                     | Commands                                  |
+| SPC ?                       | Which Key for the current mappings        |
+| SPC m                       | Package/mode leader menu                  |
 | SPC f f / SPC f s / SPC f c | Find file / save / open config            |
 | SPC b b / SPC b B           | Workspace buffers / all buffers           |
 | SPC w v / SPC w s           | Split right / below                       |
@@ -75,13 +77,31 @@ Custom functions *and variables* use =et/=. File and feature names retain =et-=
 | SPC N m / M / r             | Mark read / unread / create a roam note   |
 | SPC T i / s                 | Install / report tree-sitter grammars     |
 | RET (Evil normal)           | Follow button, Org link, URL, or id link  |
+| C-- / C-+ (or C-=)          | Global font size down / up                |
 | C-j / C-k (menus)           | Next / previous completion or menu item   |
 
-=SPC= is a leader in Evil normal/visual/motion states; ordinary Space inserts
-spaces in insert state. =C-c SPC= is the alternative leader. Which Key groups
-are labelled files, buffers, windows, projects, notes, git, help, themes,
-workspaces, jump, edit, AI, mail, news, tree-sitter and mode commands—not just
-"prefix".
+=SPC= is a leader in Evil normal/visual/motion states in every buffer, including
+package buffers where Evil Collection normally binds =SPC= to a package command;
+ordinary Space inserts spaces in insert state. =C-c SPC= is the alternative
+leader. =SPC ?= shows Which Key for the current mappings, and =SPC m= shows the
+package/mode menu. Evil Collection supplies j/k/h/l navigation in package
+buffers. Which Key groups are labelled files, buffers, windows, projects, notes,
+git, help, themes, workspaces, jump, edit, AI, mail, news, tree-sitter and mode
+commands—not just "prefix". =C--= and =C-+= (also =C-==) adjust the global font
+size in every buffer and frame; =M--= remains negative-argument.
+
+Package menus available at =SPC m=:
+
+| Buffer             | Menu                                              |
+|--------------------+---------------------------------------------------|
+| org-agenda         | Day/week/month, todo, schedule, refile, archive   |
+| Magit              | Sections, stage/unstage, commit, push/pull, log   |
+| Elfeed search      | Open, update, filter, mark, create roam note      |
+| Treemacs           | Navigate, add/remove project, create file/dir     |
+| Help               | Back/forward, view source, follow, quit           |
+| Dired              | Find, mark delete, rename, copy, quit             |
+| Compilation        | Recompile, next/previous error, visit, quit       |
+| Ibuffer            | Visit, delete, save, toggle marks, unmark, quit   |
 
 Vertico handles minibuffer completion; Corfu handles in-buffer CAPFs. They do
 not compete. Company/Cape are not installed without a specific need. Try Lisp
@@ -136,8 +156,10 @@ templates on startup. They contain data only, never credentials.
 Elfeed reads Scientific American, the New York Times
 Home/World/U.S./Business/Technology/Science/Health/Sports/Arts feeds, Decipher,
 ArsTechnica Security, TechNet/Microsoft Security, SecurityWeek, and
-BleepingComputer. All feeds are downloaded; =SPC N s= chooses which topics feed
-the dashboard's five newest articles per site. =SPC N u= updates feeds, =SPC N o=
+BleepingComputer. A combined Emacs site reads r/emacs, Planet Emacslife, Sacha
+Chua's Emacs News, Mastering Emacs, System Crafters, and Emacs Stack Exchange.
+All feeds are downloaded; =SPC N s= chooses which topics feed the dashboard's
+five newest articles per site. =SPC N u= updates feeds, =SPC N o=
 opens Elfeed, and each site's dashboard button opens its full Elfeed search.
 =TAB= in the dashboard collapses or expands the article list for the feed at
 point. State lives in =.local/news.el= and =.local/elfeed/=; startup uses only

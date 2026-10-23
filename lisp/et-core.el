@@ -63,6 +63,7 @@
   (scratch-buffer))
 
 (define-key et/leader-map (kbd "SPC") #'execute-extended-command)
+(define-key et/leader-map (kbd "?") #'which-key-show-top-level)
 (define-key et/leader-map (kbd "u") #'universal-argument)
 (define-key et/leader-map (kbd ".") #'find-file)
 ;; Keymap prompts alone are not Which Key descriptions.  Named bindings keep
@@ -103,6 +104,124 @@
 (define-key et/help-map (kbd "p") #'et/install-packages)
 (global-set-key (kbd "C-c SPC") et/leader-map)
 
+(defun et/zoom-in ()
+  "Increase the font size in every buffer and frame."
+  (interactive)
+  (if (fboundp 'global-text-scale-adjust)
+      (global-text-scale-adjust 1)
+    (text-scale-increase 1)))
+
+(defun et/zoom-out ()
+  "Decrease the font size in every buffer and frame."
+  (interactive)
+  (if (fboundp 'global-text-scale-adjust)
+      (global-text-scale-adjust -1)
+    (text-scale-decrease 1)))
+
+(defvar et/zoom-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C--") #'et/zoom-out)
+    (define-key map (kbd "C-+") #'et/zoom-in)
+    (define-key map (kbd "C-=") #'et/zoom-in)
+    map)
+  "Global zoom keys that take precedence in every buffer.")
+
+(defvar et/zoom-mode t
+  "Enable `et/zoom-map' everywhere.")
+
+(add-to-list 'emulation-mode-map-alists
+             (list (cons 'et/zoom-mode et/zoom-map)))
+(global-set-key (kbd "C--") #'et/zoom-out)
+(global-set-key (kbd "C-+") #'et/zoom-in)
+(global-set-key (kbd "C-=") #'et/zoom-in)
+
+(defvar et/package-leader-maps nil
+  "Alist mapping major modes to `SPC m' leader keymaps.")
+
+(defun et/package-leader-map ()
+  "Return the package leader keymap matching the current major mode."
+  (or (cdr (assq major-mode et/package-leader-maps))
+      (seq-some (lambda (entry)
+                  (when (derived-mode-p (car entry))
+                    (cdr entry)))
+                et/package-leader-maps)))
+
+(defun et/package-leader-defaults ()
+  "Install the package leader menu for the current buffer."
+  (let ((map (et/package-leader-map)))
+    (when map (setq-local et/local-leader-map map))))
+
+(defun et/register-package-leader (mode map)
+  "Use MAP as the `SPC m' menu for MODE and its derived modes."
+  (setq et/package-leader-maps
+        (cons (cons mode map)
+              (assq-delete-all mode et/package-leader-maps)))
+  (add-hook (intern (concat (symbol-name mode) "-hook"))
+            #'et/package-leader-defaults))
+
+(defvar et/leader-intercept-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "SPC") et/leader-map)
+    map)
+  "Evil state map that keeps `SPC' on the leader in every buffer.")
+
+(defun et/install-leader-intercept ()
+  "Make `SPC' take priority over package-local Evil bindings."
+  (add-to-list 'emulation-mode-map-alists
+               (list (cons 'evil-normal-state-local-minor-mode
+                           et/leader-intercept-map)
+                     (cons 'evil-visual-state-local-minor-mode
+                           et/leader-intercept-map)
+                     (cons 'evil-motion-state-local-minor-mode
+                           et/leader-intercept-map))))
+
+(defvar et/help-buffer-map
+  (let ((map (make-sparse-keymap "Help buffer")))
+    (define-key map (kbd "b") #'help-go-back)
+    (define-key map (kbd "f") #'help-go-forward)
+    (define-key map (kbd "v") #'help-view-source)
+    (define-key map (kbd "RET") #'push-button)
+    (define-key map (kbd "q") #'quit-window)
+    map)
+  "Leader menu for `help-mode' buffers.")
+(et/register-package-leader 'help-mode et/help-buffer-map)
+
+(defvar et/dired-map
+  (let ((map (make-sparse-keymap "Dired")))
+    (define-key map (kbd "f") #'dired-find-file)
+    (define-key map (kbd "o") #'dired-find-file-other-window)
+    (define-key map (kbd "d") #'dired-flag-file-deletion)
+    (define-key map (kbd "x") #'dired-do-delete)
+    (define-key map (kbd "R") #'dired-do-rename)
+    (define-key map (kbd "C") #'dired-do-copy)
+    (define-key map (kbd "q") #'quit-window)
+    map)
+  "Leader menu for `dired-mode'.")
+(et/register-package-leader 'dired-mode et/dired-map)
+
+(defvar et/compilation-map
+  (let ((map (make-sparse-keymap "Compilation")))
+    (define-key map (kbd "g") #'recompile)
+    (define-key map (kbd "n") #'next-error-no-select)
+    (define-key map (kbd "p") #'previous-error-no-select)
+    (define-key map (kbd "RET") #'compile-goto-error)
+    (define-key map (kbd "q") #'quit-window)
+    map)
+  "Leader menu for `compilation-mode'.")
+(et/register-package-leader 'compilation-mode et/compilation-map)
+
+(defvar et/ibuffer-map
+  (let ((map (make-sparse-keymap "Ibuffer")))
+    (define-key map (kbd "RET") #'ibuffer-visit-buffer)
+    (define-key map (kbd "x") #'ibuffer-do-delete)
+    (define-key map (kbd "s") #'ibuffer-do-save)
+    (define-key map (kbd "t") #'ibuffer-toggle-marks)
+    (define-key map (kbd "u") #'ibuffer-unmark-all)
+    (define-key map (kbd "q") #'quit-window)
+    map)
+  "Leader menu for `ibuffer-mode'.")
+(et/register-package-leader 'ibuffer-mode et/ibuffer-map)
+
 (defun et/reload-config ()
   "Re-tangle config.org, then restart Emacs."
   (interactive)
@@ -134,13 +253,15 @@
         evil-undo-system 'undo-redo)
   :config
   (evil-mode 1)
-  (evil-define-key '(normal visual motion) 'global (kbd "SPC") et/leader-map))
+  (evil-define-key '(normal visual motion) 'global (kbd "SPC") et/leader-map)
+  (et/install-leader-intercept))
 
 (use-package evil-collection
   :if (and (featurep 'evil) (locate-library "evil-collection"))
   :demand t
   :config
-  (evil-collection-init))
+  (evil-collection-init)
+  (et/install-leader-intercept))
 
 (use-package evil-easymotion
   :commands evilem-create evilem-default-keybindings)

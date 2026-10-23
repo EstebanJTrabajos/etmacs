@@ -31,7 +31,19 @@
     (securityweek "SecurityWeek"
      (("All" "https://www.securityweek.com/feed/" securityweek-all)))
     (bleepingcomputer "BleepingComputer"
-     (("All" "https://www.bleepingcomputer.com/feed/" bleepingcomputer-all))))
+     (("All" "https://www.bleepingcomputer.com/feed/" bleepingcomputer-all)))
+    (emacs "Emacs"
+     (("r/emacs" "https://www.reddit.com/r/emacs/.rss" emacs-reddit)
+      ("Planet Emacslife" "https://planet.emacslife.com/atom.xml"
+       planet-emacslife)
+      ("Emacs News" "https://sachachua.com/blog/category/emacs-news/feed"
+       emacs-news)
+      ("Mastering Emacs" "https://www.masteringemacs.org/feed"
+       mastering-emacs)
+      ("System Crafters" "https://systemcrafters.net/rss/"
+       system-crafters)
+      ("Emacs Stack Exchange" "https://emacs.stackexchange.com/feeds"
+       emacs-stackexchange))))
   "News sites and their (LABEL URL TAG) feeds.")
 
 (defun et/news-default-selection ()
@@ -292,6 +304,7 @@ run with the new buffer so a later AI pass can fill it and add tags."
 (define-key et/news-map (kbd "m") #'et/news-mark-read)
 (define-key et/news-map (kbd "M") #'et/news-mark-unread)
 (define-key et/news-map (kbd "r") #'et/news-create-roam-node)
+(et/register-package-leader 'elfeed-search-mode et/news-map)
 (et/news-load-selection)
 (provide 'et-news)
 ;;; et-news.el ends here

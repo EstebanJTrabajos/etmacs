@@ -9,6 +9,7 @@
 (declare-function et/org-agenda "et-org" (scope))
 (declare-function et/org-open-tasks "et-org" (&optional files))
 (declare-function et/org-refresh-agenda "et-org" (&optional scope))
+(declare-function et/org-state-face "et-org" (state))
 (declare-function et/org-task-due-label "et-org" (task))
 (declare-function et/org-task-sort-predicate "et-org" (a b))
 
@@ -172,8 +173,9 @@ is sorted by importance and date, then limited to
             (dolist (task tasks)
               (let ((task task))
                 (insert "    ")
-                (insert (propertize (format "%-4s " (plist-get task :state))
-                                    'face 'org-todo))
+                (let ((state (plist-get task :state)))
+                  (insert (propertize (format "%-12s " state)
+                                      'face (et/org-state-face state))))
                 (et/dashboard-insert-button
                  (plist-get task :heading)
                  (lambda (_button)

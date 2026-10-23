@@ -158,6 +158,26 @@
   :if (locate-library "hl-todo")
   :hook (prog-mode . hl-todo-mode))
 
+(defvar et/magit-map
+  (let ((map (make-sparse-keymap "Magit")))
+    (define-key map (kbd "j") #'magit-section-forward)
+    (define-key map (kbd "k") #'magit-section-backward)
+    (define-key map (kbd "g") #'magit-refresh)
+    (define-key map (kbd "TAB") #'magit-section-toggle)
+    (define-key map (kbd "RET") #'magit-visit-thing)
+    (define-key map (kbd "s") #'magit-stage)
+    (define-key map (kbd "u") #'magit-unstage)
+    (define-key map (kbd "c") #'magit-commit)
+    (define-key map (kbd "P") #'magit-push)
+    (define-key map (kbd "F") #'magit-pull)
+    (define-key map (kbd "l") #'magit-log)
+    (define-key map (kbd "d") #'magit-diff)
+    (define-key map (kbd "b") #'magit-branch)
+    (define-key map (kbd "q") #'magit-mode-bury-buffer)
+    map)
+  "Leader menu for Magit buffers.")
+(et/register-package-leader 'magit-mode et/magit-map)
+
 (use-package magit
   :if (locate-library "magit")
   :commands (magit-status magit-file-dispatch magit-log-buffer-file magit-blame-addition)
