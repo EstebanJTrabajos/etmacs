@@ -207,6 +207,55 @@
     (org-back-to-heading t)
     (should (et/org-agenda-skip-outside-window))))
 
+(ert-deftest et/org-todo-states-and-faces ()
+  (let ((states (apply #'append (mapcar #'cdr org-todo-keywords))))
+    (dolist (state '("IN-PROGRESS(p)" "VALIDATION(v)" "HOLD(h)" "BLOCKED(b)"
+                     "IDEA(i)" "SHOWSTOPPER(s)"))
+      (should (member state states)))
+    (dolist (state '("IN-PROGRESS" "VALIDATION" "HOLD" "BLOCKED" "IDEA"
+                     "SHOWSTOPPER" "WAIT" "NEXT"))
+      (should (assoc state org-todo-keyword-faces))))
+  (should (eq 'et/org-todo-green
+              (cdr (assoc "IN-PROGRESS" org-todo-keyword-faces))))
+  (should (equal "#1ea01e"
+                 (face-attribute 'et/org-todo-green :foreground)))
+  (should (eq 'et/org-todo-showstopper
+              (cdr (assoc "SHOWSTOPPER" org-todo-keyword-faces))))
+  (should (face-attribute 'et/org-todo-showstopper :underline))
+  (dolist (state '("IN-PROGRESS" "VALIDATION" "HOLD" "BLOCKED" "IDEA"
+                   "SHOWSTOPPER"))
+    (should (member state et/org-open-task-states))))
+
+(ert-deftest et/org-task-importance-includes-new-states ()
+  (should (< (et/org-task-importance '(:state "SHOWSTOPPER"))
+             (et/org-task-importance '(:state "BLOCKED"))))
+  (should (< (et/org-task-importance '(:state "BLOCKED"))
+             (et/org-task-importance '(:state "IN-PROGRESS"))))
+  (should (< (et/org-task-importance '(:state "IN-PROGRESS"))
+             (et/org-task-importance '(:state "NEXT"))))
+  (should (< (et/org-task-importance '(:state "NEXT"))
+             (et/org-task-importance '(:state "TODO"))))
+  (should (< (et/org-task-importance '(:state "TODO"))
+             (et/org-task-importance '(:state "WAIT")))))
+
+(ert-deftest et/org-agenda-keeps-undated-actionable-states ()
+  (with-temp-buffer
+    (org-mode)
+    (dolist (state '("SHOWSTOPPER" "BLOCKED" "IN-PROGRESS" "VALIDATION"
+                     "NEXT" "WAIT" "HOLD" "IDEA" "TODO"))
+      (insert (format "* %s Undated %s\n" state state)))
+    (dolist (state '("SHOWSTOPPER" "BLOCKED" "IN-PROGRESS" "VALIDATION"
+                     "NEXT" "WAIT"))
+      (goto-char (point-min))
+      (search-forward (format "Undated %s" state))
+      (org-back-to-heading t)
+      (should-not (et/org-agenda-skip-outside-window)))
+    (dolist (state '("HOLD" "IDEA" "TODO"))
+      (goto-char (point-min))
+      (search-forward (format "Undated %s" state))
+      (org-back-to-heading t)
+      (should (et/org-agenda-skip-outside-window)))))
+
 (ert-deftest et/org-heading-promote-demote-keys-and-behavior ()
   (should (eq (lookup-key et/org-map (kbd "<")) 'et/org-promote-heading))
   (should (eq (lookup-key et/org-map (kbd ">")) 'et/org-demote-heading))
@@ -232,6 +281,7 @@
     (should (bound-and-true-p org-super-agenda-mode))
     (should org-super-agenda-groups))
   (when (locate-library "org-modern")
+    (should (equal et/org-todo-faces org-modern-todo-faces))
     (with-temp-buffer
       (org-mode)
       (should (bound-and-true-p org-modern-mode)))))

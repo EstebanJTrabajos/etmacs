@@ -57,8 +57,53 @@
   (format "* TODO %%?\nSCHEDULED: <%s .+1d>\n:PROPERTIES:\n:STYLE: habit\n:END:\n"
           (format-time-string "%Y-%m-%d %a")))
 
-(defvar et/org-open-task-states '("TODO" "NEXT" "WAIT")
+(defface et/org-todo-yellow
+  '((t :foreground "#b8860b" :weight bold))
+  "Yellow TODO keyword face.")
+
+(defface et/org-todo-orange
+  '((t :foreground "#ca6f39" :weight bold))
+  "Orange TODO keyword face.")
+
+(defface et/org-todo-green
+  '((t :foreground "#1ea01e" :weight bold))
+  "Green TODO keyword face.")
+
+(defface et/org-todo-blue
+  '((t :foreground "#2327dc" :weight bold))
+  "Blue TODO keyword face.")
+
+(defface et/org-todo-blue-alt
+  '((t :foreground "#2268a7" :weight bold))
+  "Alternate blue TODO keyword face.")
+
+(defface et/org-todo-red
+  '((t :foreground "#ff0000" :weight bold))
+  "Red TODO keyword face.")
+
+(defface et/org-todo-showstopper
+  '((t :foreground "#ff0000" :weight bold :underline t))
+  "Showstopper TODO keyword face.")
+
+(defvar et/org-todo-faces
+  '(("NEXT" . et/org-todo-yellow)
+    ("WAIT" . et/org-todo-orange)
+    ("IN-PROGRESS" . et/org-todo-green)
+    ("VALIDATION" . et/org-todo-blue)
+    ("HOLD" . et/org-todo-orange)
+    ("BLOCKED" . et/org-todo-red)
+    ("IDEA" . et/org-todo-blue-alt)
+    ("SHOWSTOPPER" . et/org-todo-showstopper))
+  "Per-state TODO faces for Org and org-modern.")
+
+(defvar et/org-open-task-states
+  '("TODO" "NEXT" "WAIT" "IN-PROGRESS" "VALIDATION" "HOLD" "BLOCKED"
+    "IDEA" "SHOWSTOPPER")
   "Open TODO states collected for the dashboard and agenda.")
+
+(defvar et/org-agenda-undated-states
+  '("NEXT" "WAIT" "IN-PROGRESS" "VALIDATION" "BLOCKED" "SHOWSTOPPER")
+  "Undated open states that still appear in the default agenda.")
 
 (defun et/org-agenda-file-p (file)
   "Return non-nil when FILE is a real Org note, not a lock or autosave file."
@@ -126,7 +171,17 @@ Each plist has :heading, :state, :priority, :scheduled, :deadline,
   "Return TASK's importance score; lower is more important."
   (let ((state (plist-get task :state))
         (priority (plist-get task :priority)))
-    (+ (* 10 (pcase state ("NEXT" 0) ("TODO" 1) ("WAIT" 2) (_ 3)))
+    (+ (* 10 (pcase state
+               ("SHOWSTOPPER" 0)
+               ("BLOCKED" 1)
+               ("IN-PROGRESS" 2)
+               ("VALIDATION" 3)
+               ("NEXT" 4)
+               ("TODO" 5)
+               ("HOLD" 6)
+               ("WAIT" 7)
+               ("IDEA" 8)
+               (_ 9)))
        (pcase priority ("A" 0) ("B" 1) ("C" 2) (_ 3)))))
 
 (defun et/org-task-sort-predicate (a b)
@@ -157,21 +212,25 @@ Each plist has :heading, :state, :priority, :scheduled, :deadline,
 
 (defun et/org-agenda-skip-outside-window ()
   "Skip tasks without a deadline or schedule in the next two weeks.
-Undated NEXT and WAIT tasks are kept."
+Undated actionable states in `et/org-agenda-undated-states' are kept."
   (let* ((state (substring-no-properties (or (org-get-todo-state) "")))
          (deadline (org-entry-get nil "DEADLINE"))
          (scheduled (org-entry-get nil "SCHEDULED"))
          (due (or deadline scheduled))
          (last (+ (org-today) 13)))
-    (unless (or (and (member state '("NEXT" "WAIT")) (not due))
+    (unless (or (and (member state et/org-agenda-undated-states) (not due))
                 (and due
                      (condition-case nil
                          (<= (org-time-string-to-absolute due) last)
                        (error nil))))
       (line-end-position))))
 
-(setq org-todo-keywords '((sequence "TODO(t)" "NEXT(n)" "WAIT(w@/!)" "|"
-                                  "DONE(d!)" "CANCELLED(c@)"))
+(setq org-todo-keywords
+      '((sequence "TODO(t)" "NEXT(n)" "WAIT(w@/!)"
+                  "IN-PROGRESS(p)" "VALIDATION(v)" "HOLD(h)" "BLOCKED(b)"
+                  "IDEA(i)" "SHOWSTOPPER(s)"
+                  "|" "DONE(d!)" "CANCELLED(c@)"))
+      org-todo-keyword-faces et/org-todo-faces
       org-log-done 'time
       org-log-into-drawer "LOGBOOK"
       org-clock-into-drawer "LOGBOOK"
@@ -384,8 +443,12 @@ are prompted for interactively.  TARGET-TYPE is either
         '((:name "Overdue" :deadline past :scheduled past :order 0)
           (:name "Today" :deadline today :scheduled today :order 1)
           (:name "Next two weeks" :deadline future :scheduled future :order 2)
-          (:name "Next actions" :todo "NEXT" :order 3)
-          (:name "Waiting" :todo "WAIT" :order 4)))
+          (:name "Showstoppers" :todo "SHOWSTOPPER" :order 3)
+          (:name "Blocked" :todo "BLOCKED" :order 4)
+          (:name "In progress" :todo "IN-PROGRESS" :order 5)
+          (:name "Validation" :todo "VALIDATION" :order 6)
+          (:name "Next actions" :todo "NEXT" :order 7)
+          (:name "Waiting" :todo "WAIT" :order 8)))
   :config
   (org-super-agenda-mode 1))
 
@@ -393,6 +456,7 @@ are prompted for interactively.  TARGET-TYPE is either
   :if (locate-library "org-modern")
   :demand t
   :config
+  (setq org-modern-todo-faces et/org-todo-faces)
   (add-hook 'org-agenda-finalize-hook #'org-modern-agenda))
 
 (use-package org-pomodoro

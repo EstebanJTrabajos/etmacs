@@ -89,6 +89,27 @@
                        (mapcar (lambda (task) (plist-get task :heading))
                                visible)))))))
 
+(ert-deftest et/dashboard-includes-new-todo-states ()
+  (et/with-test-vault
+    (let* ((file (expand-file-name "personal/tasks.org" et/notes-directory))
+           (org-agenda-files (list file)))
+      (make-directory (file-name-directory file) t)
+      (with-temp-file file
+        (insert "* SHOWSTOPPER Critical\n")
+        (insert "* BLOCKED Waiting on vendor\n")
+        (insert "* IN-PROGRESS Working\n")
+        (insert "* VALIDATION Reviewing\n")
+        (insert "* HOLD Paused\n")
+        (insert "* IDEA Maybe later\n"))
+      (let* ((group (assoc "personal" (et/dashboard-agenda-groups)))
+             (headings (mapcar (lambda (task) (plist-get task :heading))
+                               (nth 1 group))))
+        (should (member "Critical" headings))
+        (should (member "Waiting on vendor" headings))
+        (should (member "Working" headings))
+        (should (member "Reviewing" headings))
+        (should (= 5 (length headings)))))))
+
 (ert-deftest et/dashboard-renders-personal-and-work-groups ()
   (et/with-test-vault
     (let* ((personal (expand-file-name "roam/personal/daily/2026-10-23.org"

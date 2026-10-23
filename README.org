@@ -307,11 +307,30 @@ all domains; the interactive prompt defaults to all. The scanned set is
 =inbox.org=, =tasks.org=, =projects/= and =daily/=
 for the selected domains; lock and autosave files are ignored. The default =d=
 agenda collects open tasks with a deadline or schedule in the next two weeks,
-plus undated NEXT and WAIT tasks, and groups them into Overdue, Today, Next two
-weeks, Next actions, and Waiting with =org-super-agenda=. =org-modern= styles
-TODO keywords, tags and dates. States are TODO, NEXT, WAIT, DONE and CANCELLED;
+plus undated actionable states, and groups them into Overdue, Today, Next two
+weeks, Showstoppers, Blocked, In progress, Validation, Next actions, and Waiting
+with =org-super-agenda=. =org-modern= styles TODO keywords, tags and dates.
 completion/wait logging lives in LOGBOOK drawers. Use Org repeaters for
 recurring tasks, and the habit STYLE property for habits.
+
+| State       | Key | Color / face    |
+|-------------+-----+-----------------|
+| TODO        | t   | default         |
+| NEXT        | n   | yellow          |
+| WAIT        | w   | orange          |
+| IN-PROGRESS | p   | green           |
+| VALIDATION  | v   | blue            |
+| HOLD        | h   | orange          |
+| BLOCKED     | b   | red             |
+| IDEA        | i   | blue            |
+| SHOWSTOPPER | s   | red, underlined |
+| DONE        | d   | default         |
+| CANCELLED   | c   | default         |
+
+Colors live in =org-todo-keyword-faces= and are tuned for the current light
+theme; adjust =et/org-todo-faces= for a different theme. Dashboard importance
+order is SHOWSTOPPER, BLOCKED, IN-PROGRESS, VALIDATION, NEXT, TODO, HOLD, WAIT,
+IDEA, then any other open state.
 
 ** Org-local commands, research and export
 
