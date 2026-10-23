@@ -104,6 +104,37 @@
 (define-key et/help-map (kbd "p") #'et/install-packages)
 (global-set-key (kbd "C-c SPC") et/leader-map)
 
+(defun et/zoom-in ()
+  "Increase the font size in every buffer and frame."
+  (interactive)
+  (if (fboundp 'global-text-scale-adjust)
+      (global-text-scale-adjust 1)
+    (text-scale-increase 1)))
+
+(defun et/zoom-out ()
+  "Decrease the font size in every buffer and frame."
+  (interactive)
+  (if (fboundp 'global-text-scale-adjust)
+      (global-text-scale-adjust -1)
+    (text-scale-decrease 1)))
+
+(defvar et/zoom-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C--") #'et/zoom-out)
+    (define-key map (kbd "C-+") #'et/zoom-in)
+    (define-key map (kbd "C-=") #'et/zoom-in)
+    map)
+  "Global zoom keys that take precedence in every buffer.")
+
+(defvar et/zoom-mode t
+  "Enable `et/zoom-map' everywhere.")
+
+(add-to-list 'emulation-mode-map-alists
+             (list (cons 'et/zoom-mode et/zoom-map)))
+(global-set-key (kbd "C--") #'et/zoom-out)
+(global-set-key (kbd "C-+") #'et/zoom-in)
+(global-set-key (kbd "C-=") #'et/zoom-in)
+
 (defvar et/package-leader-maps nil
   "Alist mapping major modes to `SPC m' leader keymaps.")
 

@@ -77,6 +77,7 @@ Custom functions *and variables* use =et/=. File and feature names retain =et-=
 | SPC N m / M / r             | Mark read / unread / create a roam note   |
 | SPC T i / s                 | Install / report tree-sitter grammars     |
 | RET (Evil normal)           | Follow button, Org link, URL, or id link  |
+| C-- / C-+ (or C-=)          | Global font size down / up                |
 | C-j / C-k (menus)           | Next / previous completion or menu item   |
 
 =SPC= is a leader in Evil normal/visual/motion states in every buffer, including
@@ -86,7 +87,8 @@ leader. =SPC ?= shows Which Key for the current mappings, and =SPC m= shows the
 package/mode menu. Evil Collection supplies j/k/h/l navigation in package
 buffers. Which Key groups are labelled files, buffers, windows, projects, notes,
 git, help, themes, workspaces, jump, edit, AI, mail, news, tree-sitter and mode
-commands—not just "prefix".
+commands—not just "prefix". =C--= and =C-+= (also =C-==) adjust the global font
+size in every buffer and frame; =M--= remains negative-argument.
 
 Package menus available at =SPC m=:
 

@@ -84,6 +84,21 @@
   (should (eq (lookup-key et/leader-map (kbd "T")) et/treesit-map))
   (should (eq (key-binding (kbd "C-c SPC")) et/leader-map)))
 
+(ert-deftest et/zoom-keys-work-everywhere ()
+  (should (commandp 'et/zoom-in))
+  (should (commandp 'et/zoom-out))
+  (should (eq (key-binding (kbd "C--")) 'et/zoom-out))
+  (should (eq (key-binding (kbd "C-+")) 'et/zoom-in))
+  (should (eq (key-binding (kbd "C-=")) 'et/zoom-in))
+  (should (eq (key-binding (kbd "M--")) 'negative-argument))
+  (dolist (mode '(org-agenda-mode help-mode dired-mode compilation-mode
+                  ibuffer-mode))
+    (with-temp-buffer
+      (funcall mode)
+      (evil-normal-state)
+      (should (eq (key-binding (kbd "C--")) 'et/zoom-out))
+      (should (eq (key-binding (kbd "C-+")) 'et/zoom-in)))))
+
 (ert-deftest et/leader-which-key-and-package-menus ()
   (should (eq (lookup-key et/leader-map (kbd "?"))
               'which-key-show-top-level))
