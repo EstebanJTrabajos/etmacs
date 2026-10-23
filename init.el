@@ -27,6 +27,7 @@
     doom-modeline nerd-icons minions elfeed
     magit diff-hl git-timemachine git-modes hl-todo
     org-roam org-roam-ui org-pomodoro org-drill citar ox-hugo ox-pandoc
+    org-super-agenda org-modern
     restclient ob-restclient typescript-mode web-mode yaml-mode yara-mode
     dockerfile-mode docker)
   "Direct dependencies for the current slice; package.el resolves dependencies.")

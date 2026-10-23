@@ -21,7 +21,7 @@
           (should (string-match-p "New York Times" text))
           (should (string-match-p "No cached articles" text))
           (should (string-match-p "Open full feed" text))
-          (should (string-match-p "Nothing scheduled for today" text)))
+          (should (string-match-p "No open tasks" text)))
         (should (eq (lookup-key et/dashboard-mode-map (kbd "g"))
                     'et/dashboard-refresh)))
       (should (eq (lookup-key et/leader-map (kbd "d")) 'et/dashboard)))))
@@ -62,6 +62,56 @@
       (should (seq-some (lambda (item)
                           (string-match-p "Today task" (nth 0 item)))
                         (et/dashboard-agenda-items))))))
+
+(ert-deftest et/dashboard-agenda-groups-limit-and-sort ()
+  (et/with-test-vault
+    (let* ((file (expand-file-name "roam/personal/daily/2026-10-23.org"
+                                   et/notes-directory))
+           (org-agenda-files (list file))
+           (today (format-time-string "<%Y-%m-%d %a>"))
+           (tomorrow (format-time-string "<%Y-%m-%d %a>"
+                                         (time-add (current-time) 86400))))
+      (make-directory (file-name-directory file) t)
+      (with-temp-file file
+        (insert "* TODO Later\nDEADLINE: " tomorrow "\n")
+        (insert "* NEXT Undated\n")
+        (insert "* TODO Today\nDEADLINE: " today "\n")
+        (insert "* WAIT Waiting\n")
+        (insert "* TODO Plain one\n")
+        (insert "* TODO Plain two\n")
+        (insert "* TODO Plain three\n"))
+      (let* ((group (assoc "personal" (et/dashboard-agenda-groups)))
+             (visible (nth 1 group)))
+        (should (= 5 (length visible)))
+        (should (= 7 (nth 2 group)))
+        (should (equal '("Undated" "Today" "Later"
+                         "Plain one" "Plain three")
+                       (mapcar (lambda (task) (plist-get task :heading))
+                               visible)))))))
+
+(ert-deftest et/dashboard-renders-personal-and-work-groups ()
+  (et/with-test-vault
+    (let* ((personal (expand-file-name "roam/personal/daily/2026-10-23.org"
+                                       et/notes-directory))
+           (work (expand-file-name "roam/work/daily/2026-10-23.org"
+                                   et/notes-directory))
+           (org-agenda-files (list personal work))
+           (projectile-known-projects nil)
+           (recentf-list nil)
+           (elfeed-db t)
+           (elfeed-db-entries (make-hash-table :test #'equal))
+           (et/org-domain "personal"))
+      (make-directory (file-name-directory personal) t)
+      (make-directory (file-name-directory work) t)
+      (with-temp-file personal (insert "* TODO Personal task\n"))
+      (with-temp-file work (insert "* TODO Work task\n"))
+      (et/dashboard)
+      (with-current-buffer et/dashboard-buffer-name
+        (let ((text (buffer-string)))
+          (should (string-match-p "Personal" text))
+          (should (string-match-p "Work" text))
+          (should (string-match-p "Personal task" text))
+          (should (string-match-p "Work task" text)))))))
 
 (ert-deftest et/dashboard-is-the-startup-buffer-choice ()
   (should (eq initial-buffer-choice #'et/dashboard-buffer))

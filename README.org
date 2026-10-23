@@ -100,10 +100,12 @@ session-only; change =et/default-theme= for a persistent default.
 * Dashboard and AI
 
 The dashboard opens on startup (=initial-buffer-choice=) and remains available at
-=SPC d=. It shows Projects, Recent files, open Agenda tasks, Daily journal, and
-five cached news articles per site. =g= refreshes, =q= quits, =RET= activates a
-button or link, and =TAB= collapses or expands the article list for the feed at
-point. =SPC q= quits Emacs; =SPC R= re-tangles
+=SPC d=. It shows Projects, Recent files, up to five Personal and five Work
+tasks, Daily journal, and five cached news articles per site. Tasks are sorted
+by state and explicit priority, then by deadline/schedule, with undated tasks
+last; overflow is reported as =+N more=. =g= refreshes, =q= quits, =RET=
+activates a button or link, and =TAB= collapses or expands the article list for
+the feed at point. =SPC q= quits Emacs; =SPC R= re-tangles
 =config.org= and restarts Emacs after saving buffers. Set
 =et/dashboard-on-startup= to nil in =.local/settings.el= to start on scratch
 instead.
@@ -240,8 +242,10 @@ Default layout (created only as captures need it):
 One org-roam graph indexes all three domains in =~/org/roam=. Nothing migrates
 existing notes/IDs. Unknown-layout legacy nodes are accessible with all-domain
 lookup. Ordinary task files stay outside roam. Project tasks live inside their
-project notes, not duplicated into daily files. Add existing other task files
-to =et/org-extra-agenda-files=; these appear in the all-domain agenda.
+project notes, not duplicated into daily files. TODOs written in =daily/= notes
+are agenda files too, so a dated task can be captured where it is discussed.
+Add existing other task files to =et/org-extra-agenda-files=; these appear in the
+all-domain agenda. Emacs lock files (=.#*=) and autosave files (=#*#=) are ignored.
 
 Roam completion shows file nodes by title and heading nodes by their full path:
 =Document title -> Heading -> Subheading=. Ancestors need not have IDs. This
@@ -299,9 +303,15 @@ the real task. Vocabulary notes contain a drill-tagged question and Answer
 heading; Arabic editing/bidi is preserved. Multilingual spelling is a later stage.
 
 Agenda views include general projects plus the chosen personal/work domain, or
-all domains. Only designated project directories are scanned. States are TODO,
-NEXT, WAIT, DONE and CANCELLED; completion/wait logging lives in LOGBOOK drawers.
-Use Org repeaters for recurring tasks, and the habit STYLE property for habits.
+all domains; the interactive prompt defaults to all. The scanned set is
+=inbox.org=, =tasks.org=, =projects/= and =daily/=
+for the selected domains; lock and autosave files are ignored. The default =d=
+agenda collects open tasks with a deadline or schedule in the next two weeks,
+plus undated NEXT and WAIT tasks, and groups them into Overdue, Today, Next two
+weeks, Next actions, and Waiting with =org-super-agenda=. =org-modern= styles
+TODO keywords, tags and dates. States are TODO, NEXT, WAIT, DONE and CANCELLED;
+completion/wait logging lives in LOGBOOK drawers. Use Org repeaters for
+recurring tasks, and the habit STYLE property for habits.
 
 ** Org-local commands, research and export
 
@@ -314,6 +324,8 @@ In Org buffers =SPC m= offers:
 | k / K / p             | Clock in / out / org-pomodoro                      |
 | P / S                 | Start / stop the Etmacs pomodoro helper            |
 | L                     | Log pomodoros for an Org date range                |
+| < / >                 | Promote / demote current heading                   |
+| << / >>               | Evil: promote / demote heading, else shift indent  |
 | H / G                 | New habit / restart an archived habit              |
 | F f / F t / F a       | Drill file / subtree / resume                      |
 | C                     | Insert citation through Citar                      |
@@ -323,7 +335,10 @@ In Org buffers =SPC m= offers:
 
 Org, habits, agenda, capture, clocks, Babel and exporters are built in.
 =org-roam= adds the linked-note index; =org-roam-ui= adds the browser graph.
-=org-pomodoro= remains at =SPC m p= and =org-drill= adds spaced repetition.
+=org-super-agenda= groups the agenda and =org-modern= provides the modern
+TODO/tag/date styling; run =M-x et/install-packages= and restart after adding
+them to a new machine. =org-pomodoro= remains at =SPC m p= and =org-drill= adds
+spaced repetition.
 The separate =et/pomodoro-start= helper at =SPC m P= records each work segment as
 a TODO in =DOMAIN/pomodoro.org=, prompts for "Planned work" and "What was
 achieved?", follows 25/5 × 4 then 30, and logs a date range with Org's date
@@ -556,8 +571,11 @@ Manual acceptance checklist:
    Ordinary buffer switches must not save, and saves must not trim unrelated
    trailing spaces. Check compilation ANSI colors and help placement.
 4. Capture personal/work TODOs and a habit. Create a project note and capture
-   its task; verify the right scoped/combined agenda and refile destinations.
-   Complete a recurring task; verify its repeater and LOGBOOK behavior.
+   its task, then add a dated TODO to a daily note. Verify the dashboard shows
+   up to five Personal and five Work tasks and that the default agenda shows
+   the two-week window; check the right scoped/combined agenda and refile
+   destinations. Complete a recurring task; verify its repeater and LOGBOOK
+   behavior.
 5. Create notes in two domains and general. Add aliases/tags, insert an ID
    link, view backlinks, compare scoped/all search, then rebuild the index.
    IDs and source notes must remain intact. Open the graph explicitly.

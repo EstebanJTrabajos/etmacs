@@ -7,7 +7,10 @@
 (declare-function et/current-domain "et-org" (&optional buffer))
 (declare-function et/daily "et-roam" (&optional choose-domain key))
 (declare-function et/org-agenda "et-org" (scope))
+(declare-function et/org-open-tasks "et-org" (&optional files))
 (declare-function et/org-refresh-agenda "et-org" (&optional scope))
+(declare-function et/org-task-due-label "et-org" (task))
+(declare-function et/org-task-sort-predicate "et-org" (a b))
 
 (defvar et/dashboard-buffer-name "*etmacs-dashboard*")
 (defvar et/dashboard-on-startup t
@@ -16,7 +19,10 @@
   "Site ids whose dashboard article list is collapsed.")
 (defvar et/dashboard-recent-limit 8)
 (defvar et/dashboard-project-limit 8)
-(defvar et/dashboard-agenda-limit 8)
+(defvar et/dashboard-agenda-limit 5
+  "Maximum number of tasks shown per domain on the dashboard.")
+(defvar et/dashboard-agenda-domains '("personal" "work" "general")
+  "Domains shown as separate agenda groups on the dashboard.")
 
 (defvar et/dashboard-mode-map
   (let ((map (make-sparse-keymap)))
@@ -73,29 +79,29 @@
                recentf-list)
    et/dashboard-recent-limit))
 
+(defun et/dashboard-agenda-groups (&optional tasks)
+  "Return (DOMAIN VISIBLE TOTAL) agenda groups for the dashboard.
+TASKS defaults to all open tasks in `org-agenda-files'.  Each group
+is sorted by importance and date, then limited to
+`et/dashboard-agenda-limit'."
+  (let ((tasks (or tasks (et/org-open-tasks))))
+    (mapcar
+     (lambda (domain)
+       (let* ((all (sort (seq-filter (lambda (task)
+                                       (equal (plist-get task :domain) domain))
+                                     tasks)
+                         #'et/org-task-sort-predicate))
+              (visible (seq-take all et/dashboard-agenda-limit)))
+         (list domain visible (length all))))
+     et/dashboard-agenda-domains)))
+
 (defun et/dashboard-agenda-items ()
-  "Return open agenda tasks as (TEXT FILE POSITION) lists."
-  (let (items)
-    (dolist (file (bound-and-true-p org-agenda-files))
-      (when (file-readable-p file)
-        (condition-case nil
-            (with-current-buffer (find-file-noselect file)
-              (org-map-entries
-               (lambda ()
-                 (let ((state (org-get-todo-state)))
-                   (when (member state '("TODO" "NEXT" "WAIT"))
-                     (let ((heading (org-get-heading t t t t))
-                           (scheduled (org-entry-get nil "SCHEDULED"))
-                           (deadline (org-entry-get nil "DEADLINE")))
-                       (push (list (concat heading
-                                           (when scheduled (format "  [%s]" scheduled))
-                                           (when deadline (format "  [deadline %s]" deadline)))
-                                   (buffer-file-name)
-                                   (point))
-                             items)))))
-               nil 'file))
-          (error nil))))
-    (seq-take (nreverse items) et/dashboard-agenda-limit)))
+  "Return open agenda tasks as (HEADING FILE POSITION) lists."
+  (mapcar (lambda (task)
+            (list (plist-get task :heading)
+                  (plist-get task :file)
+                  (plist-get task :position)))
+          (et/org-open-tasks)))
 
 (defun et/dashboard-open-agenda-item (file position)
   "Open FILE at POSITION and reveal its Org context."
@@ -153,17 +159,40 @@
         (insert "  No recent files yet.\n")))
     (insert "\n")
     (et/dashboard-insert-section "Agenda")
-    (let ((items (et/dashboard-agenda-items)))
-      (if items
-          (dolist (item items)
-            (insert "  ")
-            (et/dashboard-insert-button
-             (nth 0 item)
-             (lambda (_button)
-               (et/dashboard-open-agenda-item (nth 1 item) (nth 2 item)))
-             (nth 0 item))
-            (insert "\n"))
-        (insert "  Nothing scheduled for today.\n"))
+    (let ((groups (et/dashboard-agenda-groups))
+          any)
+      (dolist (group groups)
+        (let ((domain (nth 0 group))
+              (tasks (nth 1 group))
+              (total (nth 2 group)))
+          (when tasks
+            (setq any t)
+            (insert (propertize (format "  %s\n" (capitalize domain))
+                                'face 'bold))
+            (dolist (task tasks)
+              (let ((task task))
+                (insert "    ")
+                (insert (propertize (format "%-4s " (plist-get task :state))
+                                    'face 'org-todo))
+                (et/dashboard-insert-button
+                 (plist-get task :heading)
+                 (lambda (_button)
+                   (et/dashboard-open-agenda-item (plist-get task :file)
+                                                  (plist-get task :position)))
+                 (plist-get task :heading))
+                (when-let* ((due (et/org-task-due-label task)))
+                  (insert (propertize (format "  %s" due)
+                                      'face (cond ((string-match-p "overdue" due) 'error)
+                                                  ((string-match-p "today\\|tomorrow" due)
+                                                   'warning)
+                                                  (t 'shadow)))))
+                (insert "\n")))
+            (when (> total (length tasks))
+              (insert (propertize
+                       (format "    +%d more\n" (- total (length tasks)))
+                       'face 'shadow))))))
+      (unless any
+        (insert "  No open tasks.\n"))
       (insert "  ")
       (et/dashboard-insert-button
        "Open agenda" (lambda (_button) (et/dashboard-agenda)))
@@ -230,7 +259,7 @@
   "Return the refreshed dashboard buffer without switching to it."
   (when (fboundp 'et/org-refresh-agenda)
     (condition-case nil
-        (et/org-refresh-agenda et/org-agenda-scope)
+        (et/org-refresh-agenda "all")
       (error nil)))
   (let ((buffer (get-buffer-create et/dashboard-buffer-name)))
     (with-current-buffer buffer
@@ -253,9 +282,9 @@
   (et/daily))
 
 (defun et/dashboard-agenda ()
-  "Open the agenda for the current domain."
+  "Open the all-domain two-week agenda."
   (interactive)
-  (et/org-agenda (et/current-domain)))
+  (et/org-agenda "all"))
 
 (defun et/dashboard-news ()
   "Choose which news topics appear on the dashboard."

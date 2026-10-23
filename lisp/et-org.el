@@ -57,6 +57,119 @@
   (format "* TODO %%?\nSCHEDULED: <%s .+1d>\n:PROPERTIES:\n:STYLE: habit\n:END:\n"
           (format-time-string "%Y-%m-%d %a")))
 
+(defvar et/org-open-task-states '("TODO" "NEXT" "WAIT")
+  "Open TODO states collected for the dashboard and agenda.")
+
+(defun et/org-agenda-file-p (file)
+  "Return non-nil when FILE is a real Org note, not a lock or autosave file."
+  (let ((name (file-name-nondirectory file)))
+    (and (string-suffix-p ".org" name)
+         (not (string-prefix-p "." name))
+         (not (string-prefix-p "#" name))
+         (file-regular-p file))))
+
+(defun et/org-directory-org-files (directory)
+  "Return real Org files below DIRECTORY."
+  (when (file-directory-p directory)
+    (seq-filter #'et/org-agenda-file-p
+                (directory-files-recursively directory "\\.org\\'"))))
+
+(defun et/org-entry-priority ()
+  "Return the current entry's explicit priority letter, or nil."
+  (save-excursion
+    (org-back-to-heading t)
+    (when (looking-at org-complex-heading-regexp)
+      (let ((raw (match-string 3)))
+        (when (and raw (string-match "\\`\\[#\\([A-Za-z0-9]\\)\\]\\'" raw))
+          (match-string 1 raw))))))
+
+(defun et/org-open-tasks (&optional files)
+  "Return open Org tasks from FILES as plists.
+Each plist has :heading, :state, :priority, :scheduled, :deadline,
+:due, :domain, :file, and :position."
+  (let (tasks)
+    (dolist (file (or files (bound-and-true-p org-agenda-files)))
+      (when (and (file-readable-p file) (et/org-agenda-file-p file))
+        (condition-case nil
+            (with-current-buffer (find-file-noselect file)
+              (org-map-entries
+               (lambda ()
+                 (let ((state (substring-no-properties
+                               (or (org-get-todo-state) ""))))
+                   (when (member state et/org-open-task-states)
+                     (let ((scheduled (org-entry-get nil "SCHEDULED"))
+                           (deadline (org-entry-get nil "DEADLINE")))
+                       (push (list :heading (substring-no-properties
+                                             (org-get-heading t t t t))
+                                   :state state
+                                   :priority (et/org-entry-priority)
+                                   :scheduled scheduled
+                                   :deadline deadline
+                                   :due (or deadline scheduled)
+                                   :domain (or (et/file-domain (buffer-file-name))
+                                               "general")
+                                   :file (buffer-file-name)
+                                   :position (point))
+                             tasks)))))
+               nil 'file))
+          (error nil))))
+    (nreverse tasks)))
+
+(defun et/org-task-due-absolute (task)
+  "Return TASK's effective due date as an absolute day number, or nil."
+  (when-let* ((due (plist-get task :due)))
+    (condition-case nil
+        (org-time-string-to-absolute due)
+      (error nil))))
+
+(defun et/org-task-importance (task)
+  "Return TASK's importance score; lower is more important."
+  (let ((state (plist-get task :state))
+        (priority (plist-get task :priority)))
+    (+ (* 10 (pcase state ("NEXT" 0) ("TODO" 1) ("WAIT" 2) (_ 3)))
+       (pcase priority ("A" 0) ("B" 1) ("C" 2) (_ 3)))))
+
+(defun et/org-task-sort-predicate (a b)
+  "Return non-nil when task A should sort before task B."
+  (let ((ia (et/org-task-importance a))
+        (ib (et/org-task-importance b))
+        (da (et/org-task-due-absolute a))
+        (db (et/org-task-due-absolute b)))
+    (cond ((/= ia ib) (< ia ib))
+          ((and da db (/= da db)) (< da db))
+          ((and da (not db)) t)
+          ((and db (not da)) nil)
+          (t (string< (plist-get a :heading) (plist-get b :heading))))))
+
+(defun et/org-task-due-label (task)
+  "Return a short human-readable due label for TASK, or nil."
+  (when-let* ((due (plist-get task :due))
+              (absolute (et/org-task-due-absolute task)))
+    (condition-case nil
+        (let* ((days (- absolute (org-today)))
+               (date (format-time-string "%a %d %b"
+                                         (org-time-string-to-time due))))
+          (cond ((< days 0) (format "%s, %dd overdue" date (- days)))
+                ((= days 0) (format "%s, today" date))
+                ((= days 1) (format "%s, tomorrow" date))
+                (t date)))
+      (error nil))))
+
+(defun et/org-agenda-skip-outside-window ()
+  "Skip tasks without a deadline or schedule in the next two weeks.
+Undated NEXT and WAIT tasks are kept."
+  (let* ((state (substring-no-properties (or (org-get-todo-state) "")))
+         (deadline (org-entry-get nil "DEADLINE"))
+         (scheduled (org-entry-get nil "SCHEDULED"))
+         (due (or deadline scheduled))
+         (last (+ (org-today) 13)))
+    (unless (or (and (member state '("NEXT" "WAIT")) (not due))
+                (and due
+                     (condition-case nil
+                         (<= (org-time-string-to-absolute due) last)
+                       (error nil))))
+      (line-end-position))))
+
 (setq org-todo-keywords '((sequence "TODO(t)" "NEXT(n)" "WAIT(w@/!)" "|"
                                   "DONE(d!)" "CANCELLED(c@)"))
       org-log-done 'time
@@ -72,7 +185,14 @@
       org-export-use-babel nil
       org-cite-global-bibliography et/bibliography-files
       org-agenda-custom-commands
-      '(("d" "Daily dashboard" ((agenda "") (todo "NEXT") (todo "WAIT")))))
+      '(("d" "Daily dashboard"
+         ((alltodo ""
+                   ((org-agenda-skip-function
+                     #'et/org-agenda-skip-outside-window)
+                    (org-agenda-sorting-strategy
+                     '(priority-down deadline-up scheduled-up))
+                    (org-agenda-overriding-header
+                     "Tasks due within two weeks")))))))
 
 (defvar et/capture-template-state-file
   (expand-file-name "capture-templates.el" et/state-directory)
@@ -191,26 +311,48 @@ are prompted for interactively.  TARGET-TYPE is either
     (dolist (domain domains)
       (dolist (name '("inbox.org" "tasks.org"))
         (let ((file (expand-file-name (concat domain "/" name) et/notes-directory)))
-          (when (file-exists-p file) (push file files))))
-      (let ((projects (expand-file-name (concat domain "/projects/") et/roam-directory)))
-        (when (file-directory-p projects)
-          (setq files (append (directory-files-recursively projects "\\.org\\'") files)))))
+          (when (and (file-exists-p file) (et/org-agenda-file-p file))
+            (push file files))))
+      (dolist (kind '("projects/" "daily/"))
+        (setq files
+              (append (et/org-directory-org-files
+                       (expand-file-name (concat domain "/" kind) et/roam-directory))
+                      files))))
     (when (equal scope "all")
-      (setq files (append (seq-filter #'file-exists-p et/org-extra-agenda-files) files)))
+      (setq files (append (seq-filter (lambda (file)
+                                        (and (file-exists-p file)
+                                             (et/org-agenda-file-p file)))
+                                      et/org-extra-agenda-files)
+                          files)))
     (setq et/org-agenda-scope scope
           org-agenda-files (delete-dups files))))
 
 (defun et/org-agenda (scope)
   "Open the daily dashboard for SCOPE."
   (interactive (list (completing-read "Agenda domain: " (cons "all" et/org-domains)
-                                     nil t nil nil (et/current-domain))))
+                                     nil t nil nil "all")))
   (et/org-refresh-agenda scope)
   (org-agenda nil "d"))
 (add-hook 'org-capture-after-finalize-hook #'et/org-refresh-agenda)
 
+(defun et/org-promote-heading ()
+  "Promote the current heading, or shift the line left outside headings."
+  (interactive)
+  (cond ((org-at-heading-p) (org-do-promote))
+        ((fboundp 'evil-shift-left-line) (evil-shift-left-line 1))
+        (t (indent-rigidly (line-beginning-position) (line-end-position) -2))))
+
+(defun et/org-demote-heading ()
+  "Demote the current heading, or shift the line right outside headings."
+  (interactive)
+  (cond ((org-at-heading-p) (org-do-demote))
+        ((fboundp 'evil-shift-right-line) (evil-shift-right-line 1))
+        (t (indent-rigidly (line-beginning-position) (line-end-position) 2))))
+
 (defun et/org-mode-defaults ()
   "Use Org's own indentation and the mode-local leader map."
   (org-indent-mode 1)
+  (when (fboundp 'org-modern-mode) (org-modern-mode 1))
   (setq-local et/local-leader-map et/org-map))
 (add-hook 'org-mode-hook #'et/org-mode-defaults)
 (define-key et/notes-map (kbd "c") #'et/capture)
@@ -228,6 +370,30 @@ are prompted for interactively.  TARGET-TYPE is either
   (define-key et/org-map (kbd (car binding)) (cdr binding)))
 (define-key et/org-map (kbd "e") (cons "export" et/org-export-map))
 (define-key et/org-map (kbd "F") (cons "study" et/org-study-map))
+(define-key et/org-map (kbd "<") #'et/org-promote-heading)
+(define-key et/org-map (kbd ">") #'et/org-demote-heading)
+(with-eval-after-load 'evil
+  (evil-define-key 'normal org-mode-map (kbd "<<") #'et/org-promote-heading)
+  (evil-define-key 'normal org-mode-map (kbd ">>") #'et/org-demote-heading))
+
+(use-package org-super-agenda
+  :if (locate-library "org-super-agenda")
+  :demand t
+  :init
+  (setq org-super-agenda-groups
+        '((:name "Overdue" :deadline past :scheduled past :order 0)
+          (:name "Today" :deadline today :scheduled today :order 1)
+          (:name "Next two weeks" :deadline future :scheduled future :order 2)
+          (:name "Next actions" :todo "NEXT" :order 3)
+          (:name "Waiting" :todo "WAIT" :order 4)))
+  :config
+  (org-super-agenda-mode 1))
+
+(use-package org-modern
+  :if (locate-library "org-modern")
+  :demand t
+  :config
+  (add-hook 'org-agenda-finalize-hook #'org-modern-agenda))
 
 (use-package org-pomodoro
   :if (locate-library "org-pomodoro")
