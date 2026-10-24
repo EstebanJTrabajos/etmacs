@@ -86,6 +86,20 @@
           (should (string-match-p "NYT story 6" (buffer-string)))
           (should (string-match-p "Open full feed" (buffer-string))))))))
 
+(ert-deftest et/news-dashboard-article-carries-entry-property ()
+  (et/with-test-vault
+    (et/with-fake-news
+      (let ((projectile-known-projects nil)
+            (recentf-list nil)
+            (org-agenda-files nil)
+            (et/org-domain "personal"))
+        (et/dashboard)
+        (with-current-buffer et/dashboard-buffer-name
+          (goto-char (point-min))
+          (search-forward "SciAm story 6")
+          (should (get-text-property (match-beginning 0)
+                                     'et-news-entry)))))))
+
 (ert-deftest et/news-open-article-uses-default-browser ()
   (et/with-fake-news
     (let ((entry (car (et/news-entries 'sciam)))
@@ -118,12 +132,107 @@
                      "Emacs Stack Exchange")
                    (mapcar #'car (nth 2 (assq 'emacs et/news-sites)))))))
 
+(ert-deftest et/news-summary-backend-includes-model ()
+  (skip-unless (locate-library "gptel"))
+  (let ((backend (et/news--summary-backend)))
+    (should (memq et/news-summary-model
+                  (gptel-backend-models backend)))))
+
+(ert-deftest et/news-summary-prompt-includes-security-rules ()
+  (let ((prompt (et/news--summary-prompt
+                 (list :title "Test" :link "https://example.test/a"
+                       :feed "Feed" :date "2026-10-24")
+                 "Article body" t)))
+    (should (string-match-p "Article body" prompt))
+    (should (string-match-p "explicitly named" prompt))
+    (should (string-match-p "python/django" prompt))
+    (should (string-match-p "Defang" prompt))
+    (should (string-match-p "Text complete: yes" prompt))))
+
+(ert-deftest et/news-summary-parser-extracts-metadata-and-nodes ()
+  (let* ((output
+          (concat
+           "#+filetags: :security:vulnerability:python:django:\n"
+           "#+ecosystem: python/django\n"
+           "#+description: Test summary\n\n"
+           "* Summary\nFirst paragraph.\n\n"
+           "* Security details\n"
+           "** Related nodes\n"
+           "| Type | Node title | Relationship | Why |\n"
+           "|------+------------+--------------+-----|\n"
+           "| language | Python | affected | Runtime |\n"
+           "| platform | Django | affected | Framework |\n"))
+         (parsed (et/news--parse-summary-output output)))
+    (should (equal '("security" "vulnerability" "python" "django")
+                   (plist-get parsed :tags)))
+    (should (equal "python/django" (plist-get parsed :ecosystem)))
+    (should (equal "Test summary" (plist-get parsed :description)))
+    (should (string-match-p "\\* Summary" (plist-get parsed :body)))
+    (should (= 2 (length (plist-get parsed :related))))
+    (should (equal "Python"
+                   (plist-get (car (plist-get parsed :related)) :title)))))
+
+(ert-deftest et/news-summary-creates-two-way-roam-links ()
+  (skip-unless (sqlite-available-p))
+  (et/with-test-vault
+    (let* ((output
+            (concat
+             "#+filetags: :security:vulnerability:python:django:\n"
+             "#+ecosystem: python/django\n"
+             "#+description: Test summary\n\n"
+             "* Summary\nFirst paragraph.\n\n"
+             "* Security details\n"
+             "** Related nodes\n"
+             "| Type | Node title | Relationship | Why |\n"
+             "|------+------------+--------------+-----|\n"
+             "| language | Python | affected | Runtime |\n"
+             "| platform | Django | affected | Framework |\n"))
+           (context (list :title "Test security article"
+                          :link "https://example.test/a"
+                          :feed "Test Feed"
+                          :date "2026-10-24"
+                          :domain "personal"))
+           (et/news-related-node-domain "general"))
+      (et/news--create-summary-note output context)
+      (let* ((summary-file
+              (car (directory-files-recursively
+                    (expand-file-name "personal/references/" et/roam-directory)
+                    "\\.org\\'")))
+             (python-file (expand-file-name "general/topics/python.org"
+                                            et/roam-directory))
+             (django-file (expand-file-name "general/topics/django.org"
+                                            et/roam-directory))
+             (summary-text (with-temp-buffer
+                             (insert-file-contents summary-file)
+                             (buffer-string)))
+             (python-text (with-temp-buffer
+                            (insert-file-contents python-file)
+                            (buffer-string)))
+             (django-text (with-temp-buffer
+                            (insert-file-contents django-file)
+                            (buffer-string))))
+        (should summary-file)
+        (should (string-match-p "#\\+ecosystem: python/django" summary-text))
+        (should (string-match-p "#\\+filetags: :news:reference:security"
+                                summary-text))
+        (should (string-match-p "\\[\\[id:" summary-text))
+        (should (string-match-p "#\\+title: Python" python-text))
+        (should (string-match-p ":language:" python-text))
+        (should (string-match-p "Test security article" python-text))
+        (should (string-match-p "#\\+title: Django" django-text))
+        (should (string-match-p ":platform:" django-text))
+        (should (string-match-p "Test security article" django-text))))))
+
 (ert-deftest et/news-bindings ()
   (should (eq (lookup-key et/leader-map (kbd "N")) et/news-map))
   (should (eq (lookup-key et/news-map (kbd "o")) 'et/news-open-reader))
   (should (eq (lookup-key et/news-map (kbd "u")) 'et/news-update))
   (should (eq (lookup-key et/news-map (kbd "s")) 'et/news-select-feeds))
+  (should (eq (lookup-key et/news-map (kbd "S"))
+              'et/news-summarize-at-point))
   (should (eq (lookup-key et/dashboard-mode-map (kbd "n")) 'et/dashboard-news))
+  (should (eq (lookup-key et/dashboard-mode-map (kbd "S"))
+              'et/news-summarize-at-point))
   (should (eq (lookup-key et/dashboard-mode-map (kbd "u")) 'et/news-update)))
 
 (ert-deftest et/news-update-calls-elfeed-update ()

@@ -12,6 +12,7 @@
 (declare-function et/org-state-face "et-org" (state))
 (declare-function et/org-task-due-label "et-org" (task))
 (declare-function et/org-task-sort-predicate "et-org" (a b))
+(declare-function et/news-summarize-at-point "et-news" ())
 
 (defvar et/dashboard-buffer-name "*etmacs-dashboard*")
 (defvar et/dashboard-on-startup t
@@ -34,6 +35,7 @@
     (define-key map (kbd "p") #'et/dashboard-switch-project)
     (define-key map (kbd "c") #'et/capture)
     (define-key map (kbd "n") #'et/dashboard-news)
+    (define-key map (kbd "S") #'et/news-summarize-at-point)
     (define-key map (kbd "TAB") #'et/dashboard-toggle-news-feed)
     (define-key map (kbd "<tab>") #'et/dashboard-toggle-news-feed)
     (define-key map (kbd "u") #'et/news-update)
@@ -223,13 +225,17 @@ is sorted by importance and date, then limited to
           (unless collapsed
             (if entries
                 (dolist (entry entries)
-                  (insert "  ")
-                  (et/dashboard-insert-button
-                   (truncate-string-to-width
-                    (or (elfeed-entry-title entry) "(untitled)") 84 nil nil "…")
-                   (lambda (_button) (et/news-open-article entry))
-                   (or (elfeed-entry-link entry) "No link"))
-                  (insert "\n"))
+                  (let ((entry entry)
+                        (button-start (point)))
+                    (insert "  ")
+                    (et/dashboard-insert-button
+                     (truncate-string-to-width
+                      (or (elfeed-entry-title entry) "(untitled)") 84 nil nil "…")
+                     (lambda (_button) (et/news-open-article entry))
+                     (or (elfeed-entry-link entry) "No link"))
+                    (add-text-properties button-start (point)
+                                         (list 'et-news-entry entry))
+                    (insert "\n")))
               (insert "  No cached articles.\n")))
           (insert "  ")
           (et/dashboard-insert-button

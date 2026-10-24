@@ -7,6 +7,7 @@
 (require 'org-clock)
 (require 'oc)
 (require 'seq)
+(require 'subr-x)
 
 (defvar et/org-domain "personal" "Default note domain in the current workspace.")
 (defvar et/org-domains '("personal" "work" "general"))
@@ -412,6 +413,46 @@ are prompted for interactively.  TARGET-TYPE is either
         ((fboundp 'evil-shift-right-line) (evil-shift-right-line 1))
         (t (indent-rigidly (line-beginning-position) (line-end-position) 2))))
 
+(defun et/refang (string)
+  "Return STRING with common IOC defanging reversed."
+  (let ((case-fold-search t)
+        (result string))
+    (dolist (pair '(("hxxps" . "https")
+                    ("hxxp" . "http")
+                    ("[://]" . "://")
+                    ("[:]" . ":")
+                    ("[dot]" . ".")
+                    ("(dot)" . ".")
+                    ("[.]" . ".")
+                    ("(.)" . ".")
+                    ("{.}" . ".")
+                    ("[at]" . "@")
+                    ("(at)" . "@")
+                    ("[@]" . "@")
+                    ("(@)" . "@")))
+      (setq result
+            (replace-regexp-in-string
+             (regexp-quote (car pair)) (cdr pair) result t t)))
+    result))
+
+(defun et/refang-and-copy ()
+  "Refang the IOC at point or region and copy it to the clipboard."
+  (interactive)
+  (let* ((text
+          (cond
+           ((use-region-p)
+            (buffer-substring-no-properties (region-beginning) (region-end)))
+           ((and (derived-mode-p 'org-mode) (org-at-table-p))
+            (org-table-get-field))
+           (t (thing-at-point 'line t))))
+         (refanged (et/refang (string-trim (or text "")))))
+    (when (string-empty-p refanged)
+      (user-error "Nothing to refang"))
+    (kill-new refanged)
+    (when (fboundp 'gui-set-selection)
+      (ignore-errors (gui-set-selection 'CLIPBOARD refanged)))
+    (message "Copied refanged IOC: %s" refanged)))
+
 (defvar et/org-agenda-map
   (let ((map (make-sparse-keymap "Org agenda")))
     (define-key map (kbd "j") #'org-agenda-next-line)
@@ -457,6 +498,7 @@ are prompted for interactively.  TARGET-TYPE is either
 (define-key et/org-map (kbd "F") (cons "study" et/org-study-map))
 (define-key et/org-map (kbd "<") #'et/org-promote-heading)
 (define-key et/org-map (kbd ">") #'et/org-demote-heading)
+(define-key et/org-map (kbd "R") #'et/refang-and-copy)
 (with-eval-after-load 'evil
   (evil-define-key 'normal org-mode-map (kbd "<<") #'et/org-promote-heading)
   (evil-define-key 'normal org-mode-map (kbd ">>") #'et/org-demote-heading))

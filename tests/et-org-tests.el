@@ -258,9 +258,26 @@
       (org-back-to-heading t)
       (should (et/org-agenda-skip-outside-window)))))
 
+(ert-deftest et/refang-reverses-common-defanging ()
+  (should (equal "https://evil.example/path"
+                 (et/refang "hxxps://evil[.]example/path")))
+  (should (equal "http://192.0.2.1"
+                 (et/refang "hxxp://192[.]0[.]2[.]1")))
+  (should (equal "user@example.com"
+                 (et/refang "user[at]example[.]com")))
+  (should (equal "evil.example" (et/refang "evil[dot]example"))))
+
+(ert-deftest et/refang-and-copy-sets-kill-ring ()
+  (with-temp-buffer
+    (insert "evil[.]example")
+    (goto-char (point-min))
+    (et/refang-and-copy)
+    (should (equal (car kill-ring) "evil.example"))))
+
 (ert-deftest et/org-heading-promote-demote-keys-and-behavior ()
   (should (eq (lookup-key et/org-map (kbd "<")) 'et/org-promote-heading))
   (should (eq (lookup-key et/org-map (kbd ">")) 'et/org-demote-heading))
+  (should (eq (lookup-key et/org-map (kbd "R")) 'et/refang-and-copy))
   (with-temp-buffer
     (org-mode)
     (insert "* Parent\n** Child\n")
