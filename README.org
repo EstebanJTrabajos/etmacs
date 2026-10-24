@@ -74,8 +74,8 @@ Custom functions *and variables* use =et/=. File and feature names retain =et-=
 | SPC M m / u / c / s         | mu4e open / update / compose / search     |
 | SPC N o / u / s             | Elfeed open / update / choose news topics |
 | SPC N / / f / d             | Search / narrow to feed / narrow to dates |
-| SPC N m / M / r             | Mark read / unread / create a roam note   |
-| S (dashboard) / SPC N S     | AI security summary for article at point  |
+| SPC N m / M                 | Mark read / unread                        |
+| S (dashboard) / SPC N r/R/S | AI security summary for article at point  |
 | SPC T i / s                 | Install / report tree-sitter grammars     |
 | RET (Evil normal)           | Follow button, Org link, URL, or id link  |
 | C-- / C-+ (or C-=)          | Global font size down / up                |
@@ -168,17 +168,28 @@ the cache.
 
 In an Elfeed search buffer, the same leader prefix adds =SPC N /= (keyword
 search), =SPC N f= (narrow to feed), =SPC N d= (date range), =SPC N m= / =SPC N M=
-(mark read / unread), =SPC N r= (create an Org-roam reference note), and
-=SPC N S= (download the article and create an AI security summary). In the
-dashboard, =S= summarizes the article at point.
+(mark read / unread), and =SPC N r= / =SPC N R= / =SPC N S= (download the article
+and open an AI security summary draft). In the dashboard, =S= summarizes the
+article at point.
 
-The summary uses =gpt-6.1-luna= through gptel and produces a 3–5 paragraph
+The summary uses =gpt-6-luna= through gptel and produces a 3–5 paragraph
 security note with vulnerability/incident details, affected software, attack
 type, explicitly reported MITRE techniques, defanged IOCs, and related
 language/platform/package-manager nodes. Missing language/platform/package
 nodes are created under =general/topics/= with the appropriate =:language:=,
 =:platform:=, or =:package-manager:= tag. The summary links to each node and
 each node gets a dated backlink under =Related articles=.
+
+The summary opens in an unsaved review buffer:
+
+| Key | Action |
+|-----+---------------------------------------------------------------|
+| C-c | Accept, create the node, and save it |
+| C-k | Cancel and discard the draft |
+| C-r | Regenerate with the current model |
+| C-m | Choose a gptel provider/model and regenerate |
+
+Nothing is written to the roam vault until =C-c=.
 
 IOCs are defanged in the note. With point on a defanged IOC table cell, or with
 a region selected, =SPC m R= refangs it and copies the result to the clipboard.

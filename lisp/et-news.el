@@ -416,27 +416,147 @@
             :host "api.openai.com"
             :key (lambda () (et/gptel-key "api.openai.com"))
             :models (cons et/news-summary-model
-                           (gptel-backend-models et/gptel-openai)))))
+                           (delete et/news-summary-model
+                                   (gptel-backend-models et/gptel-openai))))))
   et/news-summary-backend)
 
-(defun et/news--request-summary (context text complete)
-  "Send CONTEXT and TEXT to gptel for a security summary."
+(defun et/news--request-summary (context text complete backend model buffer)
+  "Request a security summary for CONTEXT and TEXT into BUFFER.
+BACKEND and MODEL select the gptel backend and model."
   (let* ((prompt (et/news--summary-prompt context text complete))
-         (gptel-backend (et/news--summary-backend))
-         (gptel-model et/news-summary-model))
+         (gptel-backend backend)
+         (gptel-model model))
     (gptel-request prompt
       :system et/news-summary-system-prompt
       :context context
+      :buffer buffer
       :stream nil
       :callback
       (lambda (response info)
-        (if (stringp response)
-            (condition-case err
-                (et/news--create-summary-note response (plist-get info :context))
-              (error (message "Summary failed: %s"
-                              (error-message-string err))))
-          (message "Summary request failed: %s"
-                   (plist-get info :status)))))))
+        (when (buffer-live-p buffer)
+          (with-current-buffer buffer
+            (let ((inhibit-read-only t))
+              (erase-buffer)
+              (insert
+               (if (stringp response)
+                   response
+                 (format "# Summary request failed: %s\n"
+                         (or (plist-get info :status) "unknown error"))))
+              (set-buffer-modified-p nil)
+              (goto-char (point-min)))))))))
+
+(defun et/news--select-model ()
+  "Select a gptel model, returning (BACKEND . MODEL)."
+  (require 'gptel)
+  (let (models-alist)
+    (dolist (entry gptel--known-backends)
+      (let ((name (car entry))
+            (backend (cdr entry)))
+        (dolist (model (gptel-backend-models backend))
+          (push (list (concat name ":" (gptel--model-name model))
+                      backend model)
+                models-alist))))
+    (setq models-alist (nreverse models-alist))
+    (let* ((current-backend (or et/news-summary-backend gptel-backend))
+           (current-model (or et/news-summary-model gptel-model))
+           (completion-extra-properties
+            `(:group-function
+              ,(lambda (cand transform)
+                 (if transform cand
+                   (gptel-backend-name (nth 1 (assoc cand models-alist)))))
+              :annotation-function
+              ,(lambda (comp)
+                 (let* ((model (nth 2 (assoc comp models-alist)))
+                        (desc (get model :description)))
+                   (when desc
+                     (concat " "
+                             (truncate-string-to-width desc 70 nil ?  t t)))))))
+           (choice (completing-read
+                    "Model: " models-alist nil t nil nil
+                    (concat (gptel-backend-name current-backend) ":"
+                            (gptel--model-name current-model))))
+           (entry (assoc choice models-alist)))
+      (when entry
+        (cons (nth 1 entry) (nth 2 entry))))))
+
+(defvar et/news-summary-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c") #'et/news-accept-summary)
+    (define-key map (kbd "C-k") #'et/news-cancel-summary)
+    (define-key map (kbd "C-r") #'et/news-regenerate-summary)
+    (define-key map (kbd "C-m") #'et/news-regenerate-summary-with-model)
+    map)
+  "Keymap for reviewing an AI news summary.")
+
+(define-derived-mode et/news-summary-mode org-mode "Etmacs Summary"
+  "Major mode for reviewing an AI news summary before saving."
+  (setq-local buffer-read-only nil)
+  (setq-local buffer-offer-save nil)
+  (setq-local et/news-summary-context nil)
+  (setq-local et/news-summary-text nil)
+  (setq-local et/news-summary-complete nil)
+  (setq-local et/news-summary-backend nil)
+  (setq-local et/news-summary-model et/news-summary-model))
+
+(with-eval-after-load 'evil
+  (evil-define-key '(normal visual) et/news-summary-mode-map
+    (kbd "C-c") #'et/news-accept-summary
+    (kbd "C-k") #'et/news-cancel-summary
+    (kbd "C-r") #'et/news-regenerate-summary
+    (kbd "C-m") #'et/news-regenerate-summary-with-model))
+
+(defun et/news--regenerate-summary (backend model)
+  "Regenerate the current summary with BACKEND and MODEL."
+  (let ((buffer (current-buffer))
+        (context et/news-summary-context)
+        (text et/news-summary-text)
+        (complete et/news-summary-complete))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert "# Regenerating summary...\n")
+        (set-buffer-modified-p nil)))
+    (et/news--request-summary context text complete backend model buffer)))
+
+(defun et/news-regenerate-summary ()
+  "Regenerate the current summary with the current model."
+  (interactive)
+  (unless (derived-mode-p 'et/news-summary-mode)
+    (user-error "Not in a summary review buffer"))
+  (et/news--regenerate-summary et/news-summary-backend
+                               et/news-summary-model))
+
+(defun et/news-regenerate-summary-with-model ()
+  "Choose a model and regenerate the current summary with it."
+  (interactive)
+  (unless (derived-mode-p 'et/news-summary-mode)
+    (user-error "Not in a summary review buffer"))
+  (let ((choice (et/news--select-model)))
+    (when choice
+      (setq-local et/news-summary-backend (car choice)
+                  et/news-summary-model (cdr choice))
+      (et/news--regenerate-summary (car choice) (cdr choice)))))
+
+(defun et/news-cancel-summary ()
+  "Discard the current summary review buffer."
+  (interactive)
+  (unless (derived-mode-p 'et/news-summary-mode)
+    (user-error "Not in a summary review buffer"))
+  (let ((buffer (current-buffer)))
+    (set-buffer-modified-p nil)
+    (kill-buffer buffer)))
+
+(defun et/news-accept-summary ()
+  "Accept the current summary and create the Org-roam node."
+  (interactive)
+  (unless (derived-mode-p 'et/news-summary-mode)
+    (user-error "Not in a summary review buffer"))
+  (let ((review (current-buffer))
+        (output (buffer-string))
+        (context et/news-summary-context))
+    (et/news--create-summary-note output context)
+    (when (buffer-live-p review)
+      (kill-buffer review))))
 
 (defun et/news--clean-tag (tag)
   "Return TAG as a safe Org tag."
@@ -570,14 +690,14 @@
                             (et/news--clean-cell (plist-get row :title))
                             (et/news--clean-cell (plist-get row :relationship))
                             (et/news--clean-cell (plist-get row :why))))
-           (org-table-align))
-         (end-of-line)
-         (insert "\n")
-         (dolist (row rows)
-           (insert (format "- [[id:%s][%s]] - %s\n"
-                           (plist-get row :id)
-                           (et/news--clean-cell (plist-get row :title))
-                           (et/news--clean-cell (plist-get row :relationship)))))))))
+          (org-table-align))
+      (end-of-line)
+      (insert "\n")
+      (dolist (row rows)
+        (insert (format "- [[id:%s][%s]] - %s\n"
+                        (plist-get row :id)
+                        (et/news--clean-cell (plist-get row :title))
+                        (et/news--clean-cell (plist-get row :relationship)))))))))
 
 (defun et/news--append-related-article (node summary-id summary-title date why)
   "Append a backlink to NODE for the summary article."
@@ -699,14 +819,32 @@
     (message "Created security summary: %s" title)))
 
 (defun et/news-summarize-at-point ()
-  "Download the article at point and create an AI security summary node."
+  "Download the article at point and open an AI security summary draft."
   (interactive)
   (let* ((entry (et/news--entry-at-point))
          (context (et/news--summary-context entry))
-         (text-info (et/news--entry-text entry)))
+         (text-info (et/news--entry-text entry))
+         (text (car text-info))
+         (complete (cdr text-info))
+         (backend (et/news--summary-backend))
+         (model et/news-summary-model)
+         (buffer (generate-new-buffer
+                  (format "*Etmacs Summary: %s*"
+                          (plist-get context :title)))))
+    (with-current-buffer buffer
+      (et/news-summary-mode)
+      (setq-local et/news-summary-context context
+                  et/news-summary-text text
+                  et/news-summary-complete complete
+                  et/news-summary-backend backend
+                  et/news-summary-model model)
+      (insert (format "# Summarizing with %s...\n"
+                      (gptel--model-name model)))
+      (set-buffer-modified-p nil))
+    (pop-to-buffer buffer)
     (message "Summarizing %s with %s..."
-             (plist-get context :title) et/news-summary-model)
-    (et/news--request-summary context (car text-info) (cdr text-info))))
+             (plist-get context :title) model)
+    (et/news--request-summary context text complete backend model buffer)))
 
 (defun et/news-search (query)
   "Open Elfeed filtered by QUERY."
@@ -851,7 +989,8 @@ run with the new buffer so a later AI pass can fill it and add tags."
 (define-key et/news-map (kbd "d") #'et/news-narrow-date)
 (define-key et/news-map (kbd "m") #'et/news-mark-read)
 (define-key et/news-map (kbd "M") #'et/news-mark-unread)
-(define-key et/news-map (kbd "r") #'et/news-create-roam-node)
+(define-key et/news-map (kbd "r") #'et/news-summarize-at-point)
+(define-key et/news-map (kbd "R") #'et/news-summarize-at-point)
 (define-key et/news-map (kbd "S") #'et/news-summarize-at-point)
 (et/register-package-leader 'elfeed-search-mode et/news-map)
 (et/news-load-selection)
