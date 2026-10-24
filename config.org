@@ -1620,38 +1620,10 @@ BACKEND and MODEL select the gptel backend and model."
               (goto-char (point-min)))))))))
 
 (defun et/news--select-model ()
-  "Select a gptel model, returning (BACKEND . MODEL)."
-  (require 'gptel)
-  (let (models-alist)
-    (dolist (entry gptel--known-backends)
-      (let ((name (car entry))
-            (backend (cdr entry)))
-        (dolist (model (gptel-backend-models backend))
-          (push (list (concat name ":" (gptel--model-name model))
-                      backend model)
-                models-alist))))
-    (setq models-alist (nreverse models-alist))
-    (let* ((current-backend (or et/news-summary-backend gptel-backend))
-           (current-model (or et/news-summary-model gptel-model))
-           (completion-extra-properties
-            `(:group-function
-              ,(lambda (cand transform)
-                 (if transform cand
-                   (gptel-backend-name (nth 1 (assoc cand models-alist)))))
-              :annotation-function
-              ,(lambda (comp)
-                 (let* ((model (nth 2 (assoc comp models-alist)))
-                        (desc (get model :description)))
-                   (when desc
-                     (concat " "
-                             (truncate-string-to-width desc 70 nil ?  t t)))))))
-           (choice (completing-read
-                    "Model: " models-alist nil t nil nil
-                    (concat (gptel-backend-name current-backend) ":"
-                            (gptel--model-name current-model))))
-           (entry (assoc choice models-alist)))
-      (when entry
-        (cons (nth 1 entry) (nth 2 entry))))))
+  "Select a gptel model for the summary, returning (BACKEND . MODEL)."
+  (let ((gptel-backend (or et/news-summary-backend gptel-backend))
+        (gptel-model (or et/news-summary-model gptel-model)))
+    (et/gptel-select-model)))
 
 (defvar et/news-summary-mode-map
   (let ((map (make-sparse-keymap)))
@@ -2364,11 +2336,15 @@ instead of failing inside mu4e. =SPC M= is the mail group.
 =gptel= talks to OpenAI, Anthropic, and DeepSeek. API keys are never stored in
 this repository: the backends call =gptel-api-key-from-auth-source= with a
 machine and user prompted at first use, so =~/.authinfo.gpg= remains the source of
-truth. Reasoning text is hidden by default because providers bill reasoning
-tokens as output; =SPC a r= toggles it deliberately for one session. Security
-article summaries use a dedicated OpenAI backend with =gpt-6-luna=; change
-=et/news-summary-model= to use another model. The OpenCode entry is a placeholder
-and does not start a process or contact a server.
+truth. The default model is =gpt-6-luna= on OpenAI. =SPC a w= rewrites the active
+region with a model selected from gptel's provider/model completion; choose
+either a one-off model or set it as the persistent default. The default is saved
+in =.local/gptel.el= and reloaded at startup. Reasoning text is hidden by default
+because providers bill reasoning tokens as output; =SPC a r= toggles it
+deliberately for one session. Security article summaries use a dedicated OpenAI
+backend with =gpt-6-luna=; change =et/news-summary-model= to use another model.
+The OpenCode entry is a placeholder and does not start a process or contact a
+server.
 
 #+begin_src emacs-lisp :tangle lisp/et-ai.el
 ;;; et-ai.el --- Generated from config.org -*- lexical-binding: t; -*-
@@ -2426,6 +2402,108 @@ and does not start a process or contact a server.
   (message "gptel reasoning: %s"
            (if gptel-include-reasoning "included" "hidden")))
 
+(defvar et/gptel-state-file
+  (expand-file-name "gptel.el" et/state-directory)
+  "Persistent gptel default backend and model.")
+
+(defun et/gptel-select-model ()
+  "Select a gptel model, returning (BACKEND . MODEL)."
+  (require 'gptel)
+  (let (models-alist)
+    (dolist (entry gptel--known-backends)
+      (let ((name (car entry))
+            (backend (cdr entry)))
+        (dolist (model (gptel-backend-models backend))
+          (push (list (concat name ":" (gptel--model-name model))
+                      backend model)
+                models-alist))))
+    (setq models-alist (nreverse models-alist))
+    (let* ((completion-extra-properties
+            `(:group-function
+              ,(lambda (cand transform)
+                 (if transform cand
+                   (gptel-backend-name (nth 1 (assoc cand models-alist)))))
+              :annotation-function
+              ,(lambda (comp)
+                 (let* ((model (nth 2 (assoc comp models-alist)))
+                        (desc (get model :description)))
+                   (when desc
+                     (concat " "
+                             (truncate-string-to-width desc 70 nil ?  t t)))))))
+           (choice (completing-read
+                    "Model: " models-alist nil t nil nil
+                    (concat (gptel-backend-name gptel-backend) ":"
+                            (gptel--model-name gptel-model))))
+           (entry (assoc choice models-alist)))
+      (when entry
+        (cons (nth 1 entry) (nth 2 entry))))))
+
+(defun et/gptel-save-default (backend model)
+  "Persist BACKEND and MODEL as the default gptel choice."
+  (let ((coding-system-for-write 'utf-8-unix))
+    (with-temp-file et/gptel-state-file
+      (insert ";; Generated by et/gptel-set-default; do not edit by hand.\n")
+      (prin1 (list (cons 'backend (gptel-backend-name backend))
+                   (cons 'model model))
+             (current-buffer))
+      (insert "\n")))
+  (set-file-modes et/gptel-state-file #o600))
+
+(defun et/gptel-load-default ()
+  "Load the persisted gptel backend and model, when valid."
+  (when (file-readable-p et/gptel-state-file)
+    (condition-case nil
+        (with-temp-buffer
+          (insert-file-contents et/gptel-state-file)
+          (goto-char (point-min))
+          (let* ((state (read (current-buffer)))
+                 (name (cdr (assq 'backend state)))
+                 (model (cdr (assq 'model state)))
+                 (backend (or (cdr (assoc name gptel--known-backends))
+                              et/gptel-openai)))
+            (when (and backend model
+                       (memq model (gptel-backend-models backend)))
+              (setq gptel-backend backend
+                    gptel-model model))))
+      (error nil))))
+
+(defun et/gptel-set-default (&optional backend model)
+  "Set BACKEND and MODEL as the persistent gptel default."
+  (interactive
+   (let ((choice (et/gptel-select-model)))
+     (when choice
+       (list (car choice) (cdr choice)))))
+  (unless (and backend model)
+    (user-error "No model selected"))
+  (setq gptel-backend backend
+        gptel-model model)
+  (et/gptel-save-default backend model)
+  (message "Default gptel model: %s / %s"
+           (gptel-backend-name backend)
+           (gptel--model-name model)))
+
+(defun et/gptel-rewrite (&optional arg)
+  "Rewrite the active region with a selected model.
+With prefix ARG, set the selected model as the persistent default."
+  (interactive "P")
+  (require 'gptel-rewrite)
+  (unless (use-region-p)
+    (user-error "Select a region to rewrite"))
+  (let* ((choice (et/gptel-select-model))
+         (backend (car choice))
+         (model (cdr choice))
+         (scope (if arg
+                    "Set as default"
+                  (completing-read
+                   "Use selected model: "
+                   '("This rewrite only" "Set as default")
+                   nil t nil nil "This rewrite only"))))
+    (when (equal scope "Set as default")
+      (et/gptel-set-default backend model))
+    (let ((gptel-backend backend)
+          (gptel-model model))
+      (call-interactively #'gptel-rewrite))))
+
 (defun et/gptel-configure ()
   "Create gptel backends that obtain keys through auth-source."
   (setq et/gptel-openai
@@ -2440,8 +2518,9 @@ and does not start a process or contact a server.
         (gptel-make-deepseek "DeepSeek"
           :host "api.deepseek.com"
           :key (lambda () (et/gptel-key "api.deepseek.com")))
-        gptel-backend et/gptel-deepseek
-        gptel-model 'deepseek-flash))
+        gptel-backend et/gptel-openai
+        gptel-model 'gpt-6-luna)
+  (et/gptel-load-default))
 
 (defun et/opencode-placeholder ()
   "Placeholder for a future OpenCode integration."
@@ -2460,6 +2539,7 @@ and does not start a process or contact a server.
 (define-key et/ai-map (kbd "g") #'gptel)
 (define-key et/ai-map (kbd "s") #'gptel-send)
 (define-key et/ai-map (kbd "m") #'gptel-menu)
+(define-key et/ai-map (kbd "w") #'et/gptel-rewrite)
 (define-key et/ai-map (kbd "k") #'et/gptel-auth)
 (define-key et/ai-map (kbd "r") #'et/gptel-toggle-reasoning)
 (define-key et/ai-map (kbd "o") #'et/opencode-placeholder)

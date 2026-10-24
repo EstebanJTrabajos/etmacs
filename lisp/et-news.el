@@ -446,38 +446,10 @@ BACKEND and MODEL select the gptel backend and model."
               (goto-char (point-min)))))))))
 
 (defun et/news--select-model ()
-  "Select a gptel model, returning (BACKEND . MODEL)."
-  (require 'gptel)
-  (let (models-alist)
-    (dolist (entry gptel--known-backends)
-      (let ((name (car entry))
-            (backend (cdr entry)))
-        (dolist (model (gptel-backend-models backend))
-          (push (list (concat name ":" (gptel--model-name model))
-                      backend model)
-                models-alist))))
-    (setq models-alist (nreverse models-alist))
-    (let* ((current-backend (or et/news-summary-backend gptel-backend))
-           (current-model (or et/news-summary-model gptel-model))
-           (completion-extra-properties
-            `(:group-function
-              ,(lambda (cand transform)
-                 (if transform cand
-                   (gptel-backend-name (nth 1 (assoc cand models-alist)))))
-              :annotation-function
-              ,(lambda (comp)
-                 (let* ((model (nth 2 (assoc comp models-alist)))
-                        (desc (get model :description)))
-                   (when desc
-                     (concat " "
-                             (truncate-string-to-width desc 70 nil ?  t t)))))))
-           (choice (completing-read
-                    "Model: " models-alist nil t nil nil
-                    (concat (gptel-backend-name current-backend) ":"
-                            (gptel--model-name current-model))))
-           (entry (assoc choice models-alist)))
-      (when entry
-        (cons (nth 1 entry) (nth 2 entry))))))
+  "Select a gptel model for the summary, returning (BACKEND . MODEL)."
+  (let ((gptel-backend (or et/news-summary-backend gptel-backend))
+        (gptel-model (or et/news-summary-model gptel-model)))
+    (et/gptel-select-model)))
 
 (defvar et/news-summary-mode-map
   (let ((map (make-sparse-keymap)))

@@ -133,9 +133,12 @@ instead.
 
 =gptel= provides OpenAI, Anthropic and DeepSeek backends. API keys are read from
 =~/.authinfo.gpg= through =gptel-api-key-from-auth-source=; the machine and user
-are prompted for at first use and cached for the session. Reasoning text is
-hidden by default because reasoning tokens are billed as output. The OpenCode
-entry is a placeholder.
+are prompted for at first use and cached for the session. The default model is
+=gpt-6-luna= on OpenAI. =SPC a w= rewrites the active region with a model you
+choose: use it for that rewrite only, or set it as the persistent default.
+The default is stored in =.local/gptel.el= and reloaded at startup. Reasoning
+text is hidden by default because reasoning tokens are billed as output. The
+OpenCode entry is a placeholder.
 
 | Keys                  | Action                                                     |
 |-----------------------+------------------------------------------------------------|
@@ -143,6 +146,7 @@ entry is a placeholder.
 | SPC q / SPC R         | Quit Emacs / re-tangle and restart                         |
 | SPC a g / SPC a s     | gptel chat / send                                          |
 | SPC a m               | gptel menu                                                 |
+| SPC a w               | Rewrite region with a selected model                       |
 | SPC a k               | Prompt for and cache auth-source keys                      |
 | SPC a r               | Toggle reasoning output for this session                   |
 | SPC a o               | OpenCode placeholder                                       |
