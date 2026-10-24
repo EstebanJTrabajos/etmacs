@@ -147,12 +147,15 @@
     (should (string-match-p "explicitly named" prompt))
     (should (string-match-p "python/django" prompt))
     (should (string-match-p "Defang" prompt))
+    (should (string-match-p "only word separator" prompt))
+    (should (string-match-p "!T1059" prompt))
+    (should (string-match-p "\\$microsoft" prompt))
     (should (string-match-p "Text complete: yes" prompt))))
 
 (ert-deftest et/news-summary-parser-extracts-metadata-and-nodes ()
   (let* ((output
           (concat
-           "#+filetags: :security:vulnerability:python:django:\n"
+           "#+filetags: :#security:#vulnerability:#python:#django:\n"
            "#+ecosystem: python/django\n"
            "#+description: Test summary\n\n"
            "* Summary\nFirst paragraph.\n\n"
@@ -163,7 +166,7 @@
            "| language | Python | affected | Runtime |\n"
            "| platform | Django | affected | Framework |\n"))
          (parsed (et/news--parse-summary-output output)))
-    (should (equal '("security" "vulnerability" "python" "django")
+    (should (equal '("#security" "#vulnerability" "#python" "#django")
                    (plist-get parsed :tags)))
     (should (equal "python/django" (plist-get parsed :ecosystem)))
     (should (equal "Test summary" (plist-get parsed :description)))
@@ -172,12 +175,21 @@
     (should (equal "Python"
                    (plist-get (car (plist-get parsed :related)) :title)))))
 
+(ert-deftest et/news-tag-prefixes-and-underscores ()
+  (should (equal "#python" (et/news--clean-tag "#python")))
+  (should (equal "#incident_type" (et/news--clean-tag "incident-type")))
+  (should (equal "@cisa" (et/news--clean-tag "@CISA")))
+  (should (equal "$microsoft" (et/news--clean-tag "$Microsoft")))
+  (should (equal "!T1059" (et/news--clean-tag "T1059")))
+  (should (equal "!T1059" (et/news--clean-tag "#T1059")))
+  (should (equal "!T1059_001" (et/news--clean-tag "T1059.001"))))
+
 (ert-deftest et/news-summary-creates-two-way-roam-links ()
   (skip-unless (sqlite-available-p))
   (et/with-test-vault
     (let* ((output
             (concat
-             "#+filetags: :security:vulnerability:python:django:\n"
+             "#+filetags: :#security:#vulnerability:#python:#django:\n"
              "#+ecosystem: python/django\n"
              "#+description: Test summary\n\n"
              "* Summary\nFirst paragraph.\n\n"
@@ -213,7 +225,7 @@
                             (buffer-string))))
         (should summary-file)
         (should (string-match-p "#\\+ecosystem: python/django" summary-text))
-        (should (string-match-p "#\\+filetags: :news:reference:security"
+        (should (string-match-p "#\\+filetags: :news:reference:#security"
                                 summary-text))
         (should (string-match-p "\\[\\[id:" summary-text))
         (should (string-match-p "#\\+title: Python" python-text))
@@ -295,7 +307,7 @@
                          :feed "Test Feed"
                          :date "2026-10-24"
                          :domain "personal"))
-          (output (concat "#+filetags: :security:\n"
+          (output (concat "#+filetags: :#security:\n"
                           "#+ecosystem: python/django\n"
                           "#+description: Accepted draft\n\n"
                           "* Summary\nDraft paragraph.\n\n"

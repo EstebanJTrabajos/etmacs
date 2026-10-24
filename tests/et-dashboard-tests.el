@@ -227,6 +227,33 @@
             (funcall (button-get button 'action) button))
           (should agenda))))))
 
+(ert-deftest et/dashboard-news-layout-has-update-button-and-underlines ()
+  (et/with-test-vault
+    (let ((projectile-known-projects nil)
+          (recentf-list nil)
+          (org-agenda-files nil)
+          (elfeed-db t)
+          (elfeed-db-entries (make-hash-table :test #'equal))
+          (et/org-domain "personal"))
+      (et/dashboard)
+      (with-current-buffer et/dashboard-buffer-name
+        (let ((update-pos (save-excursion
+                            (goto-char (point-min))
+                            (search-forward "Update feeds")
+                            (point)))
+              (sciam-pos (save-excursion
+                           (goto-char (point-min))
+                           (search-forward "Scientific American")
+                           (point))))
+          (should (< update-pos sciam-pos)))
+        (goto-char (point-min))
+        (search-forward "Scientific American")
+        (forward-line 1)
+        (should (looking-at-p (make-string (length "Scientific American") ?-)))
+        (should (string-match-p "New York Times\n-+"
+                                (buffer-substring-no-properties
+                                 (point-min) (point-max))))))))
+
 (ert-deftest et/dashboard-news-tab-collapses-one-feed ()
   (et/with-test-vault
     (let ((projectile-known-projects nil)
@@ -247,6 +274,7 @@
         (should (eq (et/dashboard-news-site-at-point) 'sciam))
         (et/dashboard-toggle-news-feed)
         (should (member 'sciam et/dashboard-news-collapsed))
+        (should (looking-at-p "Scientific American"))
         (should (= 7 (count-matches "No cached articles"
                                     (point-min) (point-max))))
         (should (string-match-p "New York Times" (buffer-string)))

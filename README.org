@@ -126,7 +126,9 @@ tasks, Daily journal, and five cached news articles per site. Tasks are sorted
 by state and explicit priority, then by deadline/schedule, with undated tasks
 last; overflow is reported as =+N more=. =g= refreshes, =q= quits, =RET=
 activates a button or link, and =TAB= collapses or expands the article list for
-the feed at point. =SPC q= quits Emacs; =SPC R= re-tangles
+the feed at point. The News section places =Update feeds= directly beneath the
+=News= heading, and each feed title has a dashed underline. =TAB= returns point
+to the feed title after folding or unfolding. =SPC q= quits Emacs; =SPC R= re-tangles
 =config.org= and restarts Emacs after saving buffers. Set
 =et/dashboard-on-startup= to nil in =.local/settings.el= to start on scratch
 instead.
@@ -183,6 +185,12 @@ language/platform/package-manager nodes. Missing language/platform/package
 nodes are created under =general/topics/= with the appropriate =:language:=,
 =:platform:=, or =:package-manager:= tag. The summary links to each node and
 each node gets a dated backlink under =Related articles=.
+
+Summary tags use =_= as the only word separator; hyphens are not allowed.
+Tags are prefixed by category: =#= for topics (languages, platforms, attack
+types, incident types, package managers), =@= for people/groups/foundations,
+=$= for companies, and =!= for explicitly reported MITRE techniques, e.g.
+=#python=, =@cisa=, =$microsoft=, =!T1059=.
 
 The summary opens in an unsaved review buffer:
 

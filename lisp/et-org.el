@@ -9,6 +9,18 @@
 (require 'seq)
 (require 'subr-x)
 
+;; Extend Org's tag character set for company ($) and MITRE (!) tags.
+(setq org-tag--valid-char-set "[:alnum:]_@#%$!"
+      org-tag-re (format "[%s]+" org-tag--valid-char-set)
+      org-tag--group-enclosed-re
+      (format "\\(:\\([%s:]+\\):\\)" org-tag--valid-char-set)
+      org-tag--group-optional-re
+      (concat "\\(?:[ \t]+" org-tag--group-enclosed-re "\\)?[ \t]*$")
+      org-tag-group-re
+      (format "[ \t]+%s[ \t]*$" org-tag--group-enclosed-re)
+      org-tag-line-re
+      (format "^\\*+ \\(?:.*[ \t]\\)?%s[ \t]*$" org-tag--group-enclosed-re))
+
 (defvar et/org-domain "personal" "Default note domain in the current workspace.")
 (defvar et/org-domains '("personal" "work" "general"))
 (defvar et/org-agenda-scope "all")

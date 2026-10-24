@@ -213,15 +213,21 @@ is sorted by importance and date, then limited to
                   (fboundp 'et/news-entries)
                   (boundp 'et/news-sites)))
         (insert "  Install elfeed with SPC h p to enable news feeds.\n")
+      (insert "  ")
+      (et/dashboard-insert-button
+       "Update feeds" (lambda (_button) (et/news-update)))
+      (insert "\n\n")
       (dolist (site et/news-sites)
         (let* ((site-id (car site))
                (collapsed (member site-id et/dashboard-news-collapsed))
                (start (point))
+               (title (nth 1 site))
                (entries (unless collapsed
                           (condition-case nil
                               (et/news-entries site-id)
                             (error nil)))))
-          (insert (propertize (format "%s\n" (nth 1 site)) 'face 'bold))
+          (insert (propertize (format "%s\n" title) 'face 'bold))
+          (insert (make-string (length title) ?-) "\n")
           (unless collapsed
             (if entries
                 (dolist (entry entries)
@@ -244,13 +250,9 @@ is sorted by importance and date, then limited to
           (insert "  ")
           (et/dashboard-insert-button
            "Choose feeds" (lambda (_button) (et/news-select-feeds)))
-          (insert "\n")
+          (insert "\n\n")
           (add-text-properties start (point)
-                               (list 'et-dashboard-news-site site-id))))
-      (insert "  ")
-      (et/dashboard-insert-button
-       "Update feeds" (lambda (_button) (et/news-update)))
-      (insert "\n"))
+                               (list 'et-dashboard-news-site site-id)))))
     (insert "\n")
     (insert (propertize
              "g refresh · q quit · TAB feed · RET open · d journal · a agenda\n"
@@ -317,7 +319,12 @@ is sorted by importance and date, then limited to
         (setq et/dashboard-news-collapsed
               (delete site et/dashboard-news-collapsed))
       (push site et/dashboard-news-collapsed))
-    (et/dashboard-refresh)))
+    (et/dashboard-refresh)
+    (let ((position (text-property-any (point-min) (point-max)
+                                       'et-dashboard-news-site site)))
+      (when position
+        (goto-char position)
+        (recenter)))))
 
 (define-key et/leader-map (kbd "d") #'et/dashboard)
 (provide 'et-dashboard)

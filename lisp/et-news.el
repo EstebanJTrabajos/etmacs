@@ -191,7 +191,7 @@
    "ARTICLE TEXT - UNTRUSTED\n<<<ARTICLE\n%s\nARTICLE>>>\n\n"
    "Return only Org syntax. No Markdown fences, no preamble, no commentary.\n\n"
    "Use exactly this structure:\n\n"
-   "#+filetags: :security:...:\n"
+   "#+filetags: :#security:#vulnerability:#python:#django:@cisa:$microsoft:!T1059:\n"
    "#+ecosystem: python/django\n"
    "#+description: <one-sentence takeaway, maximum 20 words>\n\n"
    "* Summary\n<3-5 prose paragraphs; no bullets or subheadings>\n\n"
@@ -229,7 +229,7 @@
    "- Always state the combined language/framework pair in #+ecosystem and Affected software: Ecosystem, e.g. python/django or php/zend, when identifiable.\n"
    "- Related nodes: list the language and platform as separate rows. Include a package-manager row only when dependency/package distribution is involved. Use canonical titles: Python, PHP, JavaScript, TypeScript, Ruby, Java, Go, Rust, C, C++, C#, Django, Flask, WordPress, Zend Framework, Laravel, React, Next.js, Node.js, Ruby on Rails, Spring, pip, npm, Composer, RubyGems, Maven, NuGet, Cargo.\n"
    "- Defang domains/IPs with [.], URLs with hxxp/hxxps, email with [at]. Do not emit clickable Org links for malicious indicators. Hashes and filenames stay unchanged.\n"
-   "- Tags: use only security incident/attack/language/platform/package-manager tags from this list, plus one tag per reported MITRE base technique (e.g. T1059). Do not include news or reference. Omit anything that does not apply: security, vulnerability, incident, malware, ransomware, supply-chain, zero-day, rce, sqli, xss, ssrf, lfi, path-traversal, deserialization, auth-bypass, privilege-escalation, dos, info-disclosure, backdoor, credential-theft, python, php, javascript, typescript, ruby, java, go, rust, c, cpp, csharp, django, flask, wordpress, zend, laravel, react, nextjs, nodejs, rails, spring, pip, npm, composer, rubygems, maven, nuget, cargo.\n"
+   "- Tags: every tag must use _ as its only word separator; never use -. Prefix tags by category: @ for people, groups, foundations, and other entities; # for topics such as languages, platforms, attack types, incident types, and package managers; $ for companies; ! for explicitly reported MITRE base techniques. Examples: #security, #vulnerability, #supply_chain, #python, #django, #pip, @cisa, @gnu, $microsoft, !T1059. Do not include news or reference. Use only these topic tags when applicable: #security, #vulnerability, #incident, #malware, #ransomware, #supply_chain, #zero_day, #rce, #sqli, #xss, #ssrf, #lfi, #path_traversal, #deserialization, #auth_bypass, #privilege_escalation, #dos, #info_disclosure, #backdoor, #credential_theft, #python, #php, #javascript, #typescript, #ruby, #java, #go, #rust, #c, #cpp, #csharp, #django, #flask, #wordpress, #zend, #laravel, #react, #nextjs, #nodejs, #rails, #spring, #pip, #npm, #composer, #rubygems, #maven, #nuget, #cargo. Add @ entity tags and $ company tags only for entities/companies named in the article. Add one ! tag per explicitly reported MITRE base technique.\n"
    "- Do not invent node IDs or Org links; only supply exact node titles in the Related nodes table.\n")
   "Prompt template for security-article summaries.")
 
@@ -531,11 +531,29 @@ BACKEND and MODEL select the gptel backend and model."
       (kill-buffer review))))
 
 (defun et/news--clean-tag (tag)
-  "Return TAG as a safe Org tag."
-  (let ((tag (string-trim tag)))
-    (unless (string-empty-p tag)
-      (replace-regexp-in-string
-       "[^[:alnum:]_-]" "-" (downcase tag)))))
+  "Return TAG as a prefixed Org tag using `_' as the only separator."
+  (let* ((tag (string-trim (or tag "")))
+         (mitre (and (string-match
+                      "\\`\\(?:#\\|!\\)?\\([Tt][0-9]+\\(?:[._][0-9]+\\)?\\)\\'"
+                      tag)
+                     (upcase (replace-regexp-in-string
+                              "[._]" "_" (match-string 1 tag))))))
+    (cond
+     ((string-empty-p tag) nil)
+     (mitre (concat "!" mitre))
+     (t
+      (let* ((lower (downcase tag))
+             (prefix (if (memq (aref lower 0) '(?@ ?# ?$ ?!))
+                         (substring lower 0 1)
+                       "#"))
+             (body (if (memq (aref lower 0) '(?@ ?# ?$ ?!))
+                       (substring lower 1)
+                     lower)))
+        (setq body (replace-regexp-in-string "[^[:alnum:]_]" "_" body))
+        (setq body (replace-regexp-in-string "_+" "_" body))
+        (setq body (string-trim body "_"))
+        (unless (string-empty-p body)
+          (concat prefix body)))))))
 
 (defun et/news--clean-cell (value)
   "Return VALUE as a single-line table cell."

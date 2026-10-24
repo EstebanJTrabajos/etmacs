@@ -258,6 +258,14 @@
       (org-back-to-heading t)
       (should (et/org-agenda-skip-outside-window)))))
 
+(ert-deftest et/org-supports-dollar-and-bang-tags ()
+  (with-temp-buffer
+    (org-mode)
+    (insert "* Heading :$acme:#python:@sacha:!T1059:\n")
+    (goto-char (point-min))
+    (should (equal '("$acme" "#python" "@sacha" "!T1059")
+                   (org-get-tags nil t)))))
+
 (ert-deftest et/refang-reverses-common-defanging ()
   (should (equal "https://evil.example/path"
                  (et/refang "hxxps://evil[.]example/path")))
