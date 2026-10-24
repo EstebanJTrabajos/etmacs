@@ -160,7 +160,7 @@
           (selected (list selected))
           (t (user-error "No article selected")))))
 
-(defvar et/news-summary-model 'gpt-6.1-luna
+(defvar et/news-summary-model 'gpt-6-luna
   "Model used for security-article summaries.")
 (defvar et/news-summary-backend nil
   "Cached gptel backend for security-article summaries.")
@@ -570,14 +570,14 @@
                             (et/news--clean-cell (plist-get row :title))
                             (et/news--clean-cell (plist-get row :relationship))
                             (et/news--clean-cell (plist-get row :why))))
-          (org-table-align))
-      (end-of-line)
-      (insert "\n")
-      (dolist (row rows)
-        (insert (format "- [[id:%s][%s]] - %s\n"
-                        (plist-get row :id)
-                        (et/news--clean-cell (plist-get row :title))
-                        (et/news--clean-cell (plist-get row :relationship)))))))))
+           (org-table-align))
+         (end-of-line)
+         (insert "\n")
+         (dolist (row rows)
+           (insert (format "- [[id:%s][%s]] - %s\n"
+                           (plist-get row :id)
+                           (et/news--clean-cell (plist-get row :title))
+                           (et/news--clean-cell (plist-get row :relationship)))))))))
 
 (defun et/news--append-related-article (node summary-id summary-title date why)
   "Append a backlink to NODE for the summary article."
