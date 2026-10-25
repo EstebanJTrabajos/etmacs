@@ -98,9 +98,21 @@
     (et/gptel-toggle-reasoning)
     (should-not gptel-include-reasoning)))
 
-(ert-deftest et/ai-bindings-and-opencode-placeholder ()
+(ert-deftest et/ai-bindings-include-opencode ()
   (should (eq (lookup-key et/leader-map (kbd "a")) et/ai-map))
-  (dolist (key '("g" "s" "m" "w" "k" "r" "o"))
+  (dolist (key '("g" "s" "m" "w" "k" "r"))
     (should (commandp (lookup-key et/ai-map (kbd key)))))
   (should (eq (lookup-key et/ai-map (kbd "w")) 'et/gptel-rewrite))
-  (should (eq (lookup-key et/ai-map (kbd "o")) 'et/opencode-placeholder)))
+  (should (eq (lookup-key et/ai-map (kbd "o")) 'opencode))
+  (should (eq (lookup-key et/ai-map (kbd "O")) 'opencode-open-session))
+  (should (eq (lookup-key et/ai-map (kbd "a")) 'opencode-ask))
+  (should (eq (lookup-key et/ai-map (kbd "c")) 'opencode-ask-contextual)))
+
+(ert-deftest et/ai-opencode-is-installed-from-source ()
+  (let ((recipe (assq 'emacs-opencode et/vc-packages)))
+    (should recipe)
+    (should (equal (plist-get (cdr recipe) :url)
+                   "https://github.com/jdormit/emacs-opencode")))
+  ;; The repository does not declare Package-Requires, so its HTTP client
+  ;; dependency must be a direct archive package.
+  (should (memq 'request et/packages)))

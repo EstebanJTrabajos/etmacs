@@ -148,7 +148,9 @@
     (should (eq et/local-leader-map original))))
 
 (ert-deftest et/installer-only-installs-missing-packages ()
-  (let ((et/packages '(example-installed example-missing)) calls)
+  (let ((et/packages '(example-installed example-missing))
+        (et/vc-packages nil)
+        calls)
     (cl-letf (((symbol-function 'package-installed-p)
                (lambda (package &rest _) (eq package 'example-installed)))
               ((symbol-function 'package-refresh-contents)
@@ -157,6 +159,21 @@
                (lambda (package &rest _) (push package calls))))
       (et/install-packages)
       (should (equal (reverse calls) '(refresh example-missing))))))
+
+(ert-deftest et/installer-installs-vc-packages-from-source ()
+  (require 'package-vc)
+  (let ((et/packages nil)
+        (et/vc-packages '((example-vc :url "https://example.invalid/repo")))
+        installed)
+    (cl-letf (((symbol-function 'package-installed-p) (lambda (&rest _) nil))
+              ((symbol-function 'package-refresh-contents) #'ignore)
+              ((symbol-function 'package-install)
+               (lambda (&rest _) (ert-fail "Archive install used for a VC package")))
+              ((symbol-function 'package-vc-install)
+               (lambda (recipe &rest _) (push recipe installed))))
+      (et/install-packages)
+      (should (equal installed
+                     '((example-vc :url "https://example.invalid/repo")))))))
 
 (ert-deftest et/installer-does-nothing-if-complete ()
   (cl-letf (((symbol-function 'package-installed-p) (lambda (&rest _) t))

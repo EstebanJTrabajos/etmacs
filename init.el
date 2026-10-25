@@ -23,7 +23,7 @@
   '(evil evil-collection vertico orderless marginalia consult
     vertico-posframe guava-themes projectile perspective corfu treemacs
     treemacs-evil treemacs-perspective avy ace-window expand-region crux
-    gptel parinfer-rust-mode rainbow-delimiters
+    gptel request parinfer-rust-mode rainbow-delimiters
     doom-modeline nerd-icons minions elfeed
     magit diff-hl git-timemachine git-modes hl-todo
     org-roam org-roam-ui org-pomodoro org-drill citar ox-hugo ox-pandoc
@@ -32,9 +32,15 @@
     dockerfile-mode docker)
   "Direct dependencies for the current slice; package.el resolves dependencies.")
 
+(defconst et/vc-packages
+  '((emacs-opencode :url "https://github.com/jdormit/emacs-opencode"))
+  "Packages absent from the archives, installed from source with package-vc.
+Each entry is a recipe accepted by `package-vc-install'.")
+
 (defun et/missing-packages ()
   "Return direct dependencies not installed in this configuration."
-  (seq-remove #'package-installed-p et/packages))
+  (seq-remove #'package-installed-p
+              (append et/packages (mapcar #'car et/vc-packages))))
 
 (defun et/install-packages ()
   "Explicitly refresh archives and install missing dependencies, not upgrades."
@@ -46,7 +52,12 @@
                 (yes-or-no-p (format "Download and install %s? " missing)))
         (package-refresh-contents)
         (dolist (package missing)
-          (package-install package))
+          (let ((recipe (assq package et/vc-packages)))
+            (if recipe
+                (progn
+                  (require 'package-vc)
+                  (package-vc-install recipe))
+              (package-install package))))
         (message "Packages installed. Restart Emacs to activate the configuration.")))))
 
 (defun et/tangle-config ()

@@ -13,10 +13,12 @@ planning/roam workflows. IDE tools will follow separately. Nothing relocates not
 The note root is =~/org=, with one roam graph in =~/org/roam= organized into
 personal/work/general domains. These domains are not security boundaries.
 
-Built-in =package.el= and =use-package= avoid a bootstrap framework. Package
-installation is explicit via =M-x et/install-packages=; startup never refreshes
-archives or installs packages. Packages are not locked to exact versions yet.
-Archives use HTTPS, but this is not a claim of fully reproducible builds.
+Built-in =package.el=, =package-vc=, and =use-package= avoid a bootstrap
+framework. Package installation is explicit via =M-x et/install-packages=;
+startup never refreshes archives or installs packages. Packages are not locked
+to exact versions yet. Archives use HTTPS, but this is not a claim of fully
+reproducible builds. Packages that are not published on a configured archive
+are cloned from source with a =package-vc= recipe, which needs Git.
 
 Custom functions and variables use the =et/= prefix. Module file names and
 provided features retain =et-= (for example, =et-core.el= and =et-core=).
@@ -67,7 +69,7 @@ package directory first. No global bidi or aggressive GC tweaks.
   '(evil evil-collection vertico orderless marginalia consult
     vertico-posframe guava-themes projectile perspective corfu treemacs
     treemacs-evil treemacs-perspective avy ace-window expand-region crux
-    gptel parinfer-rust-mode rainbow-delimiters
+    gptel request parinfer-rust-mode rainbow-delimiters
     doom-modeline nerd-icons minions elfeed
     magit diff-hl git-timemachine git-modes hl-todo
     org-roam org-roam-ui org-pomodoro org-drill citar ox-hugo ox-pandoc
@@ -76,9 +78,15 @@ package directory first. No global bidi or aggressive GC tweaks.
     dockerfile-mode docker)
   "Direct dependencies for the current slice; package.el resolves dependencies.")
 
+(defconst et/vc-packages
+  '((emacs-opencode :url "https://github.com/jdormit/emacs-opencode"))
+  "Packages absent from the archives, installed from source with package-vc.
+Each entry is a recipe accepted by `package-vc-install'.")
+
 (defun et/missing-packages ()
   "Return direct dependencies not installed in this configuration."
-  (seq-remove #'package-installed-p et/packages))
+  (seq-remove #'package-installed-p
+              (append et/packages (mapcar #'car et/vc-packages))))
 
 (defun et/install-packages ()
   "Explicitly refresh archives and install missing dependencies, not upgrades."
@@ -90,7 +98,12 @@ package directory first. No global bidi or aggressive GC tweaks.
                 (yes-or-no-p (format "Download and install %s? " missing)))
         (package-refresh-contents)
         (dolist (package missing)
-          (package-install package))
+          (let ((recipe (assq package et/vc-packages)))
+            (if recipe
+                (progn
+                  (require 'package-vc)
+                  (package-vc-install recipe))
+              (package-install package))))
         (message "Packages installed. Restart Emacs to activate the configuration.")))))
 
 (defun et/tangle-config ()
@@ -2371,8 +2384,19 @@ in =.local/gptel.el= and reloaded at startup. Reasoning text is hidden by defaul
 because providers bill reasoning tokens as output; =SPC a r= toggles it
 deliberately for one session. Security article summaries use a dedicated OpenAI
 backend with =gpt-6-luna=; change =et/news-summary-model= to use another model.
-The OpenCode entry is a placeholder and does not start a process or contact a
-server.
+
+=emacs-opencode= adds an OpenCode 2 client in native Emacs buffers. It is not
+published on MELPA, so =et/install-packages= clones it from GitHub with
+=package-vc=. Its HTTP client dependency =request= comes from MELPA and is
+listed explicitly because the repository does not declare it. The client needs
+the =opencode= CLI and =curl= on =PATH=; it reuses OpenCode's shared background
+service and starts it on demand. Opening a session does not send anything until
+a prompt is submitted. =SPC a o= starts a new session, =SPC a O= reopens an
+existing one, =SPC a a= asks a one-shot question, and =SPC a c= sends the active
+region (or the lines around point) along with the prompt. When Magit is
+available, the optional
+=emacs-opencode-magit= integration adds repository diffs under =C-c C-d= in
+session buffers.
 
 #+begin_src emacs-lisp :tangle lisp/et-ai.el
 ;;; et-ai.el --- Generated from config.org -*- lexical-binding: t; -*-
@@ -2550,11 +2574,6 @@ With prefix ARG, set the selected model as the persistent default."
         gptel-model 'gpt-6-luna)
   (et/gptel-load-default))
 
-(defun et/opencode-placeholder ()
-  "Placeholder for a future OpenCode integration."
-  (interactive)
-  (message "OpenCode integration is not configured yet"))
-
 (use-package gptel
   :if (locate-library "gptel")
   :commands (gptel gptel-send gptel-menu)
@@ -2564,13 +2583,26 @@ With prefix ARG, set the selected model as the persistent default."
   (setq gptel-include-reasoning nil)
   (et/gptel-configure))
 
+(use-package emacs-opencode
+  :if (locate-library "emacs-opencode")
+  :commands (opencode opencode-ask opencode-ask-contextual
+             opencode-open-session opencode-send-to-session
+             opencode-send-context-to-session opencode-mcp-status
+             opencode-disconnect opencode-restart)
+  :config
+  (when (locate-library "emacs-opencode-magit")
+    (require 'emacs-opencode-magit)))
+
 (define-key et/ai-map (kbd "g") #'gptel)
 (define-key et/ai-map (kbd "s") #'gptel-send)
 (define-key et/ai-map (kbd "m") #'gptel-menu)
 (define-key et/ai-map (kbd "w") #'et/gptel-rewrite)
 (define-key et/ai-map (kbd "k") #'et/gptel-auth)
 (define-key et/ai-map (kbd "r") #'et/gptel-toggle-reasoning)
-(define-key et/ai-map (kbd "o") #'et/opencode-placeholder)
+(define-key et/ai-map (kbd "o") #'opencode)
+(define-key et/ai-map (kbd "O") #'opencode-open-session)
+(define-key et/ai-map (kbd "a") #'opencode-ask)
+(define-key et/ai-map (kbd "c") #'opencode-ask-contextual)
 (provide 'et-ai)
 ;;; et-ai.el ends here
 #+end_src

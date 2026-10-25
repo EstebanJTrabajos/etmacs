@@ -2,8 +2,8 @@
 #+options: toc:2
 
 A personal, literate Emacs configuration—not a Doom or Prelude clone. Includes
-Evil, discoverable leader keys, a startup dashboard, gptel AI integration,
-Elfeed news, mu4e support, doom-modeline, completion, Projectile/Perspective
+Evil, discoverable leader keys, a startup dashboard, gptel and OpenCode AI
+integration, Elfeed news, mu4e support, doom-modeline, completion, Projectile/Perspective
 workspaces, Treemacs, Git tools, conservative editing defaults, and Org/roam
 workflows.
 The source of truth and package rationales are in [[file:config.org][config.org]]. Maintained project
@@ -139,8 +139,18 @@ are prompted for at first use and cached for the session. The default model is
 =gpt-6-luna= on OpenAI. =SPC a w= rewrites the active region with a model you
 choose: use it for that rewrite only, or set it as the persistent default.
 The default is stored in =.local/gptel.el= and reloaded at startup. Reasoning
-text is hidden by default because reasoning tokens are billed as output. The
-OpenCode entry is a placeholder.
+text is hidden by default because reasoning tokens are billed as output.
+
+=emacs-opencode= provides an OpenCode 2 client in native Emacs buffers. It is
+not on MELPA, so =et/install-packages= clones it from GitHub through
+=package-vc=; its =request= dependency is installed from MELPA. Git, the
+=opencode= CLI, and =curl= must be available. The client uses OpenCode's shared
+background service and never sends a prompt until you submit one. =SPC a o=
+starts a session in the current project, =SPC a O= reopens an existing one,
+=SPC a a= asks a one-shot question, and =SPC a c= includes the active region or
+the lines around point. Session buffers use the client's own
+=C-c C-c= (send), =C-c C-l= (model) and =C-c C-a= (agent) bindings; with Magit
+loaded, =C-c C-d= shows the session's worktree diffs.
 
 | Keys                  | Action                                                     |
 |-----------------------+------------------------------------------------------------|
@@ -151,7 +161,8 @@ OpenCode entry is a placeholder.
 | SPC a w               | Rewrite region with a selected model                       |
 | SPC a k               | Prompt for and cache auth-source keys                      |
 | SPC a r               | Toggle reasoning output for this session                   |
-| SPC a o               | OpenCode placeholder                                       |
+| SPC a o / SPC a O     | New / existing OpenCode session                            |
+| SPC a a / SPC a c     | One-shot OpenCode question / question with buffer context  |
 | SPC n C               | Create and persist an Org capture template                 |
 
 Interactively created capture templates are written to
@@ -603,7 +614,9 @@ server is installed on this development host yet.
 
 Git and ripgrep are used by project/Git/search commands. On Arch/Ubuntu the
 search package is =ripgrep=. PDF needs TeX; DOCX needs Pandoc. org-roam needs
-built-in SQLite support. Elfeed uses =curl= for feed downloads. mu4e needs the
+built-in SQLite support. Elfeed uses =curl= for feed downloads. The OpenCode
+client needs OpenCode 2's =opencode= CLI, =curl=, and Git for its =package-vc=
+install. mu4e needs the
 system =mu= package (already separate from ELPA); set =mu4e-maildir= in
 =.local/settings.el=. Doom Modeline's Nerd Font glyphs need a one-time
 =M-x et/install-nerd-fonts=. No system packages, language servers, dictionaries,
