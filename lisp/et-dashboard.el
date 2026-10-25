@@ -12,6 +12,7 @@
 (declare-function et/org-state-face "et-org" (state))
 (declare-function et/org-task-due-label "et-org" (task))
 (declare-function et/org-task-sort-predicate "et-org" (a b))
+(declare-function et/news-summarize-at-point "et-news" ())
 
 (defvar et/dashboard-buffer-name "*etmacs-dashboard*")
 (defvar et/dashboard-on-startup t
@@ -34,6 +35,7 @@
     (define-key map (kbd "p") #'et/dashboard-switch-project)
     (define-key map (kbd "c") #'et/capture)
     (define-key map (kbd "n") #'et/dashboard-news)
+    (define-key map (kbd "S") #'et/news-summarize-at-point)
     (define-key map (kbd "TAB") #'et/dashboard-toggle-news-feed)
     (define-key map (kbd "<tab>") #'et/dashboard-toggle-news-feed)
     (define-key map (kbd "u") #'et/news-update)
@@ -211,25 +213,35 @@ is sorted by importance and date, then limited to
                   (fboundp 'et/news-entries)
                   (boundp 'et/news-sites)))
         (insert "  Install elfeed with SPC h p to enable news feeds.\n")
+      (insert "  ")
+      (et/dashboard-insert-button
+       "Update feeds" (lambda (_button) (et/news-update)))
+      (insert "\n\n")
       (dolist (site et/news-sites)
         (let* ((site-id (car site))
                (collapsed (member site-id et/dashboard-news-collapsed))
                (start (point))
+               (title (nth 1 site))
                (entries (unless collapsed
                           (condition-case nil
                               (et/news-entries site-id)
                             (error nil)))))
-          (insert (propertize (format "%s\n" (nth 1 site)) 'face 'bold))
+          (insert (propertize (format "%s\n" title) 'face 'bold))
+          (insert (make-string (length title) ?-) "\n")
           (unless collapsed
             (if entries
                 (dolist (entry entries)
-                  (insert "  ")
-                  (et/dashboard-insert-button
-                   (truncate-string-to-width
-                    (or (elfeed-entry-title entry) "(untitled)") 84 nil nil "…")
-                   (lambda (_button) (et/news-open-article entry))
-                   (or (elfeed-entry-link entry) "No link"))
-                  (insert "\n"))
+                  (let ((entry entry)
+                        (button-start (point)))
+                    (insert "  ")
+                    (et/dashboard-insert-button
+                     (truncate-string-to-width
+                      (or (elfeed-entry-title entry) "(untitled)") 84 nil nil "…")
+                     (lambda (_button) (et/news-open-article entry))
+                     (or (elfeed-entry-link entry) "No link"))
+                    (add-text-properties button-start (point)
+                                         (list 'et-news-entry entry))
+                    (insert "\n")))
               (insert "  No cached articles.\n")))
           (insert "  ")
           (et/dashboard-insert-button
@@ -238,13 +250,9 @@ is sorted by importance and date, then limited to
           (insert "  ")
           (et/dashboard-insert-button
            "Choose feeds" (lambda (_button) (et/news-select-feeds)))
-          (insert "\n")
+          (insert "\n\n")
           (add-text-properties start (point)
-                               (list 'et-dashboard-news-site site-id))))
-      (insert "  ")
-      (et/dashboard-insert-button
-       "Update feeds" (lambda (_button) (et/news-update)))
-      (insert "\n"))
+                               (list 'et-dashboard-news-site site-id)))))
     (insert "\n")
     (insert (propertize
              "g refresh · q quit · TAB feed · RET open · d journal · a agenda\n"
@@ -311,7 +319,12 @@ is sorted by importance and date, then limited to
         (setq et/dashboard-news-collapsed
               (delete site et/dashboard-news-collapsed))
       (push site et/dashboard-news-collapsed))
-    (et/dashboard-refresh)))
+    (et/dashboard-refresh)
+    (let ((position (text-property-any (point-min) (point-max)
+                                       'et-dashboard-news-site site)))
+      (when position
+        (goto-char position)
+        (recenter)))))
 
 (define-key et/leader-map (kbd "d") #'et/dashboard)
 (provide 'et-dashboard)

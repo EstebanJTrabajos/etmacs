@@ -74,7 +74,8 @@ Custom functions *and variables* use =et/=. File and feature names retain =et-=
 | SPC M m / u / c / s         | mu4e open / update / compose / search     |
 | SPC N o / u / s             | Elfeed open / update / choose news topics |
 | SPC N / / f / d             | Search / narrow to feed / narrow to dates |
-| SPC N m / M / r             | Mark read / unread / create a roam note   |
+| SPC N m / M                 | Mark read / unread                        |
+| S (dashboard) / SPC N r/R/S | AI security summary for article at point  |
 | SPC T i / s                 | Install / report tree-sitter grammars     |
 | RET (Evil normal)           | Follow button, Org link, URL, or id link  |
 | C-- / C-+ (or C-=)          | Global font size down / up                |
@@ -125,16 +126,21 @@ tasks, Daily journal, and five cached news articles per site. Tasks are sorted
 by state and explicit priority, then by deadline/schedule, with undated tasks
 last; overflow is reported as =+N more=. =g= refreshes, =q= quits, =RET=
 activates a button or link, and =TAB= collapses or expands the article list for
-the feed at point. =SPC q= quits Emacs; =SPC R= re-tangles
+the feed at point. The News section places =Update feeds= directly beneath the
+=News= heading, and each feed title has a dashed underline. =TAB= returns point
+to the feed title after folding or unfolding. =SPC q= quits Emacs; =SPC R= re-tangles
 =config.org= and restarts Emacs after saving buffers. Set
 =et/dashboard-on-startup= to nil in =.local/settings.el= to start on scratch
 instead.
 
 =gptel= provides OpenAI, Anthropic and DeepSeek backends. API keys are read from
 =~/.authinfo.gpg= through =gptel-api-key-from-auth-source=; the machine and user
-are prompted for at first use and cached for the session. Reasoning text is
-hidden by default because reasoning tokens are billed as output. The OpenCode
-entry is a placeholder.
+are prompted for at first use and cached for the session. The default model is
+=gpt-6-luna= on OpenAI. =SPC a w= rewrites the active region with a model you
+choose: use it for that rewrite only, or set it as the persistent default.
+The default is stored in =.local/gptel.el= and reloaded at startup. Reasoning
+text is hidden by default because reasoning tokens are billed as output. The
+OpenCode entry is a placeholder.
 
 | Keys                  | Action                                                     |
 |-----------------------+------------------------------------------------------------|
@@ -142,6 +148,7 @@ entry is a placeholder.
 | SPC q / SPC R         | Quit Emacs / re-tangle and restart                         |
 | SPC a g / SPC a s     | gptel chat / send                                          |
 | SPC a m               | gptel menu                                                 |
+| SPC a w               | Rewrite region with a selected model                       |
 | SPC a k               | Prompt for and cache auth-source keys                      |
 | SPC a r               | Toggle reasoning output for this session                   |
 | SPC a o               | OpenCode placeholder                                       |
@@ -167,9 +174,37 @@ the cache.
 
 In an Elfeed search buffer, the same leader prefix adds =SPC N /= (keyword
 search), =SPC N f= (narrow to feed), =SPC N d= (date range), =SPC N m= / =SPC N M=
-(mark read / unread), and =SPC N r= (create an Org-roam reference note). The note
-contains the article URL, feed, date, and an AI summary placeholder;
-=et/news-roam-ai-hook= is the extension point for the next AI iteration.
+(mark read / unread), and =SPC N r= / =SPC N R= / =SPC N S= (download the article
+and open an AI security summary draft). In the dashboard, =S= summarizes the
+article at point.
+
+The summary uses =gpt-6-luna= through gptel and produces a 3–5 paragraph
+security note with vulnerability/incident details, affected software, attack
+type, explicitly reported MITRE techniques, defanged IOCs, and related
+language/platform/package-manager nodes. Missing language/platform/package
+nodes are created under =general/topics/= with the appropriate =:language:=,
+=:platform:=, or =:package-manager:= tag. The summary links to each node and
+each node gets a dated backlink under =Related articles=.
+
+Summary tags use =_= as the only word separator; hyphens are not allowed.
+Tags are prefixed by category: =#= for topics (languages, platforms, attack
+types, incident types, package managers), =@= for people/groups/foundations,
+=$= for companies, and =!= for explicitly reported MITRE techniques, e.g.
+=#python=, =@cisa=, =$microsoft=, =!T1059=.
+
+The summary opens in an unsaved review buffer:
+
+| Key | Action |
+|-----+---------------------------------------------------------------|
+| C-c | Accept, create the node, and save it |
+| C-k | Cancel and discard the draft |
+| C-r | Regenerate with the current model |
+| C-m | Choose a gptel provider/model and regenerate |
+
+Nothing is written to the roam vault until =C-c=.
+
+IOCs are defanged in the note. With point on a defanged IOC table cell, or with
+a region selected, =SPC m R= refangs it and copies the result to the clipboard.
 
 Mu4e is supported but unconfigured. Set =mu4e-maildir= (and any contexts/SMTP)
 in =.local/settings.el=; =SPC M m= opens mail, =u= updates the index, =c=
@@ -367,6 +402,7 @@ In Org buffers =SPC m= offers:
 | L                     | Log pomodoros for an Org date range                |
 | < / >                 | Promote / demote current heading                   |
 | << / >>               | Evil: promote / demote heading, else shift indent  |
+| R                     | Refang IOC at point/region and copy                |
 | H / G                 | New habit / restart an archived habit              |
 | F f / F t / F a       | Drill file / subtree / resume                      |
 | C                     | Insert citation through Citar                      |

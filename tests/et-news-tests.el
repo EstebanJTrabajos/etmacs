@@ -86,6 +86,20 @@
           (should (string-match-p "NYT story 6" (buffer-string)))
           (should (string-match-p "Open full feed" (buffer-string))))))))
 
+(ert-deftest et/news-dashboard-article-carries-entry-property ()
+  (et/with-test-vault
+    (et/with-fake-news
+      (let ((projectile-known-projects nil)
+            (recentf-list nil)
+            (org-agenda-files nil)
+            (et/org-domain "personal"))
+        (et/dashboard)
+        (with-current-buffer et/dashboard-buffer-name
+          (goto-char (point-min))
+          (search-forward "SciAm story 6")
+          (should (get-text-property (match-beginning 0)
+                                     'et-news-entry)))))))
+
 (ert-deftest et/news-open-article-uses-default-browser ()
   (et/with-fake-news
     (let ((entry (car (et/news-entries 'sciam)))
@@ -118,12 +132,261 @@
                      "Emacs Stack Exchange")
                    (mapcar #'car (nth 2 (assq 'emacs et/news-sites)))))))
 
+(ert-deftest et/news-summary-backend-includes-model ()
+  (skip-unless (locate-library "gptel"))
+  (let ((backend (et/news--summary-backend)))
+    (should (memq et/news-summary-model
+                  (gptel-backend-models backend)))))
+
+(ert-deftest et/news-summary-prompt-includes-security-rules ()
+  (let ((prompt (et/news--summary-prompt
+                 (list :title "Test" :link "https://example.test/a"
+                       :feed "Feed" :date "2026-10-24")
+                 "Article body" t)))
+    (should (string-match-p "Article body" prompt))
+    (should (string-match-p "explicitly named" prompt))
+    (should (string-match-p "python/django" prompt))
+    (should (string-match-p "Defang" prompt))
+    (should (string-match-p "only word separator" prompt))
+    (should (string-match-p "!T1059" prompt))
+    (should (string-match-p "\\$microsoft" prompt))
+    (should (string-match-p "Text complete: yes" prompt))))
+
+(ert-deftest et/news-summary-parser-extracts-metadata-and-nodes ()
+  (let* ((output
+          (concat
+           "#+filetags: :#security:#vulnerability:#python:#django:\n"
+           "#+ecosystem: python/django\n"
+           "#+description: Test summary\n\n"
+           "* Summary\nFirst paragraph.\n\n"
+           "* Security details\n"
+           "** Related nodes\n"
+           "| Type | Node title | Relationship | Why |\n"
+           "|------+------------+--------------+-----|\n"
+           "| language | Python | affected | Runtime |\n"
+           "| platform | Django | affected | Framework |\n"))
+         (parsed (et/news--parse-summary-output output)))
+    (should (equal '("#security" "#vulnerability" "#python" "#django")
+                   (plist-get parsed :tags)))
+    (should (equal "python/django" (plist-get parsed :ecosystem)))
+    (should (equal "Test summary" (plist-get parsed :description)))
+    (should (string-match-p "\\* Summary" (plist-get parsed :body)))
+    (should (= 2 (length (plist-get parsed :related))))
+    (should (equal "Python"
+                   (plist-get (car (plist-get parsed :related)) :title)))))
+
+(ert-deftest et/news-tag-prefixes-and-underscores ()
+  (should (equal "#python" (et/news--clean-tag "#python")))
+  (should (equal "#incident_type" (et/news--clean-tag "incident-type")))
+  (should (equal "@cisa" (et/news--clean-tag "@CISA")))
+  (should (equal "$microsoft" (et/news--clean-tag "$Microsoft")))
+  (should (equal "!T1059" (et/news--clean-tag "T1059")))
+  (should (equal "!T1059" (et/news--clean-tag "#T1059")))
+  (should (equal "!T1059_001" (et/news--clean-tag "T1059.001"))))
+
+(ert-deftest et/news-summary-creates-two-way-roam-links ()
+  (skip-unless (sqlite-available-p))
+  (et/with-test-vault
+    (let* ((output
+            (concat
+             "#+filetags: :#security:#vulnerability:#python:#django:\n"
+             "#+ecosystem: python/django\n"
+             "#+description: Test summary\n\n"
+             "* Summary\nFirst paragraph.\n\n"
+             "* Security details\n"
+             "** Related nodes\n"
+             "| Type | Node title | Relationship | Why |\n"
+             "|------+------------+--------------+-----|\n"
+             "| language | Python | affected | Runtime |\n"
+             "| platform | Django | affected | Framework |\n"))
+           (context (list :title "Test security article"
+                          :link "https://example.test/a"
+                          :feed "Test Feed"
+                          :date "2026-10-24"
+                          :domain "personal"))
+           (et/news-related-node-domain "general"))
+      (et/news--create-summary-note output context)
+      (let* ((summary-file
+              (car (directory-files-recursively
+                    (expand-file-name "personal/references/" et/roam-directory)
+                    "\\.org\\'")))
+             (python-file (expand-file-name "general/topics/python.org"
+                                            et/roam-directory))
+             (django-file (expand-file-name "general/topics/django.org"
+                                            et/roam-directory))
+             (summary-text (with-temp-buffer
+                             (insert-file-contents summary-file)
+                             (buffer-string)))
+             (python-text (with-temp-buffer
+                            (insert-file-contents python-file)
+                            (buffer-string)))
+             (django-text (with-temp-buffer
+                            (insert-file-contents django-file)
+                            (buffer-string))))
+        (should summary-file)
+        (should (string-match-p "#\\+ecosystem: python/django" summary-text))
+        (should (string-match-p "#\\+filetags: :news:reference:#security"
+                                summary-text))
+        (should (string-match-p "\\[\\[id:" summary-text))
+        (should (string-match-p "#\\+title: Python" python-text))
+        (should (string-match-p ":language:" python-text))
+        (should (string-match-p "Test security article" python-text))
+        (should (string-match-p "#\\+title: Django" django-text))
+        (should (string-match-p ":platform:" django-text))
+        (should (string-match-p "Test security article" django-text))))))
+
+(ert-deftest et/news-summarize-at-point-opens-review-buffer ()
+  (let* ((original (current-buffer))
+         (entry 'fake-entry)
+         (context (list :title "Draft title"
+                        :link "https://example.test/draft"
+                        :feed "Test Feed"
+                        :date "2026-10-24"
+                        :domain "personal"))
+         (captured nil)
+         (buffer nil))
+    (cl-letf (((symbol-function 'et/news--entry-at-point)
+               (lambda () entry))
+              ((symbol-function 'et/news--summary-context)
+               (lambda (_) context))
+              ((symbol-function 'et/news--entry-text)
+               (lambda (_) (cons "Article body" t)))
+              ((symbol-function 'et/news--summary-backend)
+               (lambda () 'fake-backend))
+              ((symbol-function 'et/news--request-summary)
+               (lambda (ctx text complete backend model target)
+                 (setq captured (list ctx text complete backend model target))
+                 (setq buffer target))))
+      (unwind-protect
+          (progn
+            (et/news-summarize-at-point)
+            (should (buffer-live-p buffer))
+            (with-current-buffer buffer
+              (should (derived-mode-p 'et/news-summary-mode))
+              (should (equal context et/news-summary-context))
+              (should (equal "Article body" et/news-summary-text))
+              (should (eq t et/news-summary-complete))
+              (should (eq 'fake-backend et/news-summary-backend))
+              (should (eq (default-value 'et/news-summary-model)
+                          et/news-summary-model)))
+            (should (equal context (nth 0 captured)))
+            (should (equal "Article body" (nth 1 captured)))
+            (should (eq t (nth 2 captured)))
+            (should (eq 'fake-backend (nth 3 captured)))
+            (should (eq buffer (nth 5 captured))))
+        (when (buffer-live-p buffer) (kill-buffer buffer))
+        (when (buffer-live-p original) (switch-to-buffer original))))))
+
+(ert-deftest et/news-summary-review-keys-and-cancel ()
+  (let ((buffer (generate-new-buffer " *summary-review*"))
+        (original (current-buffer)))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (et/news-summary-mode)
+            (when (fboundp 'evil-normal-state) (evil-normal-state))
+            (should (eq (key-binding (kbd "C-c")) 'et/news-accept-summary))
+            (should (eq (key-binding (kbd "C-k")) 'et/news-cancel-summary))
+            (should (eq (key-binding (kbd "C-r")) 'et/news-regenerate-summary))
+            (should (eq (key-binding (kbd "C-m"))
+                        'et/news-regenerate-summary-with-model))
+            (insert "draft"))
+          (set-buffer buffer)
+          (et/news-cancel-summary)
+          (should-not (buffer-live-p buffer))
+          (when (buffer-live-p original) (switch-to-buffer original)))
+      (when (buffer-live-p buffer) (kill-buffer buffer))
+      (when (buffer-live-p original) (switch-to-buffer original)))))
+
+(ert-deftest et/news-accept-summary-writes-and-kills-review ()
+  (skip-unless (and (locate-library "org-roam") (sqlite-available-p)))
+  (et/with-test-vault
+    (let ((buffer (generate-new-buffer " *summary-accept*"))
+          (context (list :title "Accepted summary"
+                         :link "https://example.test/accepted"
+                         :feed "Test Feed"
+                         :date "2026-10-24"
+                         :domain "personal"))
+          (output (concat "#+filetags: :#security:\n"
+                          "#+ecosystem: python/django\n"
+                          "#+description: Accepted draft\n\n"
+                          "* Summary\nDraft paragraph.\n\n"
+                          "* Security details\n"
+                          "** Related nodes\n"
+                          "| Type | Node title | Relationship | Why |\n"
+                          "|------+------------+--------------+-----|\n"
+                          "| language | Python | affected | Runtime |\n")))
+      (unwind-protect
+          (progn
+            (with-current-buffer buffer
+              (et/news-summary-mode)
+              (setq-local et/news-summary-context context)
+              (insert output)
+              (set-buffer-modified-p nil)
+              (et/news-accept-summary))
+            (should-not (buffer-live-p buffer))
+            (should (directory-files-recursively
+                     (expand-file-name "personal/references/" et/roam-directory)
+                     "\\.org\\'")))
+        (when (buffer-live-p buffer) (kill-buffer buffer))))))
+
+(ert-deftest et/news-regenerate-summary-reuses-context-and-model ()
+  (let ((buffer (generate-new-buffer " *summary-regenerate*"))
+        seen)
+    (unwind-protect
+        (with-current-buffer buffer
+          (et/news-summary-mode)
+          (setq-local et/news-summary-context '(:title "Test")
+                      et/news-summary-text "Article body"
+                      et/news-summary-complete t
+                      et/news-summary-backend 'fake-backend
+                      et/news-summary-model 'fake-model)
+          (cl-letf (((symbol-function 'et/news--request-summary)
+                     (lambda (context text complete backend model target)
+                       (setq seen (list context text complete backend model
+                                        target)))))
+            (et/news-regenerate-summary))
+          (should (equal '(:title "Test") (nth 0 seen)))
+          (should (equal "Article body" (nth 1 seen)))
+          (should (eq t (nth 2 seen)))
+          (should (eq 'fake-backend (nth 3 seen)))
+          (should (eq 'fake-model (nth 4 seen)))
+          (should (eq buffer (nth 5 seen))))
+      (when (buffer-live-p buffer) (kill-buffer buffer)))))
+
+(ert-deftest et/news-regenerate-with-selected-model-updates-buffer ()
+  (let ((buffer (generate-new-buffer " *summary-model*"))
+        seen)
+    (unwind-protect
+        (with-current-buffer buffer
+          (et/news-summary-mode)
+          (setq-local et/news-summary-context '(:title "Test")
+                      et/news-summary-text "Article body"
+                      et/news-summary-complete t
+                      et/news-summary-backend 'old-backend
+                      et/news-summary-model 'old-model)
+          (cl-letf (((symbol-function 'et/news--select-model)
+                     (lambda () (cons 'new-backend 'new-model)))
+                    ((symbol-function 'et/news--request-summary)
+                     (lambda (context text complete backend model target)
+                       (setq seen (list backend model target)))))
+            (et/news-regenerate-summary-with-model))
+          (should (eq 'new-backend et/news-summary-backend))
+          (should (eq 'new-model et/news-summary-model))
+          (should (equal '(new-backend new-model) (seq-take seen 2)))
+          (should (eq buffer (nth 2 seen))))
+      (when (buffer-live-p buffer) (kill-buffer buffer)))))
+
 (ert-deftest et/news-bindings ()
   (should (eq (lookup-key et/leader-map (kbd "N")) et/news-map))
   (should (eq (lookup-key et/news-map (kbd "o")) 'et/news-open-reader))
   (should (eq (lookup-key et/news-map (kbd "u")) 'et/news-update))
   (should (eq (lookup-key et/news-map (kbd "s")) 'et/news-select-feeds))
+  (should (eq (lookup-key et/news-map (kbd "S"))
+              'et/news-summarize-at-point))
   (should (eq (lookup-key et/dashboard-mode-map (kbd "n")) 'et/dashboard-news))
+  (should (eq (lookup-key et/dashboard-mode-map (kbd "S"))
+              'et/news-summarize-at-point))
   (should (eq (lookup-key et/dashboard-mode-map (kbd "u")) 'et/news-update)))
 
 (ert-deftest et/news-update-calls-elfeed-update ()
@@ -197,7 +460,9 @@
 (ert-deftest et/news-command-bindings ()
   (dolist (spec '(("/" . et/news-search) ("f" . et/news-narrow-feed)
                   ("d" . et/news-narrow-date) ("m" . et/news-mark-read)
-                  ("M" . et/news-mark-unread) ("r" . et/news-create-roam-node)))
+                  ("M" . et/news-mark-unread)
+                  ("r" . et/news-summarize-at-point)
+                  ("R" . et/news-summarize-at-point)))
     (should (eq (lookup-key et/news-map (kbd (car spec))) (cdr spec)))))
 
 (ert-deftest et/news-dashboard-collapse-is-per-feed ()
