@@ -173,11 +173,6 @@ With prefix ARG, set the selected model as the persistent default."
         gptel-model 'gpt-6-luna)
   (et/gptel-load-default))
 
-(defun et/opencode-placeholder ()
-  "Placeholder for a future OpenCode integration."
-  (interactive)
-  (message "OpenCode integration is not configured yet"))
-
 (use-package gptel
   :if (locate-library "gptel")
   :commands (gptel gptel-send gptel-menu)
@@ -187,12 +182,25 @@ With prefix ARG, set the selected model as the persistent default."
   (setq gptel-include-reasoning nil)
   (et/gptel-configure))
 
+(use-package emacs-opencode
+  :if (locate-library "emacs-opencode")
+  :commands (opencode opencode-ask opencode-ask-contextual
+             opencode-open-session opencode-send-to-session
+             opencode-send-context-to-session opencode-mcp-status
+             opencode-disconnect opencode-restart)
+  :config
+  (when (locate-library "emacs-opencode-magit")
+    (require 'emacs-opencode-magit)))
+
 (define-key et/ai-map (kbd "g") #'gptel)
 (define-key et/ai-map (kbd "s") #'gptel-send)
 (define-key et/ai-map (kbd "m") #'gptel-menu)
 (define-key et/ai-map (kbd "w") #'et/gptel-rewrite)
 (define-key et/ai-map (kbd "k") #'et/gptel-auth)
 (define-key et/ai-map (kbd "r") #'et/gptel-toggle-reasoning)
-(define-key et/ai-map (kbd "o") #'et/opencode-placeholder)
+(define-key et/ai-map (kbd "o") #'opencode)
+(define-key et/ai-map (kbd "O") #'opencode-open-session)
+(define-key et/ai-map (kbd "a") #'opencode-ask)
+(define-key et/ai-map (kbd "c") #'opencode-ask-contextual)
 (provide 'et-ai)
 ;;; et-ai.el ends here

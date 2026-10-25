@@ -2,10 +2,10 @@
 #+options: toc:2
 
 A personal, literate Emacs configuration—not a Doom or Prelude clone. Includes
-Evil, discoverable leader keys, a startup dashboard, gptel AI integration,
-Elfeed news, mu4e support, doom-modeline, completion, Projectile/Perspective
-workspaces, Treemacs, Git tools, conservative editing defaults, and Org/roam
-workflows.
+Evil, discoverable leader keys, a startup dashboard, gptel and OpenCode AI
+integration, vterm, Elfeed news, mu4e support, doom-modeline, completion,
+Projectile/Perspective workspaces, Treemacs, Git tools, conservative editing
+defaults, and Org/roam workflows.
 The source of truth and package rationales are in [[file:config.org][config.org]]. Maintained project
 documentation uses Org format. Old session/planning artifacts are not runtime
 dependencies and are not part of the proposed configuration commit.
@@ -71,6 +71,7 @@ Custom functions *and variables* use =et/=. File and feature names retain =et-=
 | SPC s / SPC /               | Buffer search / project-directory ripgrep |
 | SPC t t                     | Theme picker with live preview            |
 | SPC x / SPC X               | Open scratch / general Org capture menu   |
+| SPC o t / SPC o T           | Toggle vterm popup / open vterm here      |
 | SPC M m / u / c / s         | mu4e open / update / compose / search     |
 | SPC N o / u / s             | Elfeed open / update / choose news topics |
 | SPC N / / f / d             | Search / narrow to feed / narrow to dates |
@@ -87,8 +88,8 @@ ordinary Space inserts spaces in insert state. =C-c SPC= is the alternative
 leader. =SPC ?= shows Which Key for the current mappings, and =SPC m= shows the
 package/mode menu. Evil Collection supplies j/k/h/l navigation in package
 buffers. Which Key groups are labelled files, buffers, windows, projects, notes,
-git, help, themes, workspaces, jump, edit, AI, mail, news, tree-sitter and mode
-commands—not just "prefix". =C--= and =C-+= (also =C-==) adjust the global font
+git, help, themes, workspaces, jump, edit, AI, open, mail, news, tree-sitter
+and mode commands—not just "prefix". =C--= and =C-+= (also =C-==) adjust the global font
 size in every buffer and frame; =M--= remains negative-argument.
 
 Package menus available at =SPC m=:
@@ -139,8 +140,18 @@ are prompted for at first use and cached for the session. The default model is
 =gpt-6-luna= on OpenAI. =SPC a w= rewrites the active region with a model you
 choose: use it for that rewrite only, or set it as the persistent default.
 The default is stored in =.local/gptel.el= and reloaded at startup. Reasoning
-text is hidden by default because reasoning tokens are billed as output. The
-OpenCode entry is a placeholder.
+text is hidden by default because reasoning tokens are billed as output.
+
+=emacs-opencode= provides an OpenCode 2 client in native Emacs buffers. It is
+not on MELPA, so =et/install-packages= clones it from GitHub through
+=package-vc=; its =request= dependency is installed from MELPA. Git, the
+=opencode= CLI, and =curl= must be available. The client uses OpenCode's shared
+background service and never sends a prompt until you submit one. =SPC a o=
+starts a session in the current project, =SPC a O= reopens an existing one,
+=SPC a a= asks a one-shot question, and =SPC a c= includes the active region or
+the lines around point. Session buffers use the client's own
+=C-c C-c= (send), =C-c C-l= (model) and =C-c C-a= (agent) bindings; with Magit
+loaded, =C-c C-d= shows the session's worktree diffs.
 
 | Keys                  | Action                                                     |
 |-----------------------+------------------------------------------------------------|
@@ -151,7 +162,8 @@ OpenCode entry is a placeholder.
 | SPC a w               | Rewrite region with a selected model                       |
 | SPC a k               | Prompt for and cache auth-source keys                      |
 | SPC a r               | Toggle reasoning output for this session                   |
-| SPC a o               | OpenCode placeholder                                       |
+| SPC a o / SPC a O     | New / existing OpenCode session                            |
+| SPC a a / SPC a c     | One-shot OpenCode question / question with buffer context  |
 | SPC n C               | Create and persist an Org capture template                 |
 
 Interactively created capture templates are written to
@@ -245,6 +257,26 @@ are not restored. Unsupported windows become scratch windows. Restore only
 trusted local state: opening files can invoke their mode hooks. Reconnect remote
 tools deliberately. No automatic exit save can overwrite a good saved session
 with a short empty session. Do not enable desktop restoration over these layouts.
+
+* Terminal
+
+=vterm= provides a libvterm-backed terminal. Emacs must be built with dynamic
+modules, and =vterm-module.so= must compile; the first launch can build it with
+=cmake=, =make=, and a C compiler, or use your distribution's libvterm. No shell
+starts at startup.
+
+| Keys            | Action                                                       |
+|-----------------+--------------------------------------------------------------|
+| SPC o t         | Toggle the workspace vterm popup at the project root         |
+| SPC o T         | Open a terminal in the current window at the project root    |
+| C-u SPC o t / T | Recreate the popup / use =default-directory= instead          |
+
+The popup lives at the bottom of the frame (25%) and is scoped to the current
+Perspective workspace. Both commands export the project root as =PROOT=. For
+Tramp buffers the terminal logs in with the connection method and changes to the
+remote directory. Following Doom's terminal module: exiting kills the buffer,
+scrollback is 5000 lines, the modeline is hidden, killing the terminal does not
+ask about running processes, and horizontal scrolling is disabled.
 
 * Prelude-inspired editing and Git
 
@@ -603,7 +635,11 @@ server is installed on this development host yet.
 
 Git and ripgrep are used by project/Git/search commands. On Arch/Ubuntu the
 search package is =ripgrep=. PDF needs TeX; DOCX needs Pandoc. org-roam needs
-built-in SQLite support. Elfeed uses =curl= for feed downloads. mu4e needs the
+built-in SQLite support. Elfeed uses =curl= for feed downloads. The OpenCode
+client needs OpenCode 2's =opencode= CLI, =curl=, and Git for its =package-vc=
+install. vterm needs an Emacs with dynamic modules, plus =cmake=, =make=, and a
+C compiler (or an already-built =vterm-module.so=) and libvterm headers when
+compiling against the system library. mu4e needs the
 system =mu= package (already separate from ELPA); set =mu4e-maildir= in
 =.local/settings.el=. Doom Modeline's Nerd Font glyphs need a one-time
 =M-x et/install-nerd-fonts=. No system packages, language servers, dictionaries,
@@ -615,9 +651,8 @@ distribution's formats and LaTeX packages must also be installed/configured.
 An error about missing =pdflatex.fmt= is a system TeX setup problem, not an Org
 export setting. Fix that distribution setup before verifying PDF output.
 
-Production-server tuning, remote/container development, vterm,
-spelling/grammar, deeper citation/PDF workflows and optional Forge remain
-separate stages. Do not load another completion or diagnostic framework globally
+Production-server tuning, remote/container development, spelling/grammar,
+deeper citation/PDF workflows and optional Forge remain separate stages. Do not load another completion or diagnostic framework globally
 over the current one without a concrete reason.
 
 * Verification
