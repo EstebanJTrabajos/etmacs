@@ -181,6 +181,26 @@
   (should (eq (lookup-key et/dashboard-mode-map (kbd "<return>"))
               'et/follow-link-at-point)))
 
+(ert-deftest et/dashboard-refresh-preserves-point ()
+  (et/with-test-vault
+    (let ((projectile-known-projects nil)
+          (recentf-list nil)
+          (org-agenda-files nil)
+          (elfeed-db t)
+          (elfeed-db-entries (make-hash-table :test #'equal))
+          (et/org-domain "personal"))
+      (et/dashboard)
+      (with-current-buffer et/dashboard-buffer-name
+        (goto-char (point-min))
+        (search-forward "Update feeds")
+        (let ((position (point)))
+          (et/dashboard-refresh)
+          (should (= (point) position))))
+      (with-current-buffer et/dashboard-buffer-name
+        (goto-char (point-max))
+        (et/dashboard-refresh)
+        (should (= (point) (point-max)))))))
+
 (ert-deftest et/dashboard-project-button-runs-its-action ()
   (et/with-test-vault
     (let* ((project (expand-file-name "project/" directory))

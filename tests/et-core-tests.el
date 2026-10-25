@@ -22,6 +22,7 @@
 
 (ert-deftest et/startup-keeps-installation-explicit ()
   (should-not package-enable-at-startup)
+  (should (eq native-comp-async-report-warnings-errors 'silent))
   (should-not use-package-always-ensure)
   (should (commandp 'et/install-packages))
   (should (commandp 'et/tangle-config)))
@@ -565,6 +566,7 @@
 (load (expand-file-name "tests/et-dev-tests.el" et/test-root) nil t)
 (load (expand-file-name "tests/et-dashboard-tests.el" et/test-root) nil t)
 (load (expand-file-name "tests/et-ai-tests.el" et/test-root) nil t)
+(load (expand-file-name "tests/et-term-tests.el" et/test-root) nil t)
 (load (expand-file-name "tests/et-pomodoro-tests.el" et/test-root) nil t)
 (load (expand-file-name "tests/et-links-tests.el" et/test-root) nil t)
 (load (expand-file-name "tests/et-news-tests.el" et/test-root) nil t)

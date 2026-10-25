@@ -132,8 +132,10 @@ is sorted by importance and date, then limited to
     (user-error "Projectile is not installed")))
 
 (defun et/dashboard-render ()
-  "Render the dashboard into the current buffer."
-  (let ((inhibit-read-only t))
+  "Render the dashboard into the current buffer.
+Keep point at its previous position, clamped to the new contents."
+  (let ((inhibit-read-only t)
+        (position (point)))
     (erase-buffer)
     (insert (propertize "Etmacs\n" 'face '(:height 1.4 :weight bold)))
     (insert (format-time-string "%A, %Y-%m-%d %H:%M\n\n"))
@@ -256,7 +258,8 @@ is sorted by importance and date, then limited to
     (insert "\n")
     (insert (propertize
              "g refresh · q quit · TAB feed · RET open · d journal · a agenda\n"
-             'face 'shadow))))
+             'face 'shadow))
+    (goto-char (min position (point-max)))))
 
 (defun et/dashboard-refresh ()
   "Refresh the Etmacs dashboard."

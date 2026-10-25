@@ -36,6 +36,9 @@ package directory first. No global bidi or aggressive GC tweaks.
 #+begin_src emacs-lisp :tangle early-init.el
 ;;; early-init.el --- Generated from config.org -*- lexical-binding: t; -*-
 (setq package-enable-at-startup nil)
+;; Third-party packages can emit benign native-compiler warnings while
+;; compiling asynchronously. Keep them logged, but do not pop up *Warnings*.
+(setq native-comp-async-report-warnings-errors 'silent)
 (push '(menu-bar-lines . 0) default-frame-alist)
 (push '(tool-bar-lines . 0) default-frame-alist)
 (push '(vertical-scroll-bars . nil) default-frame-alist)
@@ -71,6 +74,7 @@ package directory first. No global bidi or aggressive GC tweaks.
     treemacs-evil treemacs-perspective avy ace-window expand-region crux
     gptel request parinfer-rust-mode rainbow-delimiters
     doom-modeline nerd-icons minions elfeed
+    vterm hide-mode-line
     magit diff-hl git-timemachine git-modes hl-todo
     org-roam org-roam-ui org-pomodoro org-drill citar ox-hugo ox-pandoc
     org-super-agenda org-modern
@@ -127,6 +131,7 @@ Each entry is a recipe accepted by `package-vc-install'.")
 (require 'et-links)
 (require 'et-news)
 (require 'et-ai)
+(require 'et-term)
 (require 'et-mail)
 (require 'et-pomodoro)
 
@@ -972,8 +977,10 @@ is sorted by importance and date, then limited to
     (user-error "Projectile is not installed")))
 
 (defun et/dashboard-render ()
-  "Render the dashboard into the current buffer."
-  (let ((inhibit-read-only t))
+  "Render the dashboard into the current buffer.
+Keep point at its previous position, clamped to the new contents."
+  (let ((inhibit-read-only t)
+        (position (point)))
     (erase-buffer)
     (insert (propertize "Etmacs\n" 'face '(:height 1.4 :weight bold)))
     (insert (format-time-string "%A, %Y-%m-%d %H:%M\n\n"))
@@ -1096,7 +1103,8 @@ is sorted by importance and date, then limited to
     (insert "\n")
     (insert (propertize
              "g refresh · q quit · TAB feed · RET open · d journal · a agenda\n"
-             'face 'shadow))))
+             'face 'shadow))
+    (goto-char (min position (point-max)))))
 
 (defun et/dashboard-refresh ()
   "Refresh the Etmacs dashboard."
@@ -2605,6 +2613,167 @@ With prefix ARG, set the selected model as the persistent default."
 (define-key et/ai-map (kbd "c") #'opencode-ask-contextual)
 (provide 'et-ai)
 ;;; et-ai.el ends here
+#+end_src
+
+* Terminal: vterm
+
+=vterm= provides a real terminal through libvterm. It needs an Emacs built with
+dynamic modules and the compiled =vterm-module.so=; the first launch may build
+the module with =cmake=, =make=, and a C compiler, or you can install your
+distribution's libvterm and compile it yourself. Nothing terminal-related starts
+at boot: the shell starts only when you ask for it.
+
+=SPC o t= toggles a persistent popup at the bottom of the frame in the current
+workspace, using the project root as its directory. With a prefix argument it
+recreates the buffer at that root. =SPC o T= opens a terminal in the current
+window instead. Both export the project root as =PROOT=. For Tramp buffers, the
+new terminal connects to the remote host with the method's login program and
+changes to the remote directory. The module follows Doom's terminal defaults:
+exit kills the buffer, scrollback holds 5000 lines, the modeline is hidden,
+killing it does not ask about running processes, and horizontal scrolling is
+disabled.
+
+#+begin_src emacs-lisp :tangle lisp/et-term.el
+;;; et-term.el --- Generated from config.org -*- lexical-binding: t; -*-
+(require 'subr-x)
+
+(declare-function evil-change-to-initial-state "evil-core" (&optional arg no-record))
+(declare-function hide-mode-line-mode "hide-mode-line" (&optional arg))
+(declare-function persp-current-name "perspective" ())
+(declare-function projectile-project-root "projectile" (&optional dir))
+(declare-function vterm "vterm" (&optional arg))
+(declare-function vterm-mode "vterm" ())
+(declare-function vterm-send-return "vterm" ())
+(declare-function vterm-send-string "vterm" (string &optional paste-p))
+
+(defvar tramp-methods)
+(defvar vterm-buffer-name)
+(defvar vterm-kill-buffer-on-exit)
+(defvar vterm-max-scrollback)
+
+(defvar et/open-map (make-sparse-keymap "open"))
+(define-key et/leader-map (kbd "o") (cons "open" et/open-map))
+
+(defconst et/vterm-buffer-prefix "*vterm"
+  "Prefix shared by vterm buffers, for popup rules.")
+
+(defun et/vterm-available-p ()
+  "Return non-nil when vterm and dynamic modules are available."
+  (and (locate-library "vterm")
+       (fboundp 'module-load)))
+
+(defun et/vterm--buffer-name ()
+  "Return the current workspace's vterm popup buffer name."
+  (format "%s:%s*" et/vterm-buffer-prefix
+          (or (and (bound-and-true-p persp-mode)
+                   (ignore-errors (persp-current-name)))
+              "main")))
+
+(defun et/vterm--project-root ()
+  "Return Projectile's project root, or `default-directory'."
+  (or (when (bound-and-true-p projectile-mode)
+        (projectile-project-root))
+      default-directory))
+
+(defun et/vterm--change-directory-if-remote ()
+  "Connect the current vterm to the remote `default-directory'."
+  (when-let* ((method (file-remote-p default-directory 'method))
+              (host (file-remote-p default-directory 'host)))
+    (let ((user (file-remote-p default-directory 'user))
+          (localname (file-remote-p default-directory 'localname))
+          (login (progn
+                   (require 'tramp)
+                   (cadr (assoc 'tramp-login-program
+                                (assoc method tramp-methods))))))
+      (when login
+        (vterm-send-string
+         (concat login " " (when user (concat user "@")) host))
+        (vterm-send-return)
+        (vterm-send-string
+         (concat "cd "
+                 (shell-quote-argument
+                  (if (or (null localname) (string-empty-p localname))
+                      "~"
+                    localname))))
+        (vterm-send-return)))))
+
+(defun et/vterm--at-project-root (arg function)
+  "Call FUNCTION at the project root, or with ARG at `default-directory'.
+Export the project root as PROOT for the shell."
+  (unless (et/vterm-available-p)
+    (user-error "vterm is not installed, or this Emacs lacks dynamic module support"))
+  (let* ((root (et/vterm--project-root))
+         (default-directory (if arg default-directory root)))
+    (setenv "PROOT" root)
+    (prog1 (funcall function)
+      (et/vterm--change-directory-if-remote))))
+
+(defun et/vterm-setup-buffer ()
+  "Keep vterm buffers quiet and free of horizontal scrolling."
+  (setq-local confirm-kill-processes nil)
+  (setq-local hscroll-margin 0))
+
+(defun et/vterm-toggle (&optional arg)
+  "Toggle the workspace vterm popup at the project root.
+With prefix ARG, recreate the buffer instead of selecting it."
+  (interactive "P")
+  (et/vterm--at-project-root
+   arg
+   (lambda ()
+     (let ((buffer-name (et/vterm--buffer-name)))
+       (when (and arg (get-buffer buffer-name))
+         (let ((window (get-buffer-window buffer-name)))
+           (kill-buffer buffer-name)
+           (when (window-live-p window)
+             (delete-window window))))
+       (if-let* ((window (get-buffer-window buffer-name)))
+           (if (eq (selected-window) window)
+               (delete-window window)
+             (select-window window)
+             (when (bound-and-true-p evil-local-mode)
+               (evil-change-to-initial-state))
+             (goto-char (point-max)))
+         (let ((buffer (get-buffer-create buffer-name)))
+           (with-current-buffer buffer
+             (unless (eq major-mode 'vterm-mode)
+               (vterm-mode)))
+           (pop-to-buffer buffer)))
+       (get-buffer buffer-name)))))
+
+(defun et/vterm-here (&optional arg)
+  "Open vterm in the current window at the project root.
+With prefix ARG, use `default-directory' instead."
+  (interactive "P")
+  (et/vterm--at-project-root
+   arg
+   (lambda ()
+     (require 'vterm)
+     ;; Force a redraw, which avoids artefacting in terminal frames.
+     (save-window-excursion
+       (pop-to-buffer "*scratch*"))
+     (let ((display-buffer-alist nil))
+       (vterm vterm-buffer-name)))))
+
+(use-package vterm
+  :if (and (locate-library "vterm")
+           (bound-and-true-p module-file-suffix))
+  :commands (vterm vterm-mode)
+  :config
+  (setq vterm-kill-buffer-on-exit t
+        vterm-max-scrollback 5000)
+  (add-hook 'vterm-mode-hook #'et/vterm-setup-buffer)
+  (when (require 'hide-mode-line nil t)
+    (add-hook 'vterm-mode-hook
+              (lambda () (hide-mode-line-mode 1))))
+  (add-to-list 'display-buffer-alist
+               '("\\*vterm"
+                 (display-buffer-reuse-window display-buffer-in-side-window)
+                 (side . bottom) (slot . -4) (window-height . 0.25))))
+
+(define-key et/open-map (kbd "t") #'et/vterm-toggle)
+(define-key et/open-map (kbd "T") #'et/vterm-here)
+(provide 'et-term)
+;;; et-term.el ends here
 #+end_src
 
 * Prelude-inspired editing and navigation
