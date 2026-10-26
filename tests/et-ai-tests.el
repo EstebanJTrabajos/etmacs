@@ -42,6 +42,17 @@
       (should (equal machine-default "api.openai.com"))
       (should (equal user-default "emacs")))))
 
+(ert-deftest et/ai-opencode-project-default-model-is-deepseek-flash ()
+  (require 'json)
+  (let ((config (with-temp-buffer
+                  (insert-file-contents (expand-file-name "opencode.json"
+                                                          et/test-root))
+                  (json-parse-buffer :object-type 'alist))))
+    (should (equal (alist-get 'model config) "deepseek/deepseek-flash"))))
+
+(ert-deftest et/ai-summary-model-remains-gpt-6-luna ()
+  (should (eq et/news-summary-model 'gpt-6-luna)))
+
 (ert-deftest et/ai-backends-use-auth-source-and-openai-default ()
   (skip-unless (locate-library "gptel"))
   (require 'gptel)
