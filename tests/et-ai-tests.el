@@ -116,3 +116,70 @@
   ;; The repository does not declare Package-Requires, so its HTTP client
   ;; dependency must be a direct archive package.
   (should (memq 'request et/packages)))
+
+(ert-deftest et/ai-opencode-paid-models-sort-first ()
+  (skip-unless (locate-library "emacs-opencode"))
+  (require 'emacs-opencode-session-model)
+  (let* ((connection
+          (opencode-connection-create
+           :models
+           '(((id . "paid") (providerID . "paid") (name . "Paid")
+              (status . "active") (enabled . t))
+             ((id . "free") (providerID . "free") (name . "Free")
+              (status . "active") (enabled . t))
+             ((id . "local") (providerID . "local") (name . "Local")
+              (status . "active") (enabled . t)))
+           :integrations
+           '(((id . "paid") (name . "Paid")
+              (methods . (((type . "key"))))
+              (connections . (((type . "credential") (method . "key")))))
+             ((id . "free") (name . "Free")
+              (methods . (((type . "env"))))
+              (connections . nil))
+             ((id . "connectable") (name . "Connectable")
+              (methods . (((type . "key"))))
+              (connections . nil)))))
+         (sorted (et/opencode--sort-model-candidates
+                  (opencode-session--provider-model-candidates connection)
+                  connection)))
+    (should (equal (mapcar (lambda (candidate)
+                             (plist-get candidate :display))
+                           sorted)
+                   '("paid/paid" "free/free" "local/local"
+                     "connectable/* (connect)")))
+    (should (= (et/opencode--candidate-group (car sorted) connection) 0))))
+
+(ert-deftest et/ai-opencode-session-model-leader ()
+  (skip-unless (locate-library "emacs-opencode"))
+  (should (eq (cdr (assoc 'opencode-session-mode et/package-leader-maps))
+              et/opencode-session-map))
+  (should (eq (lookup-key et/opencode-session-map (kbd "l"))
+              'opencode-session-select-model)))
+
+(ert-deftest et/ai-opencode-new-session-uses-selected-model ()
+  (skip-unless (locate-library "emacs-opencode"))
+  (require 'emacs-opencode)
+  (let (request created)
+    (cl-letf (((symbol-function 'opencode-session--ensure-agents)
+               (lambda (_connection callback) (funcall callback '("plan"))))
+              ((symbol-function 'et/opencode--choose-model)
+               (lambda (_connection callback)
+                 (funcall callback (list :provider-id "openai"
+                                         :model-id "gpt-6"
+                                         :connected-p t))))
+              ((symbol-function 'et/opencode--default-variant)
+               (lambda (&rest _) "high"))
+              ((symbol-function 'opencode-client-session-create)
+               (lambda (_connection &rest args)
+                 (setq request args)
+                 (funcall (plist-get args :success)
+                          :data '((id . "s1")))))
+              ((symbol-function 'opencode--session-from-data)
+               (lambda (data) data)))
+      (et/opencode--create-session-with-model
+       'connection (lambda (session) (setq created session))))
+    (should (equal (plist-get request :model)
+                   '((providerID . "openai") (id . "gpt-6")
+                     (variant . "high"))))
+    (should (equal (plist-get request :agent) "plan"))
+    (should (equal created '((id . "s1"))))))

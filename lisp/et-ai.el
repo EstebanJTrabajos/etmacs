@@ -1,4 +1,5 @@
 ;;; et-ai.el --- Generated from config.org -*- lexical-binding: t; -*-
+(require 'cl-lib)
 (require 'seq)
 (require 'subr-x)
 
@@ -182,6 +183,232 @@ With prefix ARG, set the selected model as the persistent default."
   (setq gptel-include-reasoning nil)
   (et/gptel-configure))
 
+;; OpenCode's built-in model picker prioritizes recent and connected models.
+;; Etmacs additionally puts providers with a stored API key or subscription
+;; credential before free/local providers and connectable providers.
+(defun et/opencode--provider-credential-p (connection provider-id)
+  "Whether PROVIDER-ID has an API-key/OAuth credential on CONNECTION."
+  (when-let* ((integration
+               (opencode-session--find-integration connection provider-id)))
+    (seq-some
+     (lambda (item)
+       (let ((method (alist-get 'method item)))
+         (or (member method '("key" "oauth" "env"))
+             (equal (alist-get 'type item) "credential"))))
+     (opencode-session--normalize-items (alist-get 'connections integration)))))
+
+(defun et/opencode--candidate-group (candidate connection)
+  "Return CANDIDATE's ordering group: paid, free/local, or connectable."
+  (cond
+   ((not (plist-get candidate :connected-p)) 2)
+   ((et/opencode--provider-credential-p
+     connection (plist-get candidate :provider-id))
+    0)
+   (t 1)))
+
+(defun et/opencode--candidate-group-label (candidate connection)
+  "Return a completion group label for CANDIDATE on CONNECTION."
+  (pcase (et/opencode--candidate-group candidate connection)
+    (0 "Paid subscription / API key")
+    (1 "Free / local")
+    (_ "Connect a provider")))
+
+(defun et/opencode--candidate-alpha< (a b)
+  "Return non-nil when CANDIDATE A sorts before CANDIDATE B by name."
+  (let ((a-provider (downcase (or (plist-get a :provider-name) "")))
+        (b-provider (downcase (or (plist-get b :provider-name) "")))
+        (a-model (downcase (or (plist-get a :model-name) "")))
+        (b-model (downcase (or (plist-get b :model-name) ""))))
+    (if (string= a-provider b-provider)
+        (string-lessp a-model b-model)
+      (string-lessp a-provider b-provider))))
+
+(defun et/opencode--sort-model-candidates (candidates connection)
+  "Sort CANDIDATES so paid models are first on CONNECTION.
+Within each group, recently used and session-used models stay first."
+  (let ((recent opencode-session--recent-models)
+        (session (ignore-errors (opencode-session--session-used-models))))
+    (sort (copy-sequence candidates)
+          (lambda (a b)
+            (let* ((a-group (et/opencode--candidate-group a connection))
+                   (b-group (et/opencode--candidate-group b connection))
+                   (a-tier (if (plist-get a :connected-p)
+                               (opencode-session--model-candidate-tier
+                                a recent session)
+                             3))
+                   (b-tier (if (plist-get b :connected-p)
+                               (opencode-session--model-candidate-tier
+                                b recent session)
+                             3))
+                   (a-rank (if (<= a-tier 1)
+                               (opencode-session--model-candidate-rank
+                                a a-tier (if (= a-tier 0) recent session))
+                             0))
+                   (b-rank (if (<= b-tier 1)
+                               (opencode-session--model-candidate-rank
+                                b b-tier (if (= b-tier 0) recent session))
+                             0)))
+              (cond
+               ((/= a-group b-group) (< a-group b-group))
+               ((/= a-tier b-tier) (< a-tier b-tier))
+               ((<= a-tier 1) (< a-rank b-rank))
+               (t (et/opencode--candidate-alpha< a b))))))))
+
+(defun et/opencode--sorted-candidates (orig &optional connection)
+  "Return ORIG's model candidates sorted with paid models first.
+CONNECTION defaults to the current session buffer's connection."
+  (et/opencode--sort-model-candidates
+   (funcall orig connection)
+   (or connection opencode-session--connection)))
+
+(defun et/opencode--read-model (connection &optional provider-id)
+  "Read a model for CONNECTION, optionally limited to PROVIDER-ID.
+Returns the selected candidate plist, or nil when the prompt is cancelled."
+  (let* ((candidates
+          (et/opencode--sort-model-candidates
+           (opencode-session--provider-model-candidates connection)
+           connection))
+         (lookup (make-hash-table :test #'equal))
+         choices)
+    (dolist (candidate candidates)
+      (let ((display (plist-get candidate :display)))
+        (when (and (stringp display)
+                   (or (null provider-id)
+                       (and (plist-get candidate :connected-p)
+                            (equal (plist-get candidate :provider-id)
+                                   provider-id)))
+                   (not (gethash display lookup)))
+          (push display choices)
+          (puthash display candidate lookup))))
+    (setq choices (nreverse choices))
+    (unless choices
+      (user-error "OpenCode models are not available"))
+    (let* ((completion-extra-properties
+            `(:display-sort-function identity
+              :cycle-sort-function identity
+              :group-function
+              ,(lambda (candidate transform)
+                 (if transform
+                     candidate
+                   (let ((entry (gethash candidate lookup)))
+                     (if entry
+                         (et/opencode--candidate-group-label entry connection)
+                       ""))))
+              :annotation-function
+              ,(lambda (candidate)
+                 (let ((entry (gethash candidate lookup)))
+                   (when (and entry
+                              (= (et/opencode--candidate-group entry connection) 0))
+                     "  [paid]")))))
+           (selection
+            (completing-read
+             (if provider-id
+                 (format "OpenCode %s model: " provider-id)
+               "OpenCode model: ")
+             choices nil t nil nil (car choices))))
+      (gethash selection lookup))))
+
+(defun et/opencode--remember-model (candidate)
+  "Record CANDIDATE as a recently selected OpenCode model."
+  (let ((key (cons (plist-get candidate :provider-id)
+                   (plist-get candidate :model-id))))
+    (setq opencode-session--recent-models
+          (cons key (cl-remove key opencode-session--recent-models
+                               :test #'equal)))))
+
+(defun et/opencode--default-variant (connection provider-id model-id)
+  "Return the configured variant for PROVIDER-ID/MODEL-ID on CONNECTION."
+  (when-let* ((info (opencode-session--provider-model-info
+                     provider-id model-id connection))
+              (variants (opencode-session--variant-keys
+                         (alist-get 'variants info))))
+    (and (stringp opencode-session-default-variant)
+         (member opencode-session-default-variant variants)
+         opencode-session-default-variant)))
+
+(defun et/opencode--connect-and-choose-model (connection candidate callback)
+  "Connect CANDIDATE's provider on CONNECTION, then choose one of its models."
+  (let ((provider-id (plist-get candidate :provider-id))
+        (opencode-session--connection connection))
+    (opencode-session--connect-provider
+     provider-id
+     (lambda ()
+       (condition-case nil
+           (when-let* ((chosen (et/opencode--read-model connection provider-id)))
+             (et/opencode--remember-model chosen)
+             (funcall callback chosen))
+         (quit (message "OpenCode: session cancelled")))))))
+
+(defun et/opencode--choose-model (connection callback)
+  "Prompt for a model on CONNECTION, then call CALLBACK with its candidate."
+  (opencode-connection-ensure-models
+   connection
+   (lambda (_models)
+     (condition-case nil
+         (let ((candidate (et/opencode--read-model connection)))
+           (cond
+            ((null candidate)
+             (message "OpenCode: session cancelled; no model selected"))
+            ((plist-get candidate :connected-p)
+             (et/opencode--remember-model candidate)
+             (funcall callback candidate))
+            (t
+             (et/opencode--connect-and-choose-model
+              connection candidate callback))))
+       (quit (message "OpenCode: session cancelled"))))))
+
+(defun et/opencode--create-session-with-model (connection on-created)
+  "Create a session on CONNECTION after selecting a model.
+Call ON-CREATED with the new session, as `opencode--create-session' does."
+  (opencode-session--ensure-agents
+   connection
+   (lambda (agents)
+     (et/opencode--choose-model
+      connection
+      (lambda (candidate)
+        (let* ((provider-id (plist-get candidate :provider-id))
+               (model-id (plist-get candidate :model-id))
+               (model (opencode-session--model-ref
+                       provider-id model-id
+                       (et/opencode--default-variant
+                        connection provider-id model-id))))
+          (opencode-client-session-create
+           connection
+           :agent (car (member opencode-session-default-agent agents))
+           :model model
+           :success (lambda (&rest args)
+                      (funcall on-created
+                               (opencode--session-from-data
+                                (plist-get args :data))))
+           :error (lambda (&rest args)
+                    (let ((detail (opencode-client-format-error args)))
+                      (error "Failed to create OpenCode session%s"
+                             (if detail (format " (%s)" detail) "")))))))))))
+
+(defun et/opencode--install-model-selection ()
+  "Install OpenCode model ordering and pre-session selection advice."
+  (advice-remove 'opencode--create-session
+                 #'et/opencode--create-session-with-model)
+  (advice-add 'opencode--create-session :override
+              #'et/opencode--create-session-with-model)
+  (advice-remove 'opencode-session--provider-model-candidates
+                 #'et/opencode--sorted-candidates)
+  (advice-add 'opencode-session--provider-model-candidates :around
+              #'et/opencode--sorted-candidates))
+
+(defvar et/opencode-session-map
+  (let ((map (make-sparse-keymap "OpenCode session")))
+    (define-key map (kbd "l") #'opencode-session-select-model)
+    (define-key map (kbd "a") #'opencode-session-select-agent)
+    (define-key map (kbd "v") #'opencode-session-select-variant)
+    (define-key map (kbd "s") #'opencode-session-send-input)
+    (define-key map (kbd "i") #'opencode-session-interrupt)
+    (define-key map (kbd "r") #'opencode-session-toggle-reasoning)
+    map)
+  "SPC m leader menu for OpenCode session buffers.")
+(when (locate-library "emacs-opencode")
+  (et/register-package-leader 'opencode-session-mode et/opencode-session-map))
+
 (use-package emacs-opencode
   :if (locate-library "emacs-opencode")
   :commands (opencode opencode-ask opencode-ask-contextual
@@ -190,7 +417,8 @@ With prefix ARG, set the selected model as the persistent default."
              opencode-disconnect opencode-restart)
   :config
   (when (locate-library "emacs-opencode-magit")
-    (require 'emacs-opencode-magit)))
+    (require 'emacs-opencode-magit))
+  (et/opencode--install-model-selection))
 
 (define-key et/ai-map (kbd "g") #'gptel)
 (define-key et/ai-map (kbd "s") #'gptel-send)
