@@ -15,6 +15,7 @@
 (defvar et/dev-modes
   '(python-mode python-ts-mode js-mode js-ts-mode typescript-mode
     typescript-ts-mode tsx-ts-mode web-mode yaml-mode yaml-ts-mode
+    c-mode c-ts-mode c++-mode c++-ts-mode
     java-mode java-ts-mode sql-mode yara-mode dockerfile-mode
     dockerfile-ts-mode et/compose-mode))
 (defvar-local et/python-environment-bin nil
@@ -42,7 +43,7 @@
 (require 'treesit)
 
 (defvar et/treesit-grammars
-  '(python javascript typescript tsx java yaml dockerfile bash json)
+  '(python javascript typescript tsx java c cpp yaml dockerfile bash json)
   "Grammars offered by the installation command.")
 (defvar et/treesit-install-directory
   (expand-file-name "tree-sitter/" et/state-directory)
@@ -58,6 +59,8 @@
         (typescript "https://github.com/tree-sitter/tree-sitter-typescript" "master" "typescript/src")
         (tsx "https://github.com/tree-sitter/tree-sitter-typescript" "master" "tsx/src")
         (java "https://github.com/tree-sitter/tree-sitter-java" "master" "src")
+        (c "https://github.com/tree-sitter/tree-sitter-c" "master" "src")
+        (cpp "https://github.com/tree-sitter/tree-sitter-cpp" "master" "src")
         (yaml "https://github.com/tree-sitter-grammars/tree-sitter-yaml" "master" "src")
         (dockerfile "https://github.com/camdencheek/tree-sitter-dockerfile" "main" "src")
         (bash "https://github.com/tree-sitter/tree-sitter-bash" "master" "src")
@@ -72,6 +75,8 @@
   (dolist (spec '((python-mode python-ts-mode python)
                   (js-mode js-ts-mode javascript)
                   (typescript-mode typescript-ts-mode typescript)
+                  (c-mode c-ts-mode c)
+                  (c++-mode c++-ts-mode cpp)
                   (java-mode java-ts-mode java)
                   (yaml-mode yaml-ts-mode yaml)
                   (dockerfile-mode dockerfile-ts-mode dockerfile)))
@@ -234,10 +239,12 @@
   (eglot-shutdown (eglot-current-server)))
 
 (defun et/dev-lang ()
-  "Return :python, :javascript, or nil for the current buffer's language family."
+  "Return the current buffer's development language keyword, or nil."
   (cond ((derived-mode-p 'python-mode 'python-ts-mode) :python)
         ((derived-mode-p 'js-mode 'js-ts-mode 'typescript-mode
                          'typescript-ts-mode 'tsx-ts-mode 'web-mode) :javascript)
+        ((derived-mode-p 'c-mode 'c-ts-mode) :c)
+        ((derived-mode-p 'c++-mode 'c++-ts-mode) :c++)
         (t nil)))
 
 (defun et/dev-package-json (root)
@@ -363,13 +370,15 @@
       (user-error "Formatter %s failed (exit %s)" (car argv) exit))))
 
 (defun et/dev-format ()
-  "Format the current file with its standalone formatter (Ruff or Prettier)."
+  "Format the current file with its standalone formatter.
+Uses Ruff for Python, Prettier for JS/TS, and clang-format for C/C++."
   (interactive)
   (let ((file (or buffer-file-name (user-error "Save the buffer before formatting"))))
     (pcase (et/dev-lang)
       (:python (et/dev-format-file file '("ruff" "format")))
       (:javascript (et/dev-node-environment)
                    (et/dev-format-file file '("prettier" "--write")))
+      ((or :c :c++) (et/dev-format-file file '("clang-format" "-i")))
       (_ (user-error "No standalone formatter for this language")))))
 
 (defun et/compose-validate ()
@@ -386,6 +395,24 @@
   (compilation-start (mapconcat #'shell-quote-argument
                                (list "docker" "compose" "-f" buffer-file-name "config" "--quiet")
                                " ")))
+
+(defvar et/debug-map (make-sparse-keymap "debug"))
+(dolist (binding '(("s" . dape) ("b" . dape-breakpoint-toggle)
+                   ("c" . dape-continue) ("n" . dape-next)
+                   ("i" . dape-step-in) ("o" . dape-step-out)
+                   ("r" . dape-repl) ("q" . dape-quit)))
+  (define-key et/debug-map (kbd (car binding)) (cdr binding)))
+(define-key et/dev-map (kbd "D") (cons "debug" et/debug-map))
+
+(use-package dape
+  :if (locate-library "dape")
+  :commands (dape dape-breakpoint-toggle dape-continue dape-next
+             dape-step-in dape-step-out dape-repl dape-quit)
+  :init
+  (setq dape-buffer-window-arrangement 'right
+        dape-cwd-function #'et/dev-project-root)
+  :config
+  (setq dape-cwd-function #'et/dev-project-root))
 
 (use-package docker
   :if (locate-library "docker")
