@@ -76,7 +76,7 @@ Custom functions *and variables* use =et/=. File and feature names retain =et-=
 | SPC N o / u / s             | Elfeed open / update / choose news topics |
 | SPC N / / f / d             | Search / narrow to feed / narrow to dates |
 | SPC N m / M                 | Mark read / unread                        |
-| S (dashboard) / SPC N r/R/S | AI security summary for article at point  |
+| S (dashboard) / SPC N r/R/S | AI summary for article at point           |
 | SPC T i / s                 | Install / report tree-sitter grammars     |
 | RET (Evil normal)           | Follow button, Org link, URL, or id link  |
 | C-- / C-+ (or C-=)          | Global font size down / up                |
@@ -135,9 +135,10 @@ to the feed title after folding or unfolding. =SPC q= quits Emacs; =SPC R= re-ta
 instead.
 
 =gptel= provides OpenAI, Anthropic and DeepSeek backends. API keys are read from
-=~/.authinfo.gpg= through =gptel-api-key-from-auth-source=; the machine and user
-are prompted for at first use and cached for the session. The default model is
-=gpt-6-luna= on OpenAI. =SPC a w= rewrites the active region with a model you
+=~/.authinfo.gpg= through =gptel-api-key-from-auth-source= using the provider's
+normal API host and auth-source user =emacs=; keys are cached for the session.
+Only when no matching entry exists does Emacs prompt for another machine and
+user. The default model is =gpt-6-luna= on OpenAI. =SPC a w= rewrites the active region with a model you
 choose: use it for that rewrite only, or set it as the persistent default.
 The default is stored in =.local/gptel.el= and reloaded at startup. Reasoning
 text is hidden by default because reasoning tokens are billed as output.
@@ -151,7 +152,10 @@ starts a session in the current project, =SPC a O= reopens an existing one,
 =SPC a a= asks a one-shot question, and =SPC a c= includes the active region or
 the lines around point. Session buffers use the client's own
 =C-c C-c= (send), =C-c C-l= (model) and =C-c C-a= (agent) bindings; with Magit
-loaded, =C-c C-d= shows the session's worktree diffs.
+loaded, =C-c C-d= shows the session's worktree diffs. Project-level
+=opencode.json= sets this branch's OpenCode default to
+=deepseek/deepseek-flash=; this does not change gptel's =gpt-6-luna= summary
+model.
 
 | Keys                  | Action                                                     |
 |-----------------------+------------------------------------------------------------|
@@ -187,16 +191,19 @@ the cache.
 In an Elfeed search buffer, the same leader prefix adds =SPC N /= (keyword
 search), =SPC N f= (narrow to feed), =SPC N d= (date range), =SPC N m= / =SPC N M=
 (mark read / unread), and =SPC N r= / =SPC N R= / =SPC N S= (download the article
-and open an AI security summary draft). In the dashboard, =S= summarizes the
+and open an AI summary draft). In the dashboard, =S= summarizes the
 article at point.
 
-The summary uses =gpt-6-luna= through gptel and produces a 3–5 paragraph
-security note with vulnerability/incident details, affected software, attack
-type, explicitly reported MITRE techniques, defanged IOCs, and related
+The summary uses =gpt-6-luna= through gptel and produces a 3–5 paragraph note.
+The prompt classifies the article first. Cybersecurity articles also get
+vulnerability/incident details, affected software, attack type, explicitly
+reported MITRE techniques, defanged IOCs, and related
 language/platform/package-manager nodes. Missing language/platform/package
 nodes are created under =general/topics/= with the appropriate =:language:=,
 =:platform:=, or =:package-manager:= tag. The summary links to each node and
-each node gets a dated backlink under =Related articles=.
+each node gets a dated backlink under =Related articles=. Non-cybersecurity
+articles contain only metadata and =* Summary=; they omit =* Security details=
+entirely and are not forced to carry a security tag.
 
 Summary tags use =_= as the only word separator; hyphens are not allowed.
 Tags are prefixed by category: =#= for topics (languages, platforms, attack
@@ -557,15 +564,31 @@ YAML syntax support alone is not a guarantee of Compose schema validation.
 ** Debugging with Dape
 
 =Dape= is installed through =et/install-packages= and integrates with compilation
-and source buffers. =SPC m D s= starts a session, =SPC m D b= toggles a breakpoint,
-=SPC m D c/n/i/o= continue and step, =SPC m D r= opens the REPL, and =SPC m D q=
-quits. A project's =.dir-locals.el= can seed the adapter with =dape-command=.
-Launching a debugger never happens just by opening or saving a file.
+and source buffers. =SPC m D s= starts a session after checking Python's
+debug adapter; a missing =debugpy= gives an actionable error instead of a
+session that cannot connect. Dape launches debugpy on =127.0.0.1= so it does not
+depend on how =localhost= resolves. =SPC m D b= marks or unmarks a breakpoint,
+=SPC m D e= enables or disables it in place, and =SPC m D B= removes all
+breakpoints. =SPC m D l/E/h/F= add log, conditional, hit-count, and function
+breakpoints. =SPC m D c/n/i/o= continue and step, =SPC m D r= opens the REPL,
+and =SPC m D q= quits. A project's =.dir-locals.el= can seed the adapter with
+=dape-command=. Launching a debugger never happens just by opening or saving a
+file.
+
+A breakpoint can run code when hit. With point on an existing breakpoint,
+=SPC m D a= sets a debuggee expression (evaluated in the stopped frame's
+language), an Emacs Lisp expression, a shell command, or a script file.
+Scripts are run with an interpreter inferred from the extension (Python,
+JavaScript/TypeScript, shell, Emacs Lisp, Ruby, or Java) from the project root.
+=SPC m D A= clears the action. Actions last for the current session and fire
+from =dape-stopped-hook= only for a breakpoint stop at that file and line.
 
 Dape uses adapters installed separately: =debugpy= for Python, =js-debug= for
 JavaScript/TypeScript, =jdtls= with the java-debug plugin for Java, and =gdb=
-(14.1 or newer) or =lldb-dap= for C/C++. The C/C++ examples compile with a
-Makefile before launching and expose =compile_flags.txt= to clangd.
+(14.1 or newer) or =lldb-dap= for C/C++. For the Python example, install
+=debugpy= in the interpreter Dape will use, or select a virtualenv containing it
+with =SPC m v= before starting. The C/C++ examples compile with a Makefile
+before launching and expose =compile_flags.txt= to clangd.
 
 A local =examples/= directory (ignored by Git) contains disposable programs for
 every supported language. The debug-capable examples are Python, JavaScript,
@@ -663,8 +686,8 @@ Automated tests cover mode/filename detection, C/C++ grammar recipes and clangd
 mapping, no automatic servers, command bindings, isolated environments and their
 propagation to the server process, basedpyright preference, pytest/Jest/Vitest
 command construction and runner detection, standalone formatting and reload,
-Dape leader bindings, OpenCode paid-first model ordering and pre-session model
-selection, Compose validation/cancellation,
+Dape leader bindings and breakpoint-action helpers, OpenCode paid-first model
+ordering and pre-session model selection, Compose validation/cancellation,
 and a real Eglot JSON-RPC connection to a deterministic test fixture for CAPF,
 Flymake, Xref and formatting. Dashboard sections and buttons, gptel auth-source
 prompting and reasoning defaults, persistent capture templates, pomodoro

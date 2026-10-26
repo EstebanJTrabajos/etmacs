@@ -19,11 +19,19 @@
 (defvar et/gptel-deepseek nil)
 
 (defun et/gptel-auth-source-key (host)
-  "Prompt for machine/user and return HOST's key from auth-source."
+  "Return HOST's auth-source key for user \"emacs\".
+Prompt for a different machine and user only when no matching
+auth-source entry exists."
   (require 'gptel)
-  (let* ((machine (read-string (format "Auth machine for %s: " host) host))
-         (user (read-string (format "Auth user for %s: " host) "apikey")))
-    (gptel-api-key-from-auth-source machine user)))
+  (let ((key nil))
+    (condition-case nil
+        (setq key (gptel-api-key-from-auth-source host "emacs"))
+      (user-error nil))
+    (unless (and key (not (string-empty-p key)))
+      (let ((machine (read-string (format "Auth machine for %s: " host) host))
+            (user (read-string (format "Auth user for %s: " host) "emacs")))
+        (setq key (gptel-api-key-from-auth-source machine user))))
+    key))
 
 (defun et/gptel-key (host)
   "Return HOST's cached key, prompting through auth-source when needed."
