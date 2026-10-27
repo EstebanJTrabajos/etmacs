@@ -1,19 +1,20 @@
 #+title: Etmacs
 #+options: toc:2
 
-A personal, literate Emacs configuration—not a Doom or Prelude clone. Includes
-Evil, discoverable leader keys, a startup dashboard, gptel and OpenCode AI
-integration, vterm, Elfeed news, mu4e support, doom-modeline, completion,
-Projectile/Perspective workspaces, Treemacs, Git tools, conservative editing
-defaults, and Org/roam workflows.
-The source of truth and package rationales are in [[file:config.org][config.org]]. Maintained project
-documentation uses Org format. Old session/planning artifacts are not runtime
-dependencies and are not part of the proposed configuration commit.
+A personal, literate Emacs configuration—not a Doom or Prelude clone,
+but inspired by the two. Includes Evil, discoverable leader keys, a
+startup dashboard, gptel and OpenCode AI integration, vterm, Elfeed
+news, mu4e support, doom-modeline, completion, Projectile/Perspective
+workspaces, Treemacs, Git tools, conservative editing defaults, and
+Org/roam workflows.  The source of truth and package rationales are in
+[[file:config.org][config.org]]. Maintained project documentation uses Org format. Old
+session/planning artifacts are not runtime dependencies and are not
+part of the proposed configuration commit.
 
-* Try without replacing Doom
+* Try without replacing your current configuration.
 
 Requires Emacs 31.1+ with SQLite support. Run from this repository in a new
-instance, not an existing Doom server client. Nothing migrates existing notes.
+instance, not an existing server client. Nothing migrates existing notes.
 
 1. Generate the Lisp (also provided alongside its source):
    #+begin_src sh
@@ -37,7 +38,7 @@ instance, not an existing Doom server client. Nothing migrates existing notes.
 
 Runtime packages and state live in ignored =.local/=. Native caches and editor
 locks are not source. Packages are not version-locked; this is not a claim of
-fully reproducible builds. =doom-conf/= is preserved as reference material.
+fully reproducible builds. 
 
 * Editing and local settings
 
@@ -759,14 +760,18 @@ Production-server tuning, remote/container development, spelling/grammar,
 deeper citation/PDF workflows and optional Forge remain separate stages. Do not load another completion or diagnostic framework globally
 over the current one without a concrete reason.
 
-* TODO Manual acceptance checklist [0%]
+* TODO Manual acceptance checklist [14%]
 
 Automated checks (offline; package-specific checks skip until installation):
 
-- [ ] Run the full ERT suite:
+- [X] Run the full ERT suite:
   #+begin_src sh
   emacs -Q --batch --load tests/et-core-tests.el --funcall ert-run-tests-batch-and-exit
   #+end_src
+
+  #+RESULTS:
+  Ran 201 tests, 201 results as expected, 0 unexpected (2026-10-27 09:08:45-0600, 12.416835 sec)
+
 
 Tests use disposable notes/repositories, not your real vault. They cover source
 tangling, startup/no installation, labels through both leaders, workspace
@@ -777,7 +782,7 @@ tree-sitter recipes/installation, cached news rendering and selection, mu4e
 configuration errors, and the modeline's presence. They do not replace real
 keyboard/rendering/server/export checks.
 
-- [ ] Restart offline; check Evil, labels, GUI floating completion and terminal
+- [X] Restart offline; check Evil, labels, GUI floating completion and terminal
   fallback. Preview/cancel themes repeatedly; =custom-enabled-themes= should
   contain only the selected theme.
 - [ ] Register two disposable projects; switch between them, split their
