@@ -82,6 +82,7 @@ Custom functions *and variables* use =et/=. File and feature names retain =et-=
 | SPC w u / SPC w r           | Winner layout undo / redo                 |
 | SPC s / SPC /               | Buffer search / project-directory ripgrep |
 | SPC t t                     | Theme picker with live preview            |
+| SPC P                       | Toggle meeting mode (focus highlighting)  |
 | SPC x / SPC X               | Open scratch / general Org capture menu   |
 | SPC o t / SPC o T           | Toggle vterm popup / open vterm here      |
 | SPC M m / u / c / s         | mu4e open / update / compose / search     |
@@ -281,6 +282,16 @@ position, and time; Minions collapses the minor-mode list. Install the icon font
 once with =M-x et/install-nerd-fonts=, or set =doom-modeline-icon= to nil for a
 plain terminal. The unconfigured alternative lighter options are =mood-line=,
 =telephone-line=, or =nano-modeline=.
+
+=et/meeting-mode= (toggled with =SPC P=) makes keyboard focus obvious during
+screen sharing. On every focus change it briefly tints the newly focused
+window, then leaves a thin theme-derived accent on its fringes, mode line, and
+header line when present. It follows ordinary windows, buffer switches, the
+minibuffer used by Vertico, transient menus, and frame focus changes. The accent
+is regenerated when themes are enabled or disabled. Customize
+=et/meeting-flash-duration=, =et/meeting-flash-alpha=, or
+=et/meeting-accent-color=. The implementation is local and needs no extra
+package; it is inspired by =winpulse= and =selected-window-accent-mode=.
 
 * Projects, workspaces and windows
 
@@ -736,7 +747,8 @@ command construction and runner detection, standalone formatting and reload,
 Dape leader bindings and breakpoint-action helpers, OpenCode paid-first model
 ordering and pre-session model selection, per-project model persistence and
 =opencode.json= updates, model favorites and =C-f= binding, project session
-bookmarks and private context exports, Compose validation/cancellation,
+bookmarks and private context exports, meeting-mode hooks/remaps/flash
+scheduling, Compose validation/cancellation,
 and a real Eglot JSON-RPC connection to a deterministic test fixture for CAPF,
 Flymake, Xref and formatting. Dashboard sections and buttons, gptel auth-source
 prompting and reasoning defaults, persistent capture templates, pomodoro
@@ -845,3 +857,7 @@ keyboard/rendering/server/export checks.
 - [ ] Summarize one cybersecurity and one non-cybersecurity article with
   =SPC N S=; confirm only the security article gets =* Security details= and
   both summaries use =gpt-6-luna=.
+- [ ] Toggle =SPC P=, move between windows, buffers, the Vertico minibuffer,
+  and a transient menu; confirm the focused interface briefly tints and the
+  accent moves with it. Switch themes and confirm the accent color updates
+  without restarting.
