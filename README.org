@@ -36,9 +36,20 @@ instance, not an existing server client. Nothing migrates existing notes.
    emacs -nw --init-directory "$PWD" --debug-init
    #+end_src
 
+For a repeatable setup, run:
+#+begin_src sh
+./install.sh
+#+end_src
+It tangles =config.org=, installs packages into =.local/elpa=, installs the
+optional parinfer-rust native library, verifies the package set, and runs the
+ERT suite. Use =./install.sh --fonts= to also install the Nerd Fonts glyphs,
+=--skip-parinfer= to skip the native library, or =--skip-tests= for a faster
+install-only run. It never installs system packages, language servers, debug
+adapters, or tree-sitter grammars.
+
 Runtime packages and state live in ignored =.local/=. Native caches and editor
 locks are not source. Packages are not version-locked; this is not a claim of
-fully reproducible builds. 
+fully reproducible builds.
 
 * Editing and local settings
 
