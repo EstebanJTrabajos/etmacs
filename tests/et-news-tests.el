@@ -138,12 +138,16 @@
     (should (memq et/news-summary-model
                   (gptel-backend-models backend)))))
 
-(ert-deftest et/news-summary-prompt-includes-security-rules ()
+(ert-deftest et/news-summary-prompt-includes-conditional-security-rules ()
   (let ((prompt (et/news--summary-prompt
                  (list :title "Test" :link "https://example.test/a"
                        :feed "Feed" :date "2026-10-24")
                  "Article body" t)))
     (should (string-match-p "Article body" prompt))
+    (should (string-match-p "not cybersecurity-related" prompt))
+    (should (string-match-p "Return only #\\+filetags, #\\+description, and \\* Summary" prompt))
+    (should (string-match-p "omit \\* Security details entirely" prompt))
+    (should (string-match-p "Do not add #security" prompt))
     (should (string-match-p "explicitly named" prompt))
     (should (string-match-p "python/django" prompt))
     (should (string-match-p "Defang" prompt))
@@ -234,6 +238,38 @@
         (should (string-match-p "#\\+title: Django" django-text))
         (should (string-match-p ":platform:" django-text))
         (should (string-match-p "Test security article" django-text))))))
+
+(ert-deftest et/news-summary-non-security-omits-security-details-and-tag ()
+  (skip-unless (sqlite-available-p))
+  (et/with-test-vault
+    (let* ((output
+            (concat
+             "#+filetags: :#emacs:#python:\n"
+             "#+description: A non-security article\n\n"
+             "* Summary\nFirst paragraph.\nSecond paragraph.\n"))
+           (context (list :title "Test non-security article"
+                          :link "https://example.test/non-security"
+                          :feed "Test Feed"
+                          :date "2026-10-24"
+                          :domain "personal"))
+           (et/news-related-node-domain "general"))
+      (et/news--create-summary-note output context)
+      (let* ((summary-file
+              (car (directory-files-recursively
+                    (expand-file-name "personal/references/" et/roam-directory)
+                    "\\.org\\'")))
+             (summary-text (with-temp-buffer
+                             (insert-file-contents summary-file)
+                             (buffer-string))))
+        (should summary-file)
+        (should (string-match-p
+                 "#\\+filetags: :news:reference:#emacs:#python:" summary-text))
+        (should-not (string-match-p "#security" summary-text))
+        (should-not (string-match-p "\\* Security details" summary-text))
+        (should-not (string-match-p "#\\+ecosystem:" summary-text))
+        (should-not (file-exists-p
+                     (expand-file-name "general/topics/emacs.org"
+                                       et/roam-directory)))))))
 
 (ert-deftest et/news-summarize-at-point-opens-review-buffer ()
   (let* ((original (current-buffer))

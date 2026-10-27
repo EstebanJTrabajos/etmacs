@@ -112,6 +112,7 @@
   (define-key et/project-map (kbd "c") #'projectile-compile-project)
   (define-key et/project-map (kbd "t") #'projectile-test-project)
   (define-key et/project-map (kbd "w") #'et/project-workspace)
+  (define-key et/project-map (kbd "m") #'et/project-configure-models)
   (when (featurep 'consult)
     (setq consult-project-function #'et/consult-project-root)))
 

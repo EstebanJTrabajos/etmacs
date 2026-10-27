@@ -396,8 +396,209 @@ Uses Ruff for Python, Prettier for JS/TS, and clang-format for C/C++."
                                (list "docker" "compose" "-f" buffer-file-name "config" "--quiet")
                                " ")))
 
+(defvar et/dape-breakpoint-actions nil
+  "Actions to run when a source breakpoint is hit.
+Keys are (FILE . LINE); values are plists with :type and :value.
+Supported types are `debuggee', `elisp', `command', and `script'.")
+
+(defun et/dape--canonical-file (file)
+  "Return a stable absolute name for FILE."
+  (when file
+    (expand-file-name (if (file-exists-p file) (file-truename file) file))))
+
+(defun et/dape--action-key ()
+  "Return the breakpoint action key for the current line."
+  (unless (buffer-file-name)
+    (user-error "Breakpoint actions require a file-visiting buffer"))
+  (cons (et/dape--canonical-file (buffer-file-name))
+        (line-number-at-pos)))
+
+(defun et/dape--action-at-point ()
+  "Return the breakpoint action registered for the current line."
+  (alist-get (et/dape--action-key) et/dape-breakpoint-actions nil nil #'equal))
+
+(defun et/dape-python-debugpy-available-p (&optional python)
+  "Return non-nil when PYTHON can import the debugpy adapter."
+  (let ((python (or python (executable-find "python")))
+        (process-environment process-environment))
+    (and python
+         (with-temp-buffer
+           (zerop (call-process python nil t nil
+                                "-c" "import debugpy.adapter"))))))
+
+(defun et/dape-python-preflight ()
+  "Fail clearly when Python cannot load the debugpy adapter."
+  (let ((python (executable-find "python")))
+    (unless python
+      (user-error "Python executable not found; install Python or select a virtualenv with SPC m v"))
+    (unless (et/dape-python-debugpy-available-p python)
+      (user-error "Python debug adapter debugpy is not installed for %s; run `%s -m pip install debugpy' or select a virtualenv that has it with SPC m v"
+                  python python))))
+
+(defun et/dape-start ()
+  "Start Dape, checking Python's debug adapter first."
+  (interactive)
+  (when (derived-mode-p 'python-mode 'python-ts-mode)
+    (et/dape-python-preflight))
+  (call-interactively #'dape))
+
+(defun et/dape-toggle-breakpoint-enabled ()
+  "Enable or disable source breakpoints at point without removing them."
+  (interactive)
+  (require 'dape)
+  (let ((breakpoints (dape--breakpoints-at-point))
+        sources)
+    (unless breakpoints
+      (user-error "No breakpoint at point"))
+    (dolist (breakpoint breakpoints)
+      (when (dape--source-breakpoint-p breakpoint)
+        (dape--breakpoint-disable
+         breakpoint (not (dape--breakpoint-disabled breakpoint)))
+        (push (dape--breakpoint-source breakpoint) sources)))
+    (unless sources
+      (user-error "Point has no source breakpoint"))
+    (apply #'dape--breakpoint-notify-changes sources)
+    (message "Breakpoint toggled at line %d" (line-number-at-pos))))
+
+(defun et/dape--script-interpreter (file)
+  "Return a command prefix for running script FILE."
+  (pcase (downcase (or (file-name-extension file) ""))
+    ((or "py" "pyw")
+     (or (and (boundp 'python-shell-interpreter)
+              python-shell-interpreter)
+         "python3"))
+    ((or "js" "mjs" "cjs") "node")
+    ("ts" "npx ts-node")
+    ((or "sh" "bash") "bash")
+    ("el" (concat (shell-quote-argument
+                   (expand-file-name invocation-name invocation-directory))
+                  " -Q --batch -l"))
+    ("rb" "ruby")
+    ("java" "java")
+    (_ (read-string "Command/interpreter for the script: "))))
+
+(defun et/dape--read-breakpoint-action ()
+  "Read a breakpoint action from the minibuffer."
+  (let ((type (completing-read
+               "Breakpoint action: "
+               '("Debuggee expression" "Emacs Lisp" "Shell command" "Script file")
+               nil t nil nil "Debuggee expression")))
+    (pcase type
+      ("Debuggee expression"
+       (let ((value (read-string "Expression in the debuggee's language: ")))
+         (when (string-empty-p value)
+           (user-error "Empty debuggee expression"))
+         (list :type 'debuggee :value value)))
+      ("Emacs Lisp"
+       (let ((value (read-string "Emacs Lisp expression: ")))
+         (when (string-empty-p value)
+           (user-error "Empty Emacs Lisp expression"))
+         (list :type 'elisp :value value)))
+      ("Shell command"
+       (let ((value (read-string "Shell command (runs in the project root): ")))
+         (when (string-empty-p value)
+           (user-error "Empty shell command"))
+         (list :type 'command :value value)))
+      ("Script file"
+       (let* ((file (expand-file-name (read-file-name "Script: " nil nil t)))
+              (interpreter (et/dape--script-interpreter file)))
+         (unless (file-regular-p file)
+           (user-error "Not a regular script file: %s" file))
+         (list :type 'script :value file :interpreter interpreter))))))
+
+(defun et/dape-set-breakpoint-action ()
+  "Set an action to run when the breakpoint at point is hit."
+  (interactive)
+  (require 'dape)
+  (unless (dape--breakpoints-at-point)
+    (user-error "Set a breakpoint here first with SPC m D b"))
+  (let* ((key (et/dape--action-key))
+         (action (et/dape--read-breakpoint-action)))
+    (setf (alist-get key et/dape-breakpoint-actions nil nil #'equal) action)
+    (message "Breakpoint action set for %s:%d"
+             (file-name-nondirectory (car key)) (cdr key))))
+
+(defun et/dape-clear-breakpoint-action ()
+  "Remove the breakpoint action at point."
+  (interactive)
+  (let* ((key (et/dape--action-key))
+         (action (et/dape--action-at-point)))
+    (unless action
+      (user-error "No breakpoint action at point"))
+    (setq et/dape-breakpoint-actions
+          (seq-remove (lambda (pair) (equal (car pair) key))
+                      et/dape-breakpoint-actions))
+    (message "Breakpoint action cleared for %s:%d"
+             (file-name-nondirectory (car key)) (cdr key))))
+
+(defun et/dape--run-breakpoint-action (conn action)
+  "Run ACTION for stopped CONN."
+  (pcase (plist-get action :type)
+    ('debuggee
+     (dape-evaluate-expression conn (plist-get action :value) "repl"))
+    ('elisp
+     (condition-case err
+         (eval (car (read-from-string (plist-get action :value))) t)
+       (error
+        (message "Breakpoint Emacs Lisp action failed: %s"
+                 (error-message-string err)))))
+    ('command
+     (let ((default-directory (or (et/dev-project-root) default-directory)))
+       (async-shell-command (plist-get action :value))))
+    ('script
+     (let* ((file (plist-get action :value))
+            (interpreter (or (plist-get action :interpreter)
+                             (et/dape--script-interpreter file)))
+            (default-directory (or (et/dev-project-root) default-directory)))
+       (async-shell-command
+        (format "%s %s" interpreter (shell-quote-argument file)))))
+    (_
+     (message "Unknown breakpoint action type: %S"
+              (plist-get action :type)))))
+
+(defun et/dape--stopped-breakpoint-context ()
+  "Return (CONN FILE . LINE) when stopped at a breakpoint."
+  (when-let* ((conn (dape--live-connection 'stopped t))
+              (reason (format "%s" (or (dape--state-reason conn) "")))
+              ((string-match-p "breakpoint" reason))
+              (frame (dape--current-stack-frame conn))
+              (marker (dape--object-to-marker conn frame))
+              (buffer (marker-buffer marker))
+              (file (buffer-file-name buffer)))
+    (list conn
+          (cons (et/dape--canonical-file file)
+                (line-number-at-pos (marker-position marker))))))
+
+(defun et/dape-run-breakpoint-actions (&optional attempts)
+  "Run the action registered for the breakpoint where Dape stopped.
+Dape populates stack frames asynchronously, so retry briefly when
+the stopped frame is not available yet. ATTEMPTS is an internal
+retry counter."
+  (let ((attempts (or attempts 0)))
+    (condition-case err
+        (if-let* ((context (et/dape--stopped-breakpoint-context)))
+            (when-let* ((location (nth 1 context))
+                        (action (alist-get location et/dape-breakpoint-actions
+                                           nil nil #'equal)))
+              (et/dape--run-breakpoint-action (car context) action))
+          (when (< attempts 20)
+            (run-with-timer 0.1 nil #'et/dape-run-breakpoint-actions
+                            (1+ attempts))))
+      (error
+       (message "Dape breakpoint action failed: %s"
+                (error-message-string err))))))
+
 (defvar et/debug-map (make-sparse-keymap "debug"))
-(dolist (binding '(("s" . dape) ("b" . dape-breakpoint-toggle)
+(dolist (binding '(("s" . et/dape-start)
+                   ("b" . dape-breakpoint-toggle)
+                   ("e" . et/dape-toggle-breakpoint-enabled)
+                   ("B" . dape-breakpoint-remove-all)
+                   ("l" . dape-breakpoint-log)
+                   ("E" . dape-breakpoint-expression)
+                   ("h" . dape-breakpoint-hits)
+                   ("F" . dape-breakpoint-function)
+                   ("a" . et/dape-set-breakpoint-action)
+                   ("A" . et/dape-clear-breakpoint-action)
                    ("c" . dape-continue) ("n" . dape-next)
                    ("i" . dape-step-in) ("o" . dape-step-out)
                    ("r" . dape-repl) ("q" . dape-quit)))
@@ -406,13 +607,28 @@ Uses Ruff for Python, Prettier for JS/TS, and clang-format for C/C++."
 
 (use-package dape
   :if (locate-library "dape")
-  :commands (dape dape-breakpoint-toggle dape-continue dape-next
-             dape-step-in dape-step-out dape-repl dape-quit)
+  :commands (dape dape-breakpoint-global-mode
+             dape-breakpoint-toggle dape-breakpoint-remove-all
+             dape-breakpoint-log dape-breakpoint-expression
+             dape-breakpoint-hits dape-breakpoint-function
+             dape-continue dape-next dape-step-in dape-step-out
+             dape-evaluate-expression dape-repl dape-quit)
   :init
   (setq dape-buffer-window-arrangement 'right
         dape-cwd-function #'et/dev-project-root)
   :config
-  (setq dape-cwd-function #'et/dev-project-root))
+  (setq dape-cwd-function #'et/dev-project-root)
+  (dape-breakpoint-global-mode 1)
+  ;; Prefer IPv4 loopback explicitly. Some systems resolve "localhost" to
+  ;; ::1 while debugpy listens only on IPv4, leaving Dape waiting for a
+  ;; connection that never arrives.
+  (dolist (name '(debugpy debugpy-module))
+    (when-let* ((config (alist-get name dape-configs)))
+      (plist-put config 'host "127.0.0.1")
+      (plist-put config 'command-args
+                 '("-m" "debugpy.adapter" "--host" "127.0.0.1"
+                   "--port" :autoport))))
+  (add-hook 'dape-stopped-hook #'et/dape-run-breakpoint-actions))
 
 (use-package docker
   :if (locate-library "docker")

@@ -1,19 +1,20 @@
 #+title: Etmacs
 #+options: toc:2
 
-A personal, literate Emacs configuration—not a Doom or Prelude clone. Includes
-Evil, discoverable leader keys, a startup dashboard, gptel and OpenCode AI
-integration, vterm, Elfeed news, mu4e support, doom-modeline, completion,
-Projectile/Perspective workspaces, Treemacs, Git tools, conservative editing
-defaults, and Org/roam workflows.
-The source of truth and package rationales are in [[file:config.org][config.org]]. Maintained project
-documentation uses Org format. Old session/planning artifacts are not runtime
-dependencies and are not part of the proposed configuration commit.
+A personal, literate Emacs configuration—not a Doom or Prelude clone,
+but inspired by the two. Includes Evil, discoverable leader keys, a
+startup dashboard, gptel and OpenCode AI integration, vterm, Elfeed
+news, mu4e support, doom-modeline, completion, Projectile/Perspective
+workspaces, Treemacs, Git tools, conservative editing defaults, and
+Org/roam workflows.  The source of truth and package rationales are in
+[[file:config.org][config.org]]. Maintained project documentation uses Org format. Old
+session/planning artifacts are not runtime dependencies and are not
+part of the proposed configuration commit.
 
-* Try without replacing Doom
+* Try without replacing your current configuration.
 
 Requires Emacs 31.1+ with SQLite support. Run from this repository in a new
-instance, not an existing Doom server client. Nothing migrates existing notes.
+instance, not an existing server client. Nothing migrates existing notes.
 
 1. Generate the Lisp (also provided alongside its source):
    #+begin_src sh
@@ -37,7 +38,7 @@ instance, not an existing Doom server client. Nothing migrates existing notes.
 
 Runtime packages and state live in ignored =.local/=. Native caches and editor
 locks are not source. Packages are not version-locked; this is not a claim of
-fully reproducible builds. =doom-conf/= is preserved as reference material.
+fully reproducible builds. 
 
 * Editing and local settings
 
@@ -76,7 +77,7 @@ Custom functions *and variables* use =et/=. File and feature names retain =et-=
 | SPC N o / u / s             | Elfeed open / update / choose news topics |
 | SPC N / / f / d             | Search / narrow to feed / narrow to dates |
 | SPC N m / M                 | Mark read / unread                        |
-| S (dashboard) / SPC N r/R/S | AI security summary for article at point  |
+| S (dashboard) / SPC N r/R/S | AI summary for article at point           |
 | SPC T i / s                 | Install / report tree-sitter grammars     |
 | RET (Evil normal)           | Follow button, Org link, URL, or id link  |
 | C-- / C-+ (or C-=)          | Global font size down / up                |
@@ -135,12 +136,38 @@ to the feed title after folding or unfolding. =SPC q= quits Emacs; =SPC R= re-ta
 instead.
 
 =gptel= provides OpenAI, Anthropic and DeepSeek backends. API keys are read from
-=~/.authinfo.gpg= through =gptel-api-key-from-auth-source=; the machine and user
-are prompted for at first use and cached for the session. The default model is
-=gpt-6-luna= on OpenAI. =SPC a w= rewrites the active region with a model you
-choose: use it for that rewrite only, or set it as the persistent default.
-The default is stored in =.local/gptel.el= and reloaded at startup. Reasoning
-text is hidden by default because reasoning tokens are billed as output.
+=~/.authinfo.gpg= through =gptel-api-key-from-auth-source= using the provider's
+normal API host and auth-source user =emacs=; keys are cached for the session.
+Only when no matching entry exists does Emacs prompt for another machine and
+user. The global default model is =gpt-6-luna= on OpenAI. =SPC a w= rewrites the
+active region with a model you choose: use it for that rewrite only, or set it
+as the persistent default. The default is stored in =.local/gptel.el= and
+reloaded at startup. Reasoning text is hidden by default because reasoning
+tokens are billed as output.
+
+The first AI command in a project asks for both an OpenCode model and a gptel
+model. Choices are saved in =.local/project-models.el= (mode 0600) by canonical
+project root; the OpenCode choice is also written to the project's root
+=opencode.json= =model= key while preserving other settings. Cancelling a prompt
+leaves that half unset so the next AI use asks again. Project buffers use the
+saved gptel model. =SPC a l= changes only the OpenCode project model, and
+=SPC p m= reconfigures both.
+
+Both model selectors support favorites. Press =C-f= on the highlighted model to
+add or remove it. Favorites are stored in =.local/model-favorites.el= (mode
+0600) and appear first under a =★ Favorites= group heading, which Vertico
+renders as a separator above all other models. =C-f= is bound only during these
+selectors.
+
+OpenCode sessions can be bookmarked per project. =SPC S s= (or =SPC m S= in a
+session buffer) saves the current session to =.local/opencode-sessions.el= and
+exports its transcript with =opencode session export= to
+=.local/opencode-sessions/<id>.json= (mode 0600). =SPC S l= selects a saved
+session for the current project and reopens it after restart; outside a project
+it prompts for one of the saved project roots. =SPC S o= opens the live
+project-session picker, and =SPC S d= removes a bookmark while keeping the
+exported context. Emacs layouts and files remain separate: use =SPC TAB S= /
+=SPC TAB L= for those.
 
 =emacs-opencode= provides an OpenCode 2 client in native Emacs buffers. It is
 not on MELPA, so =et/install-packages= clones it from GitHub through
@@ -149,9 +176,14 @@ not on MELPA, so =et/install-packages= clones it from GitHub through
 background service and never sends a prompt until you submit one. =SPC a o=
 starts a session in the current project, =SPC a O= reopens an existing one,
 =SPC a a= asks a one-shot question, and =SPC a c= includes the active region or
-the lines around point. Session buffers use the client's own
+the lines around point. Sessions use the saved project model and prompt for a
+replacement if it is no longer available. Session buffers use the client's own
 =C-c C-c= (send), =C-c C-l= (model) and =C-c C-a= (agent) bindings; with Magit
-loaded, =C-c C-d= shows the session's worktree diffs.
+loaded, =C-c C-d= shows the session's worktree diffs. Project-level
+=opencode.json= sets this branch's OpenCode default to
+=deepseek/deepseek-flash=; this does not change gptel's =gpt-6-luna= summary
+model, and article summaries keep using that model regardless of project
+choices.
 
 | Keys                  | Action                                                     |
 |-----------------------+------------------------------------------------------------|
@@ -164,6 +196,13 @@ loaded, =C-c C-d= shows the session's worktree diffs.
 | SPC a r               | Toggle reasoning output for this session                   |
 | SPC a o / SPC a O     | New / existing OpenCode session                            |
 | SPC a a / SPC a c     | One-shot OpenCode question / question with buffer context  |
+| SPC a l               | Choose and persist the project's OpenCode model             |
+| SPC p m               | Reconfigure the project's OpenCode and gptel models         |
+| SPC S s               | Save this OpenCode session and export its context           |
+| SPC S l               | Select and reopen a saved session in this project           |
+| SPC S o / SPC S d     | Open a live project session / delete a saved bookmark       |
+| SPC m S               | Save the current OpenCode session from its buffer           |
+| C-f                   | Favorite a model inside either model selector               |
 | SPC n C               | Create and persist an Org capture template                 |
 
 Interactively created capture templates are written to
@@ -187,16 +226,19 @@ the cache.
 In an Elfeed search buffer, the same leader prefix adds =SPC N /= (keyword
 search), =SPC N f= (narrow to feed), =SPC N d= (date range), =SPC N m= / =SPC N M=
 (mark read / unread), and =SPC N r= / =SPC N R= / =SPC N S= (download the article
-and open an AI security summary draft). In the dashboard, =S= summarizes the
+and open an AI summary draft). In the dashboard, =S= summarizes the
 article at point.
 
-The summary uses =gpt-6-luna= through gptel and produces a 3–5 paragraph
-security note with vulnerability/incident details, affected software, attack
-type, explicitly reported MITRE techniques, defanged IOCs, and related
+The summary uses =gpt-6-luna= through gptel and produces a 3–5 paragraph note.
+The prompt classifies the article first. Cybersecurity articles also get
+vulnerability/incident details, affected software, attack type, explicitly
+reported MITRE techniques, defanged IOCs, and related
 language/platform/package-manager nodes. Missing language/platform/package
 nodes are created under =general/topics/= with the appropriate =:language:=,
 =:platform:=, or =:package-manager:= tag. The summary links to each node and
-each node gets a dated backlink under =Related articles=.
+each node gets a dated backlink under =Related articles=. Non-cybersecurity
+articles contain only metadata and =* Summary=; they omit =* Security details=
+entirely and are not forced to carry a security tag.
 
 Summary tags use =_= as the only word separator; hyphens are not allowed.
 Tags are prefixed by category: =#= for topics (languages, platforms, attack
@@ -242,6 +284,7 @@ explicit file open may share a buffer between workspaces.
 | SPC p w                 | Activate current project's workspace                   |
 | SPC p f / SPC p s       | Project files / Consult project search                 |
 | SPC p c / SPC p t       | Build / test (project commands may need configuration) |
+| SPC p m                 | Reconfigure this project's OpenCode and gptel models   |
 | SPC TAB . / SPC TAB TAB | Choose / previous workspace                            |
 | SPC TAB a / SPC TAB d   | Add / forget a buffer, without deleting its file       |
 | SPC TAB S / SPC TAB L   | Explicit session save / restore                        |
@@ -557,15 +600,31 @@ YAML syntax support alone is not a guarantee of Compose schema validation.
 ** Debugging with Dape
 
 =Dape= is installed through =et/install-packages= and integrates with compilation
-and source buffers. =SPC m D s= starts a session, =SPC m D b= toggles a breakpoint,
-=SPC m D c/n/i/o= continue and step, =SPC m D r= opens the REPL, and =SPC m D q=
-quits. A project's =.dir-locals.el= can seed the adapter with =dape-command=.
-Launching a debugger never happens just by opening or saving a file.
+and source buffers. =SPC m D s= starts a session after checking Python's
+debug adapter; a missing =debugpy= gives an actionable error instead of a
+session that cannot connect. Dape launches debugpy on =127.0.0.1= so it does not
+depend on how =localhost= resolves. =SPC m D b= marks or unmarks a breakpoint,
+=SPC m D e= enables or disables it in place, and =SPC m D B= removes all
+breakpoints. =SPC m D l/E/h/F= add log, conditional, hit-count, and function
+breakpoints. =SPC m D c/n/i/o= continue and step, =SPC m D r= opens the REPL,
+and =SPC m D q= quits. A project's =.dir-locals.el= can seed the adapter with
+=dape-command=. Launching a debugger never happens just by opening or saving a
+file.
+
+A breakpoint can run code when hit. With point on an existing breakpoint,
+=SPC m D a= sets a debuggee expression (evaluated in the stopped frame's
+language), an Emacs Lisp expression, a shell command, or a script file.
+Scripts are run with an interpreter inferred from the extension (Python,
+JavaScript/TypeScript, shell, Emacs Lisp, Ruby, or Java) from the project root.
+=SPC m D A= clears the action. Actions last for the current session and fire
+from =dape-stopped-hook= only for a breakpoint stop at that file and line.
 
 Dape uses adapters installed separately: =debugpy= for Python, =js-debug= for
 JavaScript/TypeScript, =jdtls= with the java-debug plugin for Java, and =gdb=
-(14.1 or newer) or =lldb-dap= for C/C++. The C/C++ examples compile with a
-Makefile before launching and expose =compile_flags.txt= to clangd.
+(14.1 or newer) or =lldb-dap= for C/C++. For the Python example, install
+=debugpy= in the interpreter Dape will use, or select a virtualenv containing it
+with =SPC m v= before starting. The C/C++ examples compile with a Makefile
+before launching and expose =compile_flags.txt= to clangd.
 
 A local =examples/= directory (ignored by Git) contains disposable programs for
 every supported language. The debug-capable examples are Python, JavaScript,
@@ -663,8 +722,10 @@ Automated tests cover mode/filename detection, C/C++ grammar recipes and clangd
 mapping, no automatic servers, command bindings, isolated environments and their
 propagation to the server process, basedpyright preference, pytest/Jest/Vitest
 command construction and runner detection, standalone formatting and reload,
-Dape leader bindings, OpenCode paid-first model ordering and pre-session model
-selection, Compose validation/cancellation,
+Dape leader bindings and breakpoint-action helpers, OpenCode paid-first model
+ordering and pre-session model selection, per-project model persistence and
+=opencode.json= updates, model favorites and =C-f= binding, project session
+bookmarks and private context exports, Compose validation/cancellation,
 and a real Eglot JSON-RPC connection to a deterministic test fixture for CAPF,
 Flymake, Xref and formatting. Dashboard sections and buttons, gptel auth-source
 prompting and reasoning defaults, persistent capture templates, pomodoro
@@ -699,12 +760,18 @@ Production-server tuning, remote/container development, spelling/grammar,
 deeper citation/PDF workflows and optional Forge remain separate stages. Do not load another completion or diagnostic framework globally
 over the current one without a concrete reason.
 
-* Verification
+* TODO Manual acceptance checklist [14%]
 
 Automated checks (offline; package-specific checks skip until installation):
-#+begin_src sh
-emacs -Q --batch --load tests/et-core-tests.el --funcall ert-run-tests-batch-and-exit
-#+end_src
+
+- [X] Run the full ERT suite:
+  #+begin_src sh
+  emacs -Q --batch --load tests/et-core-tests.el --funcall ert-run-tests-batch-and-exit
+  #+end_src
+
+  #+RESULTS:
+  Ran 201 tests, 201 results as expected, 0 unexpected (2026-10-27 09:08:45-0600, 12.416835 sec)
+
 
 Tests use disposable notes/repositories, not your real vault. They cover source
 tangling, startup/no installation, labels through both leaders, workspace
@@ -715,41 +782,55 @@ tree-sitter recipes/installation, cached news rendering and selection, mu4e
 configuration errors, and the modeline's presence. They do not replace real
 keyboard/rendering/server/export checks.
 
-Manual acceptance checklist:
-1. Restart offline; check Evil, labels, GUI floating completion and terminal
-   fallback. Preview/cancel themes repeatedly; =custom-enabled-themes= should
-   contain only the selected theme.
-2. Register two disposable projects; switch between them, split their layouts,
-   check scoped/all buffer pickers and independent trees, then save/restart/load.
-   Use =SPC w H/J/K/L= to move windows to the frame edges, and =SPC w u= to
-   test layout undo without crossing workspace layouts.
-3. Try Avy/Ace Window, region expansion, explicit Crux helpers and Lisp
-   slurp/barf. Verify EditorConfig, local auto-revert, Git markers and Magit.
-   Ordinary buffer switches must not save, and saves must not trim unrelated
-   trailing spaces. Check compilation ANSI colors and help placement.
-4. Capture personal/work TODOs and a habit. Create a project note and capture
-   its task, then add a dated TODO to a daily note. Verify the dashboard shows
-   up to five Personal and five Work tasks and that the default agenda shows
-   the two-week window; check the right scoped/combined agenda and refile
-   destinations. Complete a recurring task; verify its repeater and LOGBOOK
-   behavior.
-5. Create notes in two domains and general. Add aliases/tags, insert an ID
-   link, view backlinks, compare scoped/all search, then rebuild the index.
-   IDs and source notes must remain intact. Open the graph explicitly.
-6. Capture two daily entries and a meeting. Clock a project task, make a work
-   log, stop the clock, and inspect the daily link and original task's clock
-   record. Drill a vocabulary note; verify Arabic editing/font fallback.
-7. Insert/open a bibliography reference and export a disposable report to each
-   required format with your installed tools. Verify citations/bibliographies
-   separately in each output. Source blocks must not run during export; manual
-   execution must still ask. Do not use sensitive real HTTP endpoints in tests.
-8. Restart Emacs and confirm the dashboard is the startup buffer. Press RET on
-   a project, recent file, agenda task, news article, and Open full feed. Repeat
-   in an Org buffer on a bracket link and a bare URL; insert state must still
-   insert newlines.
-9. Run SPC N s and choose topics, SPC N u to update feeds, and check five cached
-   articles per site. Install any missing grammar with SPC T i, then SPC T s.
-   Check the modeline icons/colors, VC, diagnostics, LSP, and time. If glyphs are
-   missing, run M-x et/install-nerd-fonts.
-10. Without configuring mail, SPC M m must explain that mu4e-maildir is missing.
-    After setting mu4e-maildir in .local/settings.el, SPC M m opens mu4e.
+- [X] Restart offline; check Evil, labels, GUI floating completion and terminal
+  fallback. Preview/cancel themes repeatedly; =custom-enabled-themes= should
+  contain only the selected theme.
+- [ ] Register two disposable projects; switch between them, split their
+  layouts, check scoped/all buffer pickers and independent trees, then
+  save/restart/load. Use =SPC w H/J/K/L= to move windows to the frame edges,
+  and =SPC w u= to test layout undo without crossing workspace layouts.
+- [ ] Try Avy/Ace Window, region expansion, explicit Crux helpers and Lisp
+  slurp/barf. Verify EditorConfig, local auto-revert, Git markers and Magit.
+  Ordinary buffer switches must not save, and saves must not trim unrelated
+  trailing spaces. Check compilation ANSI colors and help placement.
+- [ ] Capture personal/work TODOs and a habit. Create a project note and capture
+  its task, then add a dated TODO to a daily note. Verify the dashboard shows
+  up to five Personal and five Work tasks and that the default agenda shows
+  the two-week window; check the right scoped/combined agenda and refile
+  destinations. Complete a recurring task; verify its repeater and LOGBOOK
+  behavior.
+- [ ] Create notes in two domains and general. Add aliases/tags, insert an ID
+  link, view backlinks, compare scoped/all search, then rebuild the index.
+  IDs and source notes must remain intact. Open the graph explicitly.
+- [ ] Capture two daily entries and a meeting. Clock a project task, make a work
+  log, stop the clock, and inspect the daily link and original task's clock
+  record. Drill a vocabulary note; verify Arabic editing/font fallback.
+- [ ] Insert/open a bibliography reference and export a disposable report to
+  each required format with your installed tools. Verify citations and
+  bibliographies separately in each output. Source blocks must not run during
+  export; manual execution must still ask. Do not use sensitive real HTTP
+  endpoints in tests.
+- [ ] Restart Emacs and confirm the dashboard is the startup buffer. Press RET
+  on a project, recent file, agenda task, news article, and Open full feed.
+  Repeat in an Org buffer on a bracket link and a bare URL; insert state must
+  still insert newlines.
+- [ ] Run SPC N s and choose topics, SPC N u to update feeds, and check five
+  cached articles per site. Install any missing grammar with SPC T i, then
+  SPC T s. Check the modeline icons/colors, VC, diagnostics, LSP, and time. If
+  glyphs are missing, run M-x et/install-nerd-fonts.
+- [ ] Without configuring mail, SPC M m must explain that mu4e-maildir is
+  missing. After setting mu4e-maildir in .local/settings.el, SPC M m opens
+  mu4e.
+- [ ] In a fresh project, run =SPC a o= or =SPC a g=; confirm the first AI use
+  prompts for both OpenCode and gptel models, saves them to
+  =.local/project-models.el=, and writes the project =opencode.json= model.
+  Use =SPC a l= and =SPC p m=, and verify =C-f= favorites appear first under
+  the =★ Favorites= separator in both selectors.
+- [ ] In an OpenCode session buffer, run =SPC S s= and =SPC m S=; verify
+  =.local/opencode-sessions.el= and a mode-0600 JSON export under
+  =.local/opencode-sessions/=. Restart Emacs, run =SPC S l=, choose the saved
+  session, and confirm it reopens with its history. Verify =SPC S d= removes a
+  bookmark while keeping the export.
+- [ ] Summarize one cybersecurity and one non-cybersecurity article with
+  =SPC N S=; confirm only the security article gets =* Security details= and
+  both summaries use =gpt-6-luna=.
