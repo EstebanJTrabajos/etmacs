@@ -507,12 +507,20 @@ In Org buffers =SPC m= offers:
 | < / >                 | Promote / demote current heading                   |
 | << / >>               | Evil: promote / demote heading, else shift indent  |
 | R                     | Refang IOC at point/region and copy                |
+| Y                     | Copy region/buffer as Google Chat markup           |
 | H / G                 | New habit / restart an archived habit              |
 | F f / F t / F a       | Drill file / subtree / resume                      |
 | C                     | Insert citation through Citar                      |
 | b / T                 | Execute source block / explicitly tangle this file |
 | e e                   | Org export dispatcher                              |
 | e h / e p / e d / e H | HTML / PDF / DOCX / Hugo                           |
+
+=SPC m Y= copies the active region, or the whole Org buffer, as Google Chat
+markup without changing the buffer or region. Headings become bold, lists keep
+their numbers/bullets, links become =label (URL)=, and inline code/code blocks
+use backticks/fences. Tables are rendered as aligned monospace code blocks
+because Google Chat has no table formatting. It targets Google Chat/Hangouts
+chats, not email.
 
 Org, habits, agenda, capture, clocks, Babel and exporters are built in.
 =org-roam= adds the linked-note index; =org-roam-ui= adds the browser graph.

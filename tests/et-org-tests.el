@@ -606,3 +606,53 @@
       (insert "Custom entry")
       (org-capture-finalize)
       (should (string-match-p "Custom entry" (et/test-file-text file))))))
+
+(ert-deftest et/org-chat-formatting-preserves-source ()
+  (with-temp-buffer
+    (org-mode)
+    (insert "#+title: Test Note\n"
+            "#+description: Takeaway\n"
+            ":PROPERTIES:\n:ID: example\n:END:\n\n"
+            "* Summary\n"
+            "A *bold* /italic/ ~code~ and "
+            "[[https://example.com][Example]].\n\n"
+            "- one\n- two\n  1. nested\n\n"
+            "| Name | Value |\n"
+            "|------+-------|\n"
+            "| A    | 1     |\n"
+            "| B    | 22    |\n\n"
+            "#+begin_src python\nprint(1)\n#+end_src\n")
+    (let ((before (buffer-string))
+          (text (et/org-chat--format-region (point-min) (point-max))))
+      (should (equal before (buffer-string)))
+      (should (string-match-p "\\*Test Note\\*" text))
+      (should (string-match-p "_Takeaway_" text))
+      (should (string-match-p
+               "A \\*bold\\* _italic_ `code` and Example (https://example.com)\\."
+               text))
+      (should (string-match-p "^- one\n- two\n  1\\. nested" text))
+      (should (string-match-p "```\n| Name | Value |" text))
+      (should (string-match-p "```\nprint(1)\n```" text))
+      (should-not (string-match-p ":PROPERTIES:\\|:ID: example" text)))))
+
+(ert-deftest et/org-copy-as-google-chat-copies-region ()
+  (with-temp-buffer
+    (org-mode)
+    (insert "* One\nFirst paragraph\n* Two\nSecond paragraph\n")
+    (goto-char (point-min))
+    (search-forward "First")
+    (let ((beg (line-beginning-position))
+          (end (line-end-position))
+          copied)
+      (cl-letf (((symbol-function 'use-region-p) (lambda () t))
+                ((symbol-function 'region-beginning) (lambda () beg))
+                ((symbol-function 'region-end) (lambda () end))
+                ((symbol-function 'kill-new)
+                 (lambda (text) (setq copied text)))
+                ((symbol-function 'gui-set-selection) #'ignore))
+        (et/org-copy-as-google-chat))
+      (should (equal copied "First paragraph")))))
+
+(ert-deftest et/org-chat-command-is-bound ()
+  (should (eq (lookup-key et/org-map (kbd "Y"))
+              'et/org-copy-as-google-chat)))
