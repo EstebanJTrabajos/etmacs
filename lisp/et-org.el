@@ -1,10 +1,12 @@
 ;;; et-org.el --- Generated from config.org -*- lexical-binding: t; -*-
+(require 'cl-lib)
 (require 'org)
 (require 'org-capture)
 (require 'org-agenda)
 (require 'org-id)
 (require 'org-habit)
 (require 'org-clock)
+(require 'org-element)
 (require 'oc)
 (require 'seq)
 (require 'subr-x)
@@ -465,6 +467,247 @@ are prompted for interactively.  TARGET-TYPE is either
       (ignore-errors (gui-set-selection 'CLIPBOARD refanged)))
     (message "Copied refanged IOC: %s" refanged)))
 
+;;; Google Chat formatting
+
+(defun et/org-chat--inline (object)
+  "Return OBJECT as Google Chat inline markup."
+  (cond
+   ((stringp object) object)
+   ((null object) "")
+   ((org-element-type object)
+    (let ((text
+           (pcase (org-element-type object)
+             ('plain-text
+              (or (org-element-property :value object) ""))
+             ('bold
+              (format "*%s*" (et/org-chat--inline
+                              (org-element-contents object))))
+             ('italic
+              (format "_%s_" (et/org-chat--inline
+                              (org-element-contents object))))
+             ('strike-through
+              (format "~%s~" (et/org-chat--inline
+                              (org-element-contents object))))
+             ((or 'code 'verbatim)
+              (format "`%s`"
+                      (or (org-element-property :value object)
+                          (et/org-chat--inline
+                           (org-element-contents object)))))
+             ('inline-src-block
+              (format "`%s`" (or (org-element-property :value object) "")))
+             ('link
+              (let* ((url (or (org-element-property :raw-link object) ""))
+                     (desc (string-trim
+                            (et/org-chat--inline
+                             (org-element-contents object)))))
+                (cond
+                 ((string-empty-p url) desc)
+                 ((string-empty-p desc) url)
+                 ((string-match-p
+                   "\\`\\(?:id\\|file\\|elisp\\|help\\|info\\):" url)
+                  desc)
+                 (t (format "%s (%s)" desc url)))))
+             ('entity
+              (or (org-element-property :utf-8 object)
+                  (org-element-property :value object)
+                  ""))
+             ('line-break "\n")
+             ('timestamp (or (org-element-property :raw-value object) ""))
+             ('footnote-reference "")
+             (_
+              (let ((contents (org-element-contents object)))
+                (cond
+                 (contents (mapconcat #'et/org-chat--inline contents ""))
+                 ((org-element-property :value object)
+                  (format "%s" (org-element-property :value object)))
+                 ((org-element-property :raw-value object)
+                  (format "%s" (org-element-property :raw-value object)))
+                 (t "")))))))
+      (concat text
+              (make-string
+               (or (org-element-property :post-blank object) 0) ?\s))))
+   ((listp object)
+    (mapconcat #'et/org-chat--inline object ""))
+   (t "")))
+
+(defun et/org-chat--fence (text)
+  "Return TEXT as a Google Chat code block, or nil when empty."
+  (let ((text (string-trim-right (or text ""))))
+    (unless (string-empty-p text)
+      (format "```\n%s\n```" text))))
+
+(defun et/org-chat--children (contents)
+  "Format CONTENTS as block-level Google Chat text."
+  (string-trim
+   (string-join
+    (delq nil (mapcar #'et/org-chat--element contents))
+    "\n\n")))
+
+(defun et/org-chat--table (table)
+  "Return TABLE as an aligned Google Chat code block."
+  (let* ((rows
+          (org-element-map
+              (org-element-contents table) 'table-row
+            (lambda (row)
+              (cons (eq (org-element-property :type row) 'rule)
+                    (mapcar
+                     (lambda (cell)
+                       (replace-regexp-in-string
+                        "[ \t\r\n]+" " "
+                        (string-trim
+                         (et/org-chat--inline
+                          (org-element-contents cell)))))
+                     (org-element-contents row))))))
+         (data (seq-remove #'car rows)))
+    (when data
+      (let* ((columns (apply #'max
+                             (mapcar (lambda (row)
+                                       (length (cdr row)))
+                                     data)))
+             (widths (make-list columns 0)))
+        (dolist (row data)
+          (setq widths
+                (cl-mapcar (lambda (width cell)
+                             (max width (string-width cell)))
+                           widths (cdr row))))
+        (et/org-chat--fence
+         (string-join
+          (mapcar
+           (lambda (row)
+             (if (car row)
+                 (concat "|"
+                         (mapconcat (lambda (width)
+                                      (make-string (+ width 2) ?-))
+                                    widths "+")
+                         "|")
+               (concat "| "
+                       (mapconcat
+                        #'identity
+                        (cl-mapcar
+                         (lambda (cell width)
+                           (concat cell
+                                   (make-string
+                                    (- width (string-width cell)) ?\s)))
+                         (append (cdr row)
+                                 (make-list (- columns (length (cdr row))) ""))
+                         widths)
+                        " | ")
+                       " |")))
+           rows)
+          "\n"))))))
+
+(defun et/org-chat--list (list)
+  "Return LIST as Google Chat bullet or numbered lines."
+  (let ((ordered (eq (org-element-property :type list) 'ordered))
+        (number (or (org-element-property :counter list) 1)))
+    (string-join
+     (mapcar
+      (lambda (item)
+        (let* ((checkbox (pcase (org-element-property :checkbox item)
+                           ('on "[x] ")
+                           ('off "[ ] ")
+                           ('trans "[-] ")
+                           (_ "")))
+               (prefix (if ordered
+                           (format "%d. %s" number checkbox)
+                         (format "- %s" checkbox)))
+               (body (string-trim
+                      (string-join
+                       (delq nil
+                             (mapcar #'et/org-chat--element
+                                     (org-element-contents item)))
+                       "\n"))))
+          (when ordered
+            (setq number (1+ number)))
+          (if (string-empty-p body)
+              (string-trim-right prefix)
+            (concat prefix
+                    (replace-regexp-in-string
+                     "\n" (concat "\n" (make-string (string-width prefix) ?\s))
+                     body)))))
+      (org-element-contents list))
+     "\n")))
+
+(defun et/org-chat--element (element)
+  "Return ELEMENT as block-level Google Chat text, or nil."
+  (pcase (org-element-type element)
+    ('org-data (et/org-chat--children (org-element-contents element)))
+    ('section (et/org-chat--children (org-element-contents element)))
+    ('headline
+     (let* ((title (string-trim
+                    (et/org-chat--inline
+                     (org-element-property :title element))))
+            (title (if (string-empty-p title) "Untitled" title))
+            (body (et/org-chat--children (org-element-contents element))))
+       (if (string-empty-p body)
+           (format "*%s*" title)
+         (format "*%s*\n\n%s" title body))))
+    ('paragraph
+     (let ((text (string-trim
+                  (et/org-chat--inline (org-element-contents element)))))
+       (unless (string-empty-p text) text)))
+    ('plain-list (et/org-chat--list element))
+    ('table (et/org-chat--table element))
+    ((or 'src-block 'example-block 'verse-block)
+     (et/org-chat--fence (org-element-property :value element)))
+    ('fixed-width
+     (et/org-chat--fence (org-element-property :value element)))
+    ('quote-block
+     (let ((text (et/org-chat--children (org-element-contents element))))
+       (unless (string-empty-p text)
+         (mapconcat (lambda (line) (concat "> " line))
+                    (split-string text "\n") "\n"))))
+    ('horizontal-rule "---")
+    ('keyword
+     (let ((key (org-element-property :key element))
+           (value (string-trim
+                   (or (org-element-property :value element) ""))))
+       (cond
+        ((string-empty-p value) nil)
+        ((equal key "TITLE") (format "*%s*" value))
+        ((equal key "DESCRIPTION") (format "_%s_" value))
+        (t nil))))
+    ((or 'comment 'comment-block 'property-drawer 'node-property
+         'planning 'drawer 'footnote-definition 'clock 'latex-environment
+         'export-block)
+     nil)
+    ((or 'center-block 'special-block)
+     (et/org-chat--children (org-element-contents element)))
+    (_
+     (let ((contents (org-element-contents element)))
+       (cond
+        (contents (et/org-chat--children contents))
+        ((org-element-property :value element)
+         (format "%s" (org-element-property :value element)))
+        (t nil))))))
+
+(defun et/org-chat--format-region (beg end)
+  "Return BEG..END formatted for Google Chat without changing the buffer."
+  (let ((source (current-buffer)))
+    (with-temp-buffer
+      (insert-buffer-substring-no-properties source beg end)
+      (let ((org-mode-hook nil)
+            (org-element-use-cache nil))
+        (org-mode)
+        (string-trim
+         (or (et/org-chat--element (org-element-parse-buffer)) ""))))))
+
+(defun et/org-copy-as-google-chat ()
+  "Copy the region or buffer as Google Chat-friendly text.
+The source buffer is never modified. Tables and code use fenced blocks."
+  (interactive)
+  (unless (derived-mode-p 'org-mode)
+    (user-error "Google Chat conversion requires an Org buffer"))
+  (let* ((beg (if (use-region-p) (region-beginning) (point-min)))
+         (end (if (use-region-p) (region-end) (point-max)))
+         (text (et/org-chat--format-region beg end)))
+    (when (string-empty-p text)
+      (user-error "Nothing to copy"))
+    (kill-new text)
+    (when (fboundp 'gui-set-selection)
+      (ignore-errors (gui-set-selection 'CLIPBOARD text)))
+    (message "Copied Google Chat text (%d chars)" (length text))))
+
 (defvar et/org-agenda-map
   (let ((map (make-sparse-keymap "Org agenda")))
     (define-key map (kbd "j") #'org-agenda-next-line)
@@ -511,6 +754,7 @@ are prompted for interactively.  TARGET-TYPE is either
 (define-key et/org-map (kbd "<") #'et/org-promote-heading)
 (define-key et/org-map (kbd ">") #'et/org-demote-heading)
 (define-key et/org-map (kbd "R") #'et/refang-and-copy)
+(define-key et/org-map (kbd "Y") #'et/org-copy-as-google-chat)
 (with-eval-after-load 'evil
   (evil-define-key 'normal org-mode-map (kbd "<<") #'et/org-promote-heading)
   (evil-define-key 'normal org-mode-map (kbd ">>") #'et/org-demote-heading))
