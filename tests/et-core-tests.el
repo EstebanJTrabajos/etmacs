@@ -566,6 +566,7 @@
       (switch-to-buffer original)
       (when (buffer-live-p status-buffer) (kill-buffer status-buffer)))))
 
+(load (expand-file-name "tests/et-meeting-tests.el" et/test-root) nil t)
 (load (expand-file-name "tests/et-org-tests.el" et/test-root) nil t)
 (load (expand-file-name "tests/et-dev-tests.el" et/test-root) nil t)
 (load (expand-file-name "tests/et-dashboard-tests.el" et/test-root) nil t)
