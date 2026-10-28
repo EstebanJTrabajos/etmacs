@@ -307,10 +307,17 @@ explicit file open may share a buffer between workspaces.
 | SPC p f / SPC p s       | Project files / Consult project search                 |
 | SPC p c / SPC p t       | Build / test (project commands may need configuration) |
 | SPC p m                 | Reconfigure this project's OpenCode and gptel models   |
-| SPC TAB . / SPC TAB TAB | Choose / previous workspace                            |
+| SPC TAB TAB             | Numbered Vertico workspace menu                        |
+| SPC TAB 1..9 / 0        | Switch directly to workspace 1..10                     |
+| SPC TAB . / SPC TAB l   | Choose / previous workspace                            |
 | SPC TAB a / SPC TAB d   | Add / forget a buffer, without deleting its file       |
 | SPC TAB S / SPC TAB L   | Explicit session save / restore                        |
 | SPC e / SPC p e         | Toggle tree / display only the current project in tree |
+
+The mode line notification area shows every frame workspace as a numbered tab,
+with the current one highlighted. `SPC TAB TAB` opens a numbered Vertico menu;
+`SPC TAB <digit>` switches directly, and `SPC TAB l` returns to the previous
+workspace.
 
 Discovery is explicit, not a recursive startup scan. Treemacs uses Evil
 bindings and Perspective scopes. Help opens right, compilation/warnings below;
