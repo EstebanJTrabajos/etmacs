@@ -66,6 +66,49 @@
                (not (file-remote-p path)))
       (funcall original data))))
 
+(defun et/workspace-select ()
+  "Select a Perspective workspace with a numbered Vertico menu."
+  (interactive)
+  (let* ((names (persp-names))
+         (current (persp-current-name))
+         (choices
+          (mapcar
+           (lambda (name)
+             (let ((number (1+ (cl-position name names :test #'equal))))
+               (cons (format "%d  %s%s"
+                             number name
+                             (if (equal name current) "  (current)" ""))
+                     name)))
+           names)))
+    (unless choices
+      (user-error "No workspaces available"))
+    (let* ((default (car (rassoc current choices)))
+           (choice (completing-read "Workspace: " choices nil t nil nil default)))
+      (when-let* ((name (cdr (assoc choice choices))))
+        (persp-switch name)))))
+
+(defun et/workspace-switch-number (number)
+  "Switch to Perspective workspace NUMBER."
+  (interactive "nWorkspace number: ")
+  (let ((count (length (persp-names))))
+    (unless (and (integerp number) (<= 1 number count))
+      (user-error "Workspace %s is not available; %s open" number count))
+    (persp-switch-by-number number)))
+
+(defun et/workspace--format-tab (original name)
+  "Prefix workspace NAME's mode-line tab with its Perspective number.
+ORIGINAL is the original `persp-format-name' function."
+  (let* ((names (persp-names))
+         (index (cl-position name names :test #'equal))
+         (label (funcall original name)))
+    (if index
+        (concat (if (equal name (persp-current-name))
+                    (propertize (format "%d:" (1+ index))
+                                'face 'persp-selected-face)
+                  (format "%d:" (1+ index)))
+                label)
+      label)))
+
 (defun et/save-session ()
   "Save local files and workspace layouts to the configured state file."
   (interactive)
@@ -122,11 +165,16 @@
   :init
   (setq persp-mode-prefix-key (kbd "C-c M-p")
         persp-state-default-file (expand-file-name "workspaces.el" et/state-directory)
-        persp-modestring-short t)
+        persp-show-modestring t
+        persp-modestring-short nil
+        persp-modestring-dividers '("[" "]" " | "))
   :config
   (persp-mode 1)
-  (define-key et/workspace-map (kbd "TAB") #'persp-switch-last)
+  (advice-remove 'persp-format-name #'et/workspace--format-tab)
+  (advice-add 'persp-format-name :around #'et/workspace--format-tab)
+  (define-key et/workspace-map (kbd "TAB") #'et/workspace-select)
   (define-key et/workspace-map (kbd ".") #'persp-switch)
+  (define-key et/workspace-map (kbd "l") #'persp-switch-last)
   (define-key et/workspace-map (kbd "n") #'persp-next)
   (define-key et/workspace-map (kbd "p") #'persp-prev)
   (define-key et/workspace-map (kbd "r") #'persp-rename)
@@ -134,6 +182,11 @@
   (define-key et/workspace-map (kbd "d") #'persp-forget-buffer)
   (define-key et/workspace-map (kbd "S") #'et/save-session)
   (define-key et/workspace-map (kbd "L") #'et/load-session)
+  (dotimes (i 10)
+    (let ((number (if (= i 9) 10 (1+ i)))
+          (key (number-to-string (if (= i 9) 0 (1+ i)))))
+      (define-key et/workspace-map (kbd key)
+        (lambda () (interactive) (et/workspace-switch-number number)))))
   (when (featurep 'consult)
     (define-key et/buffer-map (kbd "b") #'et/switch-buffer)
     (define-key et/buffer-map (kbd "B") #'consult-buffer)))
