@@ -4,6 +4,7 @@
 (require 'xref)
 (require 'compile)
 (require 'python)
+(require 'seq)
 
 ;; Prefer IPython for the interactive Python REPL; fall back to plain python.
 (setq python-shell-interpreter
@@ -22,6 +23,16 @@
   "Previously selected environment bin, for replacing rather than stacking PATH.")
 (defvar-local et/node-environment-bin nil
   "Previously selected project Node bin directory.")
+
+(defvar et/python-environment-directories
+  '(".venv" "venv" "env" ".virtualenv" "virtualenv")
+  "Project-local directory names searched for a Python virtualenv.")
+
+(defvar et/python-environment-selected (make-hash-table :test #'equal)
+  "Virtualenvs explicitly selected by project root in this session.")
+
+(defvar et/python-environment-declined (make-hash-table :test #'equal)
+  "Project roots where the user declined to choose a virtualenv.")
 
 (defun et/dev-prepend-path (bin previous)
   "Prepend BIN to buffer-local PATH/exec-path, replacing PREVIOUS if non-nil."
@@ -194,6 +205,47 @@
         (et/dev-prepend-path bin et/node-environment-bin)
         (setq-local et/node-environment-bin bin)))))
 
+(defun et/python-environment-python (root)
+  "Return ROOT's Python executable, or nil when it is not a virtualenv."
+  (let ((bin (expand-file-name "bin/" root))
+        (scripts (expand-file-name "Scripts/" root)))
+    (or (seq-find #'file-executable-p
+                  (mapcar (lambda (name) (expand-file-name name bin))
+                          '("python" "python3")))
+        (seq-find #'file-executable-p
+                  (mapcar (lambda (name) (expand-file-name name scripts))
+                          '("python.exe" "python3.exe"))))))
+
+(defun et/python-environment-candidates ()
+  "Return virtualenv roots to inspect for this buffer, in priority order."
+  (let* ((local (file-name-as-directory (expand-file-name default-directory)))
+         (root (file-name-as-directory (expand-file-name (et/dev-project-root))))
+         (roots (list (expand-file-name ".venv/" local)
+                      (expand-file-name ".venv/" root))))
+    (setq roots
+          (append roots
+                  (mapcar (lambda (name)
+                            (expand-file-name (concat name "/") root))
+                          et/python-environment-directories)))
+    (when-let* ((env (getenv "VIRTUAL_ENV")))
+      (setq roots
+            (append roots
+                    (list (file-name-as-directory
+                           (expand-file-name env))))))
+    (seq-uniq roots #'equal)))
+
+(defun et/python-environment-find ()
+  "Return the first usable virtualenv root for this buffer, or nil."
+  (let ((root (file-name-as-directory (expand-file-name (et/dev-project-root)))))
+    (or (let ((selected (gethash root et/python-environment-selected)))
+          (and selected
+               (et/python-environment-python selected)
+               selected))
+        (seq-find (lambda (candidate)
+                    (and (file-directory-p candidate)
+                         (et/python-environment-python candidate)))
+                  (et/python-environment-candidates)))))
+
 (defun et/python-environment (directory)
   "Select an existing local Python virtualenv DIRECTORY for this buffer."
   (interactive "DVirtualenv directory: ")
@@ -202,18 +254,52 @@
   (when (or (file-remote-p default-directory) (file-remote-p directory))
     (user-error "Configure remote Python environments explicitly on the remote host"))
   (let* ((root (directory-file-name (expand-file-name directory)))
-         (bin (expand-file-name "bin/" root))
-         (python (expand-file-name "python" bin))
-         (ipython (expand-file-name "ipython3" bin))
-         (repl (if (file-executable-p ipython) ipython python)))
-    (unless (file-executable-p python) (user-error "No executable bin/python in %s" root))
-    (et/dev-prepend-path bin et/python-environment-bin)
-    (setq-local et/python-environment-bin bin)
-    (setenv "VIRTUAL_ENV" root)
-    (setq-local python-shell-interpreter repl)
-    (setq-local python-shell-interpreter-args
-                (if (string-match-p "ipython" repl) "--simple-prompt -i" "-i"))
-    (message "Buffer Python REPL: %s (restart any existing Eglot/REPL process)" repl)))
+         (python (et/python-environment-python root)))
+    (unless python
+      (user-error "No executable Python in %s" root))
+    (let* ((bin (file-name-directory python))
+           (ipython (seq-find
+                     #'file-executable-p
+                     (mapcar (lambda (name) (expand-file-name name bin))
+                             '("ipython3" "ipython" "ipython3.exe"))))
+           (repl (or ipython python)))
+      (et/dev-prepend-path bin et/python-environment-bin)
+      (setq-local et/python-environment-bin bin)
+      (setenv "VIRTUAL_ENV" root)
+      (puthash (file-name-as-directory
+                (expand-file-name (et/dev-project-root)))
+               root et/python-environment-selected)
+      (setq-local python-shell-interpreter repl
+                  python-shell-interpreter-args
+                  (if ipython "--simple-prompt -i" "-i")
+                  python-shell-virtualenv-root root)
+      (message "Buffer Python REPL: %s (restart any existing Eglot/REPL process)" repl))))
+
+(defun et/python-auto-environment ()
+  "Use a discovered Python virtualenv, or offer to choose one.
+The selected environment updates PATH, VIRTUAL_ENV, and the buffer's REPL."
+  (when (and (derived-mode-p 'python-mode 'python-ts-mode)
+             (not (file-remote-p default-directory))
+             (null et/python-environment-bin))
+    (if-let* ((root (et/python-environment-find)))
+        (et/python-environment root)
+      (let ((root (file-name-as-directory
+                   (expand-file-name (et/dev-project-root)))))
+        (unless (or noninteractive
+                    (gethash root et/python-environment-declined))
+          (condition-case err
+              (if (yes-or-no-p
+                   (format "No Python virtualenv found for %s. Choose one? " root))
+                  (call-interactively #'et/python-environment)
+                (puthash root t et/python-environment-declined))
+            (quit
+             (puthash root t et/python-environment-declined))
+            (error
+             (message "%s" (error-message-string err))
+             (puthash root t et/python-environment-declined))))))))
+
+(dolist (hook '(python-mode-hook python-ts-mode-hook))
+  (add-hook hook #'et/python-auto-environment))
 
 (defun et/lsp-start ()
   "Explicitly start Eglot using separately installed/configured server tools."
