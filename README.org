@@ -687,17 +687,21 @@ their supported distribution instructions; check runtime requirements. Ensure
 each server/runner executable is visible in Emacs's PATH (or the selected venv /
 project =node_modules/.bin=), not just a shell.
 
-=SPC m v= selects an existing local virtualenv's =bin/python= and adjusts PATH
-and =exec-path= *for this buffer*. It does not guess uv/Poetry/Conda layouts or
-change all project buffers. The interactive Python REPL uses =ipython3= (with
-=--simple-prompt=) when available, falling back to plain =python=. The selected
-environment is propagated to the Eglot
-server process via =VIRTUAL_ENV=, so basedpyright analyses against that venv.
-Select the environment before starting Eglot/REPL; restart already-running
-processes after changing it. Invoking =SPC m l=, a test command, or =SPC m F= in
-a local JS/TS project opts into that project's =node_modules/.bin=, so only use
-it in trusted projects. Repeated selection replaces rather than stacks paths.
-Other project buffers may need the same selection explicitly.
+Python buffers automatically use the first usable virtualenv found in this
+order: =.venv= beside the current file, then =.venv=, =venv=, =env=,
+=.virtualenv=, or =virtualenv= at the project root, then =VIRTUAL_ENV=. If none
+is found, Emacs asks once per project whether to choose one; =SPC m v= remains
+available for an explicit selection. The choice updates PATH, =exec-path=,
+=VIRTUAL_ENV=, =python-shell-interpreter=, and
+=python-shell-virtualenv-root= *for the buffer*. The REPL uses the venv's
+=ipython3= with =--simple-prompt= when present, otherwise the venv's =python=.
+New Python buffers in the same project reuse an explicitly chosen environment;
+already-open buffers keep their local state. The selected environment is
+propagated to the Eglot server process through =VIRTUAL_ENV=, so basedpyright
+analyses against that venv. Restart already-running Eglot/REPL processes after
+changing it. Invoking =SPC m l=, a test command, or =SPC m F= in a local JS/TS
+project opts into that project's =node_modules/.bin=, so only use it in trusted
+projects. Repeated selection replaces rather than stacks paths.
 
 ** Docker and Compose
 
@@ -733,8 +737,11 @@ they have not been verified end-to-end against your hosts yet.
    not format. Run =SPC m F= in Python/JS/C/C++ files with
    =ruff=/=prettier=/=clang-format= installed; confirm unsaved buffers are refused
    and the buffer reloads on success.
-4. Run =SPC m t/T/u= in a Python project (virtualenv selected, =pytest= installed)
-   and a JS/TS project (=jest= or =vitest= in =devDependencies=); check the
+4. Open a Python project with a local =.venv= and confirm the REPL resolves to
+   that venv without prompting; repeat with =venv= at the project root. Then
+   open a project without one, decline the one-time prompt, and confirm it is
+   not repeated. Run =SPC m t/T/u= in the selected venv (=pytest= installed) and
+   a JS/TS project (=jest= or =vitest= in =devDependencies=); check the
    project/file/test-at-point commands and their compilation output. Verify the
    =SPC m t= -> =npm test= fallback when no runner is detected.
 5. Select two Python environments and check buffer-local interpreter/PATH, that a
