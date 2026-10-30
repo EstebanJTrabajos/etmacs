@@ -180,6 +180,18 @@
       (should (equal installed
                      '((example-vc :url "https://example.invalid/repo")))))))
 
+(ert-deftest et/meeting-mode-is-installed-from-main-branch ()
+  (let ((recipe (assq 'meeting-mode et/vc-packages)))
+    (should recipe)
+    (should (equal (plist-get (cdr recipe) :url)
+                   "https://github.com/EstebanJTrabajos/meeting-mode"))
+    (should (equal (plist-get (cdr recipe) :branch) "main"))))
+
+(ert-deftest et/meeting-mode-is-off-by-default-with-a-leader-binding ()
+  (skip-unless (locate-library "meeting-mode"))
+  (should-not meeting-mode)
+  (should (eq (lookup-key et/leader-map (kbd "P")) 'meeting-mode)))
+
 (ert-deftest et/installer-does-nothing-if-complete ()
   (cl-letf (((symbol-function 'package-installed-p) (lambda (&rest _) t))
             ((symbol-function 'package-refresh-contents)
@@ -613,7 +625,6 @@
       (switch-to-buffer original)
       (when (buffer-live-p status-buffer) (kill-buffer status-buffer)))))
 
-(load (expand-file-name "tests/et-meeting-tests.el" et/test-root) nil t)
 (load (expand-file-name "tests/et-org-tests.el" et/test-root) nil t)
 (load (expand-file-name "tests/et-dev-tests.el" et/test-root) nil t)
 (load (expand-file-name "tests/et-dashboard-tests.el" et/test-root) nil t)

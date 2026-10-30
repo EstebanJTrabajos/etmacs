@@ -34,7 +34,9 @@
   "Direct dependencies for the current slice; package.el resolves dependencies.")
 
 (defconst et/vc-packages
-  '((emacs-opencode :url "https://github.com/jdormit/emacs-opencode"))
+  '((emacs-opencode :url "https://github.com/jdormit/emacs-opencode")
+    (meeting-mode :url "https://github.com/EstebanJTrabajos/meeting-mode"
+                  :branch "main"))
   "Packages absent from the archives, installed from source with package-vc.
 Each entry is a recipe accepted by `package-vc-install'.")
 
@@ -73,7 +75,6 @@ Each entry is a recipe accepted by `package-vc-install'.")
   (when (file-exists-p settings) (load settings nil 'nomessage)))
 (require 'et-core)
 (require 'et-modeline)
-(require 'et-meeting)
 (require 'et-projects)
 (require 'et-editing)
 (require 'et-org)
@@ -92,3 +93,9 @@ Each entry is a recipe accepted by `package-vc-install'.")
                    (format "Missing packages: %s. Run M-x et/install-packages, then restart."
                            missing)
                    :warning))
+
+(use-package meeting-mode
+  :if (locate-library "meeting-mode")
+  :commands (meeting-mode)
+  :init
+  (define-key et/leader-map (kbd "P") #'meeting-mode))
