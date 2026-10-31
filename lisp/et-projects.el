@@ -95,6 +95,41 @@
       (user-error "Workspace %s is not available; %s open" number count))
     (persp-switch-by-number number)))
 
+(defun et/workspace--fresh-name (&optional base)
+  "Return an unused workspace name derived from BASE (default \"tab\")."
+  (let ((names (persp-names))
+        (n 2)
+        candidate)
+    (while (member (setq candidate (format "%s-%d" (or base "tab") n)) names)
+      (setq n (1+ n)))
+    candidate))
+
+(defun et/workspace--create (name)
+  "Create and switch to workspace NAME, then open the dashboard.
+NAME nil or blank means an automatic name."
+  (unless (bound-and-true-p persp-mode)
+    (user-error "Perspective is not active"))
+  (let ((name (string-trim (or name ""))))
+    (when (string-empty-p name)
+      (setq name (et/workspace--fresh-name)))
+    (when (member name (persp-names))
+      (user-error "Workspace `%s' already exists" name))
+    (persp-switch name)
+    (et/dashboard)
+    (message "New tab: %s" name)
+    name))
+
+(defun et/workspace-new ()
+  "Create a new tab with an automatic name and open the dashboard."
+  (interactive)
+  (et/workspace--create nil))
+
+(defun et/workspace-new-named (name)
+  "Create a new tab named NAME, or auto-named when NAME is blank."
+  (interactive
+   (list (read-string "New tab name (RET for automatic): ")))
+  (et/workspace--create name))
+
 (defun et/workspace--format-tab (original name)
   "Prefix workspace NAME's mode-line tab with its Perspective number.
 ORIGINAL is the original `persp-format-name' function."
@@ -180,6 +215,8 @@ ORIGINAL is the original `persp-format-name' function."
   (define-key et/workspace-map (kbd "r") #'persp-rename)
   (define-key et/workspace-map (kbd "a") #'persp-add-buffer)
   (define-key et/workspace-map (kbd "d") #'persp-forget-buffer)
+  (define-key et/workspace-map (kbd "c") #'et/workspace-new)
+  (define-key et/workspace-map (kbd "C") #'et/workspace-new-named)
   (define-key et/workspace-map (kbd "S") #'et/save-session)
   (define-key et/workspace-map (kbd "L") #'et/load-session)
   (dotimes (i 10)
