@@ -283,15 +283,14 @@ once with =M-x et/install-nerd-fonts=, or set =doom-modeline-icon= to nil for a
 plain terminal. The unconfigured alternative lighter options are =mood-line=,
 =telephone-line=, or =nano-modeline=.
 
-=et/meeting-mode= (toggled with =SPC P=) makes keyboard focus obvious during
-screen sharing. On every focus change it briefly tints the newly focused
-window, then leaves a thin theme-derived accent on its fringes, mode line, and
-header line when present. It follows ordinary windows, buffer switches, the
-minibuffer used by Vertico, transient menus, and frame focus changes. The accent
-is regenerated when themes are enabled or disabled. Customize
-=et/meeting-flash-duration=, =et/meeting-flash-alpha=, or
-=et/meeting-accent-color=. The implementation is local and needs no extra
-package; it is inspired by =winpulse= and =selected-window-accent-mode=.
+=meeting-mode= (toggled with =SPC P=) makes keyboard focus obvious during
+screen sharing. It is installed from
+[[https://github.com/EstebanJTrabajos/meeting-mode][GitHub]] with =package-vc=,
+pinned to the =main= branch, and provides the focus flash, theme-derived window
+accents, Vertico posframe highlighting, and Transient-menu support. The local
+implementation and its tests were removed; this configuration keeps only the
+=SPC P= leader binding, so the mode is off until toggled. Customize the
+package's =meeting= group for flash duration, tint strength, and accent color.
 
 * Projects, workspaces and windows
 
@@ -769,8 +768,8 @@ command construction and runner detection, standalone formatting and reload,
 Dape leader bindings and breakpoint-action helpers, OpenCode paid-first model
 ordering and pre-session model selection, per-project model persistence and
 =opencode.json= updates, model favorites and =C-f= binding, project session
-bookmarks and private context exports, meeting-mode hooks/remaps/flash
-scheduling, Compose validation/cancellation,
+bookmarks and private context exports, meeting-mode package installation and
+leader binding, Compose validation/cancellation,
 and a real Eglot JSON-RPC connection to a deterministic test fixture for CAPF,
 Flymake, Xref and formatting. Dashboard sections and buttons, gptel auth-source
 prompting and reasoning defaults, persistent capture templates, pomodoro
