@@ -670,6 +670,15 @@ PATH. Python output stays in the Dape REPL because `et/dape-python-console` is
 `"internalConsole"`; set it to `"integratedTerminal"` to use the vterm terminal
 like JavaScript.
 
+Java debugging runs through Eglot's jdtls server. java-debug is an OSGi bundle,
+not a separate adapter: when `et/dape-java-debug-bundle` finds
+`/usr/share/java-debug/com.microsoft.java.debug.plugin.jar` (or the same file
+under `/usr/local/share` or `~/.local/share`), Eglot passes it in jdtls's
+`initializationOptions.bundles`. Start Eglot with `SPC m l` before `SPC m D s`;
+if the bundle was installed after Eglot started, restart Eglot. `jdtls-wrapper`
+is unrelated: it rewrites `jdt://` URIs for Helix and does not provide
+java-debug.
+
 Function keys follow IDA/WinDbg/OllyDbg conventions and apply to every
 language. Breakpoint keys work without a session; the rest appear while Dape
 reports a live session, so they do not shadow other uses of F5 or F7 when you
