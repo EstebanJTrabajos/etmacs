@@ -128,9 +128,12 @@ CAPFs may execute Lisp, so use care with untrusted code.
 
 GUI Vertico menus float. Terminal frames use normal minibuffer rendering;
 Corfu uses supported child frames or the built-in completion fallback. In the
-theme picker, =C-n=/=C-p= preview, =RET= accepts, and =C-g= restores the previous
-theme. Only trusted installed theme code should be previewed. Selection is
-session-only; change =et/default-theme= for a persistent default.
+theme picker, =C-n=/=C-p= preview, =C-f= toggles the current theme as a
+favorite, =RET= accepts, and =C-g= restores the previous theme. Favorites are
+listed first and marked with a star. Only trusted installed theme code should
+be previewed. The selection and the favorites are saved in =.local/themes.el=
+and restored on the next start; =et/default-theme= is used when nothing has
+been saved yet.
 
 * Dashboard and AI
 
