@@ -183,6 +183,7 @@ neutral default. News summaries remain on =gpt-6-luna= until changed with
      :domains ("work" "general")
      :tag "work"
      :opencode-model "openai/gpt-6-sol"
+     :opencode-binary "opencode2"
      :hidden-providers ("deepseek"))
     (general
      :label "General"
@@ -204,6 +205,8 @@ neutral default. News summaries remain on =gpt-6-luna= until changed with
   "Profile-local runtime state directory.")
 (defvar et/profile-opencode-model nil
   "Default OpenCode model for the active profile.")
+(defvar et/profile-opencode-binary "opencode"
+  "OpenCode executable used by the active profile.")
 (defvar et/profile-hidden-providers nil
   "Provider names hidden from model selectors in the active profile.")
 (defvar et/profile-map (make-sparse-keymap "profile"))
@@ -277,6 +280,8 @@ neutral default. News summaries remain on =gpt-6-luna= until changed with
           et/profile-state-directory
           (expand-file-name (format "profiles/%s/" key) et/state-directory)
           et/profile-opencode-model (plist-get spec :opencode-model)
+          et/profile-opencode-binary (or (plist-get spec :opencode-binary)
+                                         "opencode")
           et/profile-hidden-providers (plist-get spec :hidden-providers)
           et/org-domain (plist-get spec :domain)
           et/org-agenda-scope (symbol-name key)
@@ -3263,9 +3268,13 @@ Return the selected model string, or nil when cancelled."
   (and (et/project-model-get root :opencode)
        (et/project-model-get root :gptel)))
 
+(defun et/opencode--binary ()
+  "Return the OpenCode executable for the active profile."
+  et/profile-opencode-binary)
+
 (defun et/opencode--cli-models (root)
   "Return OpenCode's model names for ROOT using the CLI."
-  (when (and root (executable-find "opencode"))
+  (when (and root (executable-find (et/opencode--binary)))
     (let ((default-directory
            (file-name-as-directory (expand-file-name root))))
       (condition-case nil
@@ -3275,7 +3284,7 @@ Return the selected model string, or nil when cancelled."
             (seq-filter
              (lambda (line)
                (string-match-p "\\`[^[:space:]/]+/[^[:space:]]+\\'" line))
-             (process-lines "opencode" "models"))))
+             (process-lines (et/opencode--binary) "models"))))
         (error nil)))))
 
 (defun et/opencode--display-provider (display)
@@ -3448,7 +3457,7 @@ Return the selected model string, or nil when cancelled."
           (et/project-model-set root :opencode nil)
           (et/project-models-save))
         (unless stored
-          (if (executable-find "opencode")
+          (if (executable-find (et/opencode--binary))
               (let ((profile-model et/profile-opencode-model))
                 (if (and profile-model
                          (member profile-model (et/opencode--cli-models root)))
@@ -3614,7 +3623,7 @@ When PROMPT is non-nil, offer saved project roots or read a directory."
       (let ((id (plist-get record :id))
             (directory (plist-get record :directory))
             (file (plist-get record :export)))
-        (when (and (executable-find "opencode")
+        (when (and (executable-find (et/opencode--binary))
                    (stringp id)
                    (stringp directory)
                    (not (file-remote-p directory)))
@@ -3623,7 +3632,7 @@ When PROMPT is non-nil, offer saved project roots or read a directory."
                 (coding-system-for-write 'utf-8-unix))
             (with-temp-buffer
               (let ((status (call-process
-                             "opencode" nil t nil
+                             (et/opencode--binary) nil t nil
                              "session" "export" id)))
                 (when (and (integerp status) (zerop status)
                            (> (buffer-size) 0))

@@ -16,6 +16,7 @@
      :domains ("work" "general")
      :tag "work"
      :opencode-model "openai/gpt-6-sol"
+     :opencode-binary "opencode2"
      :hidden-providers ("deepseek"))
     (general
      :label "General"
@@ -37,6 +38,8 @@
   "Profile-local runtime state directory.")
 (defvar et/profile-opencode-model nil
   "Default OpenCode model for the active profile.")
+(defvar et/profile-opencode-binary "opencode"
+  "OpenCode executable used by the active profile.")
 (defvar et/profile-hidden-providers nil
   "Provider names hidden from model selectors in the active profile.")
 (defvar et/profile-map (make-sparse-keymap "profile"))
@@ -110,6 +113,8 @@
           et/profile-state-directory
           (expand-file-name (format "profiles/%s/" key) et/state-directory)
           et/profile-opencode-model (plist-get spec :opencode-model)
+          et/profile-opencode-binary (or (plist-get spec :opencode-binary)
+                                         "opencode")
           et/profile-hidden-providers (plist-get spec :hidden-providers)
           et/org-domain (plist-get spec :domain)
           et/org-agenda-scope (symbol-name key)

@@ -160,9 +160,10 @@ files, history, and bookmarks. Packages, =.local/settings.el=, =.local/custom.el
 and backup/auto-save files remain shared. On a work machine, the fresh profile
 state contains no personal OpenCode bookmarks or exported contexts.
 
-OpenCode defaults are profile-specific: =work= uses =openai/gpt-6-sol= and hides
-DeepSeek models from selectors; =personal= uses
-=deepseek/deepseek-flash=; =general= uses =openai/gpt-6-luna=. A project can
+OpenCode defaults are profile-specific: =work= uses the =opencode2= executable,
+=openai/gpt-6-sol=, and hides DeepSeek models from selectors; =personal= uses
+the =opencode= executable and =deepseek/deepseek-flash=; =general= uses
+=opencode= and =openai/gpt-6-luna=. A project can
 still override its OpenCode model with =SPC a l= or =SPC p m=. News summaries
 always start on =gpt-6-luna=; =SPC C n= or =M-x et/change-news-summary-model=
 changes that model for the current Emacs session only.
