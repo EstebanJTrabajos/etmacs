@@ -169,6 +169,14 @@
 (add-to-list 'eglot-server-programs
              '((web-mode :language-id "typescriptreact") . ("typescript-language-server" "--stdio")))
 
+;; java-debug is loaded as a jdtls bundle, not as a separate adapter.  Dape
+;; asks the running Eglot/jdtls for vscode.java.startDebugSession.
+(add-to-list 'eglot-server-programs
+             '((java-mode java-ts-mode)
+               "jdtls"
+               :initializationOptions
+               (:bundles ["/usr/share/java-debug/com.microsoft.java.debug.plugin.jar"])))
+
 ;; Prefer basedpyright for Python; fall back to pyright, then pylsp.
 (defun et/python-lsp-contact (&rest _)
   "Return the first available Python server command, preferring basedpyright."
@@ -482,6 +490,90 @@ Uses Ruff for Python, Prettier for JS/TS, and clang-format for C/C++."
                                (list "docker" "compose" "-f" buffer-file-name "config" "--quiet")
                                " ")))
 
+(defvar et/dape-js-debug-directory "/usr/lib/js-debug"
+  "Directory holding a system-wide js-debug install, or nil to ignore it.
+Dape otherwise looks for <dape-adapter-dir>/js-debug/src/dapDebugServer.js.
+`dape-adapter-dir' defaults under `user-emacs-directory', which here is the
+configuration checkout.")
+
+(defun et/dape-configure-js-debug (&optional directory)
+  "Point Dape's js-debug configurations at DIRECTORY's dapDebugServer.js.
+DIRECTORY defaults to `et/dape-js-debug-directory'.  Return the server path
+when it was applied, or nil when the file is missing."
+  (let ((server (and directory
+                     (expand-file-name "dapDebugServer.js" directory))))
+    (when (and server (file-exists-p server))
+      (dolist (name '(js-debug-node js-debug-ts-node js-debug-tsx
+                      js-debug-node-attach js-debug-chrome))
+        (when-let* ((config (alist-get name dape-configs)))
+          (plist-put config 'command-args (list server :autoport))))
+      server)))
+
+(defvar et/dape-use-vterm t
+  "When non-nil, run the debuggee's terminal in vterm instead of shell-mode.")
+
+(defvar et/dape-js-console "integratedTerminal"
+  "Value of js-debug's :console option.
+\"integratedTerminal\" runs the program in `et/dape-terminal-buffer-name'
+(vterm when available); \"internalConsole\" keeps its output in the REPL.")
+
+(defvar et/dape-python-console "internalConsole"
+  "Value of debugpy's :console option.
+\"internalConsole\" keeps Python program output in the Dape REPL;
+\"integratedTerminal\" sends it to `et/dape-terminal-buffer-name' instead.")
+
+(defvar et/dape-terminal-buffer-name "*dape-vterm*"
+  "Base buffer name for the debuggee's terminal.")
+
+(defun et/dape--vterm-available-p ()
+  "Return non-nil when vterm can host the debuggee terminal."
+  (and (locate-library "vterm")
+       (fboundp 'module-load)
+       ;; Check the module first; requiring vterm would offer to compile it.
+       (locate-library "vterm-module")
+       (ignore-errors (require 'vterm nil t))
+       (fboundp 'vterm-mode)))
+
+(defun et/dape--terminal-command (arguments)
+  "Return the shell command string for DAP runInTerminal ARGUMENTS."
+  (let ((args (append (plist-get arguments :args) nil)))
+    (if (plist-get arguments :argsCanBeInterpretedByShell)
+        (mapconcat #'identity args " ")
+      (mapconcat #'shell-quote-argument args " "))))
+
+(defun et/dape--run-in-vterm (conn arguments)
+  "Handle CONN's runInTerminal ARGUMENTS with a vterm buffer."
+  (let* ((default-directory
+          (or (when-let* ((cwd (plist-get arguments :cwd)))
+                (dape--file-name-local conn cwd))
+              default-directory))
+         (process-environment
+          (append
+           (cl-loop for (key value) on (plist-get arguments :env) by #'cddr
+                    collect (format "%s=%s"
+                                    (substring (format "%s" key) 1)
+                                    value))
+           process-environment))
+         (command (et/dape--terminal-command arguments))
+         (buffer
+          (get-buffer-create (generate-new-buffer-name
+                              et/dape-terminal-buffer-name))))
+    (with-current-buffer buffer
+      (let ((vterm-shell command))
+        (vterm-mode)))
+    (setf (dape--shell-buffer (dape--root-of conn)) buffer)
+    (dape--display-buffer buffer)
+    (list :processId (or (process-id (get-buffer-process buffer)) 0))))
+
+(defun et/dape-handle-run-in-terminal (original conn command arguments)
+  "Use vterm for DAP runInTerminal requests when available.
+ORIGINAL, CONN, COMMAND, and ARGUMENTS are the advised call's arguments."
+  (if (and (eq command 'runInTerminal)
+           et/dape-use-vterm
+           (et/dape--vterm-available-p))
+      (et/dape--run-in-vterm conn arguments)
+    (funcall original conn command arguments)))
+
 (defvar et/dape-breakpoint-actions nil
   "Actions to run when a source breakpoint is hit.
 Keys are (FILE . LINE); values are plists with :type and :value.
@@ -503,9 +595,20 @@ Supported types are `debuggee', `elisp', `command', and `script'.")
   "Return the breakpoint action registered for the current line."
   (alist-get (et/dape--action-key) et/dape-breakpoint-actions nil nil #'equal))
 
+(defun et/dape-python-executable ()
+  "Return the Python executable Dape should use for debugpy.
+Prefer the buffer's selected virtualenv, then one discovered for the
+project, then `python' from `exec-path'."
+  (or (and (bound-and-true-p et/python-environment-bin)
+           (expand-file-name "python" et/python-environment-bin))
+      (when-let* ((root (ignore-errors (et/python-environment-find))))
+        (et/python-environment-python root))
+      (executable-find "python")
+      "python"))
+
 (defun et/dape-python-debugpy-available-p (&optional python)
   "Return non-nil when PYTHON can import the debugpy adapter."
-  (let ((python (or python (executable-find "python")))
+  (let ((python (or python (et/dape-python-executable)))
         (process-environment process-environment))
     (and python
          (with-temp-buffer
@@ -514,8 +617,10 @@ Supported types are `debuggee', `elisp', `command', and `script'.")
 
 (defun et/dape-python-preflight ()
   "Fail clearly when Python cannot load the debugpy adapter."
-  (let ((python (executable-find "python")))
-    (unless python
+  (let ((python (et/dape-python-executable)))
+    (unless (if (file-name-absolute-p python)
+                (file-executable-p python)
+              (executable-find python))
       (user-error "Python executable not found; install Python or select a virtualenv with SPC m v"))
     (unless (et/dape-python-debugpy-available-p python)
       (user-error "Python debug adapter debugpy is not installed for %s; run `%s -m pip install debugpy' or select a virtualenv that has it with SPC m v"
@@ -563,11 +668,70 @@ Supported types are `debuggee', `elisp', `command', and `script'.")
     ("java" "java")
     (_ (read-string "Command/interpreter for the script: "))))
 
+(defun et/dape-watch-at-point ()
+  "Toggle a watch for the symbol at point or the active region."
+  (interactive)
+  (let ((expression
+         (string-trim
+          (if (region-active-p)
+              (buffer-substring-no-properties (region-beginning) (region-end))
+            (or (thing-at-point 'symbol t) "")))))
+    (when (string-empty-p expression)
+      (user-error "Put point on a symbol or select a region to watch"))
+    (dape-watch-dwim expression nil nil t)))
+
+(defun et/dape-watch-expression (expression)
+  "Toggle watch EXPRESSION and show the watch buffer."
+  (interactive
+   (list (read-string "Watch expression (RET uses symbol at point): "
+                      (thing-at-point 'symbol t))))
+  (let ((expression (string-trim expression)))
+    (when (string-empty-p expression)
+      (user-error "Empty watch expression"))
+    (dape-watch-dwim expression nil nil t)))
+
+(defun et/dape-show-watch ()
+  "Display the watch expressions buffer."
+  (interactive)
+  (unless (fboundp 'dape--info-get-buffer-create)
+    (user-error "Start a Dape session first"))
+  (dape--display-buffer
+   (dape--info-get-buffer-create 'dape-info-watch-mode)))
+
+(defun et/dape-repl-setup ()
+  "Make the Dape REPL behave like a terminal under Evil.
+RET submits, S-RET/M-RET accumulate multi-line input, arrows walk
+history, and typing starts in insert state so no Emacs keys are needed."
+  (setq-local comint-scroll-to-bottom-on-input t
+              comint-scroll-to-bottom-on-output 'this
+              comint-input-ignoredups t
+              comint-input-ring-file-name
+              (expand-file-name "dape-repl-history" et/state-directory))
+  (when (file-readable-p comint-input-ring-file-name)
+    (comint-read-input-ring t))
+  (add-hook 'kill-buffer-hook #'comint-write-input-ring nil t)
+  (when (featurep 'evil)
+    (evil-insert-state)))
+
+(defun et/dape--save-repl-history ()
+  "Persist the Dape REPL input ring on exit."
+  (when-let* ((buffer (get-buffer "*dape-repl*"))
+              ((buffer-live-p buffer)))
+    (with-current-buffer buffer
+      (when (and (bound-and-true-p comint-input-ring-file-name)
+                 (not (string-empty-p comint-input-ring-file-name)))
+        (ignore-errors
+          (comint-write-input-ring)
+          (set-file-modes comint-input-ring-file-name #o600))))))
+
+(add-hook 'kill-emacs-hook #'et/dape--save-repl-history)
+
 (defun et/dape--read-breakpoint-action ()
   "Read a breakpoint action from the minibuffer."
   (let ((type (completing-read
                "Breakpoint action: "
-               '("Debuggee expression" "Emacs Lisp" "Shell command" "Script file")
+               '("Debuggee expression" "JavaScript code (statements)"
+                 "Emacs Lisp" "Shell command" "Script file")
                nil t nil nil "Debuggee expression")))
     (pcase type
       ("Debuggee expression"
@@ -575,6 +739,11 @@ Supported types are `debuggee', `elisp', `command', and `script'.")
          (when (string-empty-p value)
            (user-error "Empty debuggee expression"))
          (list :type 'debuggee :value value)))
+      ("JavaScript code (statements)"
+       (let ((value (read-string "JavaScript statements to execute: ")))
+         (when (string-empty-p value)
+           (user-error "Empty JavaScript code"))
+         (list :type 'js-code :value value)))
       ("Emacs Lisp"
        (let ((value (read-string "Emacs Lisp expression: ")))
          (when (string-empty-p value)
@@ -592,17 +761,35 @@ Supported types are `debuggee', `elisp', `command', and `script'.")
            (user-error "Not a regular script file: %s" file))
          (list :type 'script :value file :interpreter interpreter))))))
 
-(defun et/dape-set-breakpoint-action ()
-  "Set an action to run when the breakpoint at point is hit."
-  (interactive)
+(defun et/dape--read-action-condition ()
+  "Read an optional debuggee condition for a breakpoint action."
+  (let ((condition
+         (string-trim
+          (read-string "Run only when (debuggee expression, RET for always): "))))
+    (unless (string-empty-p condition) condition)))
+
+(defun et/dape-set-breakpoint-action (&optional conditional)
+  "Set an action to run when the breakpoint at point is hit.
+With prefix argument CONDITIONAL, prompt for a debuggee expression that
+must evaluate truthy before the action runs."
+  (interactive "P")
   (require 'dape)
   (unless (dape--breakpoints-at-point)
     (user-error "Set a breakpoint here first with SPC m D b"))
   (let* ((key (et/dape--action-key))
-         (action (et/dape--read-breakpoint-action)))
+         (action (et/dape--read-breakpoint-action))
+         (condition (and conditional (et/dape--read-action-condition))))
+    (when condition
+      (setq action (plist-put action :condition condition)))
     (setf (alist-get key et/dape-breakpoint-actions nil nil #'equal) action)
-    (message "Breakpoint action set for %s:%d"
-             (file-name-nondirectory (car key)) (cdr key))))
+    (message "Breakpoint action set for %s:%d%s"
+             (file-name-nondirectory (car key)) (cdr key)
+             (if condition (format " when %s" condition) ""))))
+
+(defun et/dape-set-conditional-action ()
+  "Set a breakpoint action that runs only when a condition holds."
+  (interactive)
+  (et/dape-set-breakpoint-action t))
 
 (defun et/dape-clear-breakpoint-action ()
   "Remove the breakpoint action at point."
@@ -617,11 +804,35 @@ Supported types are `debuggee', `elisp', `command', and `script'.")
     (message "Breakpoint action cleared for %s:%d"
              (file-name-nondirectory (car key)) (cdr key))))
 
+(defun et/dape--js-code-wrapper (code)
+  "Wrap JavaScript CODE to capture console output for the Dape REPL.
+CODE runs in the stopped frame's scope, so local variables are visible.
+Return the captured output instead of sending it to the program terminal."
+  (format
+   (concat "(function () {\n"
+           "  const __etLines = [];\n"
+           "  const __etLog = console.log;\n"
+           "  console.log = (...args) => {\n"
+           "    __etLines.push(args.map(String).join(\" \"));\n"
+           "  };\n"
+           "  try {\n%s\n"
+           "  } catch (__etError) {\n"
+           "    __etLines.push(String(__etError));\n"
+           "  } finally {\n"
+           "    console.log = __etLog;\n"
+           "  }\n"
+           "  return __etLines.join(\"\\n\");\n"
+           "})()")
+   code))
+
 (defun et/dape--run-breakpoint-action (conn action)
   "Run ACTION for stopped CONN."
   (pcase (plist-get action :type)
     ('debuggee
      (dape-evaluate-expression conn (plist-get action :value) "repl"))
+    ('js-code
+     (dape-evaluate-expression
+      conn (et/dape--js-code-wrapper (plist-get action :value)) "repl"))
     ('elisp
      (condition-case err
          (eval (car (read-from-string (plist-get action :value))) t)
@@ -655,6 +866,35 @@ Supported types are `debuggee', `elisp', `command', and `script'.")
           (cons (et/dape--canonical-file file)
                 (line-number-at-pos (marker-position marker))))))
 
+(defun et/dape--false-value-p (value)
+  "Return non-nil when VALUE, a DAP result string, is common falsey text."
+  (or (null value)
+      (member (downcase (string-trim value))
+              '("false" "0" "0.0" "null" "undefined" "nil" "none" ""
+                "\"\"" "''"))))
+
+(defun et/dape-action-condition-met-p (conn action)
+  "Return non-nil when ACTION's condition holds at CONN's current stop.
+Actions without a condition always run.  The condition is a debuggee
+expression evaluated in the stopped frame."
+  (let ((condition (plist-get action :condition)))
+    (or (not condition)
+        (let* ((frame (dape--current-stack-frame conn))
+               (result nil)
+               ;; Evaluate synchronously; we are already on the stopped hook.
+               (dape--request-blocking t))
+          (dape--evaluate-expression
+           conn (plist-get frame :id) condition "watch"
+           (lambda (body error)
+             (when error
+               (message "Breakpoint condition failed: %s"
+                        (string-trim error)))
+             (setq result
+                   (and (not error)
+                        (not (et/dape--false-value-p
+                              (plist-get body :result)))))))
+          result))))
+
 (defun et/dape-run-breakpoint-actions (&optional attempts)
   "Run the action registered for the breakpoint where Dape stopped.
 Dape populates stack frames asynchronously, so retry briefly when
@@ -666,7 +906,8 @@ retry counter."
             (when-let* ((location (nth 1 context))
                         (action (alist-get location et/dape-breakpoint-actions
                                            nil nil #'equal)))
-              (et/dape--run-breakpoint-action (car context) action))
+              (when (et/dape-action-condition-met-p (car context) action)
+                (et/dape--run-breakpoint-action (car context) action)))
           (when (< attempts 20)
             (run-with-timer 0.1 nil #'et/dape-run-breakpoint-actions
                             (1+ attempts))))
@@ -687,9 +928,183 @@ retry counter."
                    ("A" . et/dape-clear-breakpoint-action)
                    ("c" . dape-continue) ("n" . dape-next)
                    ("i" . dape-step-in) ("o" . dape-step-out)
-                   ("r" . dape-repl) ("q" . dape-quit)))
+                   ("p" . dape-pause) ("u" . dape-until)
+                   ("r" . dape-restart) ("R" . dape-repl)
+                   ("f" . dape-restart-frame)
+                   ("w" . et/dape-watch-at-point)
+                   ("W" . et/dape-watch-expression)
+                   ("v" . et/dape-show-watch)
+                   ("x" . dape-evaluate-expression)
+                   ("I" . dape-info) ("k" . dape-kill)
+                   ("d" . dape-disconnect-quit)
+                   ("t" . dape-select-thread)
+                   ("T" . dape-select-session)
+                   ("S" . dape-select-stack)
+                   (">" . dape-stack-select-down)
+                   ("<" . dape-stack-select-up)
+                   ("C" . et/dape-set-conditional-action)
+                   ("?" . et/dape-help)
+                   ("q" . dape-quit)))
   (define-key et/debug-map (kbd (car binding)) (cdr binding)))
 (define-key et/dev-map (kbd "D") (cons "debug" et/debug-map))
+;; Uppercase D is the global debugging leader; lowercase d is the dashboard.
+(define-key et/leader-map (kbd "D") (cons "debug" et/debug-map))
+
+(defvar et/debug-keys-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-<f3>") #'et/dape-watch-at-point)
+    (define-key map (kbd "C-S-<f3>") #'et/dape-watch-expression)
+    (define-key map (kbd "<f4>") #'dape-until)
+    (define-key map (kbd "<f5>") #'dape-continue)
+    (define-key map (kbd "<f9>") #'dape-continue)
+    (define-key map (kbd "<f6>") #'dape-pause)
+    (define-key map (kbd "<f12>") #'dape-pause)
+    (define-key map (kbd "<f7>") #'dape-step-in)
+    (define-key map (kbd "<f11>") #'dape-step-in)
+    (define-key map (kbd "<f8>") #'dape-next)
+    (define-key map (kbd "<f10>") #'dape-next)
+    (define-key map (kbd "S-<f11>") #'dape-step-out)
+    (define-key map (kbd "C-<f7>") #'dape-step-out)
+    (define-key map (kbd "S-<f5>") #'dape-quit)
+    (define-key map (kbd "C-S-<f5>") #'dape-restart)
+    map)
+  "Debugger keys available only while a Dape session is live.")
+
+(define-minor-mode et/debug-keys-mode
+  "Global debugger keys, enabled only during a Dape session."
+  :global t
+  :lighter nil
+  :keymap et/debug-keys-map)
+
+(defun et/debug-keys--sync ()
+  "Enable `et/debug-keys-mode' exactly while Dape reports a session."
+  (et/debug-keys-mode (if (bound-and-true-p dape-active-mode) 1 -1)))
+
+(defun et/dape--require-source-buffer ()
+  "Signal a clear error outside program source buffers."
+  (unless (derived-mode-p 'prog-mode)
+    (user-error "Debugger source keys require a program source buffer")))
+
+(defun et/dape-toggle-breakpoint ()
+  "Toggle a Dape breakpoint at point, loading Dape on demand."
+  (interactive)
+  (et/dape--require-source-buffer)
+  (dape-breakpoint-toggle))
+
+(defun et/dape-conditional-breakpoint ()
+  "Set a conditional breakpoint at point."
+  (interactive)
+  (et/dape--require-source-buffer)
+  (call-interactively #'dape-breakpoint-expression))
+
+(defun et/dape-log-breakpoint ()
+  "Set a log breakpoint at point."
+  (interactive)
+  (et/dape--require-source-buffer)
+  (call-interactively #'dape-breakpoint-log))
+
+(defun et/dape-action-breakpoint (&optional conditional)
+  "Set a breakpoint at point and attach code to run when it is hit.
+With CONDITIONAL non-nil, also read a debuggee condition."
+  (interactive "P")
+  (et/dape--require-source-buffer)
+  (require 'dape)
+  (unless (dape--breakpoints-at-point)
+    (dape-breakpoint-toggle))
+  (et/dape-set-breakpoint-action conditional))
+
+(defun et/dape-conditional-action-breakpoint ()
+  "Set a breakpoint whose action runs only when a condition holds."
+  (interactive)
+  (et/dape-action-breakpoint t))
+
+(defvar et/debug-source-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "<f2>") #'et/dape-toggle-breakpoint)
+    (define-key map (kbd "S-<f2>") #'et/dape-conditional-breakpoint)
+    (define-key map (kbd "C-<f2>") #'et/dape-log-breakpoint)
+    (define-key map (kbd "<f3>") #'et/dape-action-breakpoint)
+    (define-key map (kbd "S-<f3>") #'et/dape-conditional-action-breakpoint)
+    map)
+  "Source-level debugger keys that work without a live session.")
+
+(define-minor-mode et/debug-source-mode
+  "Global keys for breakpoints in source buffers.
+Breakpoints make sense before a session starts, so this mode is
+independent of `et/debug-keys-mode'."
+  :global t
+  :lighter nil
+  :keymap et/debug-source-map)
+
+(et/debug-source-mode 1)
+
+(defconst et/dape-help-text
+  (concat
+   "Etmacs debugger\n\n"
+   "Function keys\n"
+   "  F2          toggle breakpoint          SPC m D b\n"
+   "  Shift+F2    conditional breakpoint     SPC m D E\n"
+   "  Ctrl+F2     log breakpoint             SPC m D l\n"
+   "  F3          breakpoint + code action   SPC m D a\n"
+   "  Shift+F3    breakpoint + cond. action  SPC m D C\n"
+   "  Ctrl+F3     toggle watch at point      SPC m D w\n"
+   "  Ctrl+Shift+F3 watch an expression      SPC m D W\n"
+   "  F4          run to point               SPC m D u\n"
+   "  F5 / F9     continue                   SPC m D c\n"
+   "  F6 / F12    pause                      SPC m D p\n"
+   "  F7 / F11    step into                  SPC m D i\n"
+   "  F8 / F10    step over                  SPC m D n\n"
+   "  Shift+F11   step out                   SPC m D o\n"
+   "  Ctrl+F7     step out                   SPC m D o\n"
+   "  Shift+F5    stop session               SPC m D q\n"
+   "  Ctrl+Shift+F5 restart                  SPC m D r\n\n"
+   "Leader (any buffer)\n"
+   "  SPC D s start     SPC D r restart     SPC D q quit\n"
+   "  SPC D T session   SPC D t thread      SPC D S stack\n"
+   "  SPC D v watch buffer   SPC D I info   SPC D ? help\n\n"
+   "Everything below also lives under SPC m D and SPC D.\n\n"
+   "Watch expressions are evaluated on every stop:\n"
+   "  values.length\n"
+   "  values.filter(v => v % 2 === 0)\n"
+   "  describe(values)[0]\n"
+   "  this.state.items.filter(item => item.active)\n\n"
+   "Run code only when a condition holds: SPC m D C\n"
+   "  Condition: value > 10\n"
+   "  Action:    Debuggee expression   console.log(\"big\", value)\n"
+   "  Action:    JavaScript code       var i = 5; console.log(i + value)\n"
+   "  Action:    Emacs Lisp            (message \"big value\")\n"
+   "  Action:    Shell command         notify-send dape \"hit\"\n"
+   "  Action:    Script file           examples/javascript/hit.sh\n"
+   "  Plain SPC m D a sets an action that runs on every hit.\n"
+   "  JavaScript code executes statements; console.log output comes back\n"
+   "  to this REPL instead of the program terminal.\n\n"
+   "Conditional breakpoint (Shift+F2) stops only when true:\n"
+   "  value % 2 === 0\n"
+   "  index === 3 && value > 10\n"
+   "  user && user.role === \"admin\"\n"
+   "Conditions use the debuggee's language; false, 0, null, undefined,\n"
+   "nil, none, and empty strings count as false.\n\n"
+   "Log breakpoint (Ctrl+F2) prints without stopping:\n"
+   "  value={value} index={index}\n\n"
+   "Watches and actions need a live session; breakpoints do not.\n"
+   "REPL: RET sends, S-RET and M-RET add lines, arrows walk history,\n"
+   "and history is saved in .local/dape-repl-history.\n"
+   "Program output opens in a vterm buffer.  Set et/dape-js-console to\n"
+   "\"internalConsole\" to capture it in this REPL instead.\n")
+  "Help text shown by `et/dape-help'.")
+
+(defun et/dape-help ()
+  "Show debugger keys, watches, and breakpoint-action examples."
+  (interactive)
+  (let ((buffer (get-buffer-create "*etmacs-debugger-help*")))
+    (with-current-buffer buffer
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert et/dape-help-text))
+      (special-mode)
+      (goto-char (point-min)))
+    (display-buffer buffer)))
+
 
 (use-package dape
   :if (locate-library "dape")
@@ -698,18 +1113,61 @@ retry counter."
              dape-breakpoint-log dape-breakpoint-expression
              dape-breakpoint-hits dape-breakpoint-function
              dape-continue dape-next dape-step-in dape-step-out
+             dape-pause dape-restart dape-restart-frame dape-until
+             dape-watch-dwim dape-info dape-kill dape-disconnect-quit
+             dape-select-session dape-select-thread dape-select-stack
+             dape-stack-select-down dape-stack-select-up
              dape-evaluate-expression dape-repl dape-quit)
   :init
   (setq dape-buffer-window-arrangement 'right
-        dape-cwd-function #'et/dev-project-root)
+        dape-cwd-function #'et/dev-project-root
+        ;; The F-key and SPC maps replace Dape's default C-x C-a prefix.
+        dape-key-prefix nil)
   :config
   (setq dape-cwd-function #'et/dev-project-root)
+  (when (eq (lookup-key global-map (kbd "C-x C-a")) 'dape-global-map)
+    (global-unset-key (kbd "C-x C-a")))
   (dape-breakpoint-global-mode 1)
+  ;; A system-wide js-debug lives outside Dape's adapter directory, whose
+  ;; default resolves inside this configuration checkout.
+  (et/dape-configure-js-debug et/dape-js-debug-directory)
+  ;; TSX buffers use tsx-ts-mode or web-mode in this configuration.
+  (dolist (name '(js-debug-tsx js-debug-chrome))
+    (when-let* ((config (alist-get name dape-configs)))
+      (plist-put config 'modes
+                 (append (plist-get config 'modes)
+                         '(tsx-ts-mode web-mode)))))
+  ;; Send Node programs to a real terminal instead of the internal console.
+  (dolist (name '(js-debug-node js-debug-ts-node js-debug-tsx))
+    (when-let* ((config (alist-get name dape-configs)))
+      (plist-put config :console et/dape-js-console)))
+  (advice-remove 'dape-handle-request #'et/dape-handle-run-in-terminal)
+  (advice-add 'dape-handle-request :around #'et/dape-handle-run-in-terminal)
+  ;; Function keys exist only while Dape reports a live session.
+  (add-hook 'dape-active-mode-hook #'et/debug-keys--sync)
+  (et/debug-keys--sync)
+  ;; GUI Emacs reports the Return key as `return', terminals as C-m (13), and
+  ;; Evil's motion/visual states bind RET to a motion, so bind all of them.
+  (dolist (key '("RET" "<return>" "C-m"))
+    (define-key dape-repl-mode-map (kbd key) #'comint-send-input))
+  (dolist (key '("S-<return>" "<S-return>" "M-<return>" "<M-return>"
+                 "C-c SPC"))
+    (define-key dape-repl-mode-map (kbd key) #'comint-accumulate))
+  (with-eval-after-load 'evil
+    (evil-define-key '(normal insert motion emacs) dape-repl-mode-map
+      (kbd "RET") #'comint-send-input
+      (kbd "<return>") #'comint-send-input
+      (kbd "C-m") #'comint-send-input
+      (kbd "S-<return>") #'comint-accumulate
+      (kbd "M-<return>") #'comint-accumulate))
+  (add-hook 'dape-repl-mode-hook #'et/dape-repl-setup)
   ;; Prefer IPv4 loopback explicitly. Some systems resolve "localhost" to
   ;; ::1 while debugpy listens only on IPv4, leaving Dape waiting for a
   ;; connection that never arrives.
   (dolist (name '(debugpy debugpy-module))
     (when-let* ((config (alist-get name dape-configs)))
+      (plist-put config 'command #'et/dape-python-executable)
+      (plist-put config :console et/dape-python-console)
       (plist-put config 'host "127.0.0.1")
       (plist-put config 'command-args
                  '("-m" "debugpy.adapter" "--host" "127.0.0.1"
