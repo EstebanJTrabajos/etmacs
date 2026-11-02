@@ -269,9 +269,13 @@ Return the selected model string, or nil when cancelled."
   (and (et/project-model-get root :opencode)
        (et/project-model-get root :gptel)))
 
+(defun et/opencode--binary ()
+  "Return the OpenCode executable for the active profile."
+  et/profile-opencode-binary)
+
 (defun et/opencode--cli-models (root)
   "Return OpenCode's model names for ROOT using the CLI."
-  (when (and root (executable-find "opencode"))
+  (when (and root (executable-find (et/opencode--binary)))
     (let ((default-directory
            (file-name-as-directory (expand-file-name root))))
       (condition-case nil
@@ -281,7 +285,7 @@ Return the selected model string, or nil when cancelled."
             (seq-filter
              (lambda (line)
                (string-match-p "\\`[^[:space:]/]+/[^[:space:]]+\\'" line))
-             (process-lines "opencode" "models"))))
+             (process-lines (et/opencode--binary) "models"))))
         (error nil)))))
 
 (defun et/opencode--display-provider (display)
@@ -454,7 +458,7 @@ Return the selected model string, or nil when cancelled."
           (et/project-model-set root :opencode nil)
           (et/project-models-save))
         (unless stored
-          (if (executable-find "opencode")
+          (if (executable-find (et/opencode--binary))
               (let ((profile-model et/profile-opencode-model))
                 (if (and profile-model
                          (member profile-model (et/opencode--cli-models root)))
@@ -620,7 +624,7 @@ When PROMPT is non-nil, offer saved project roots or read a directory."
       (let ((id (plist-get record :id))
             (directory (plist-get record :directory))
             (file (plist-get record :export)))
-        (when (and (executable-find "opencode")
+        (when (and (executable-find (et/opencode--binary))
                    (stringp id)
                    (stringp directory)
                    (not (file-remote-p directory)))
@@ -629,7 +633,7 @@ When PROMPT is non-nil, offer saved project roots or read a directory."
                 (coding-system-for-write 'utf-8-unix))
             (with-temp-buffer
               (let ((status (call-process
-                             "opencode" nil t nil
+                             (et/opencode--binary) nil t nil
                              "session" "export" id)))
                 (when (and (integerp status) (zerop status)
                            (> (buffer-size) 0))

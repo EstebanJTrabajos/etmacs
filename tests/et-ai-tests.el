@@ -498,20 +498,38 @@
                                  (et/opencode-session--records root)))))
       (delete-directory directory t))))
 
+(ert-deftest et/ai-opencode-cli-models-use-profile-binary ()
+  (let ((et/profile-opencode-binary "opencode2")
+        (calls nil))
+    (cl-letf (((symbol-function 'executable-find)
+               (lambda (command)
+                 (push command calls)
+                 "/usr/bin/opencode2"))
+              ((symbol-function 'process-lines)
+               (lambda (program &rest _)
+                 (push program calls)
+                 nil)))
+      (et/opencode--cli-models default-directory)
+      (should (equal calls '("opencode2" "opencode2"))))))
+
 (ert-deftest et/ai-opencode-session-export-writes-private-json ()
   (let* ((directory (make-temp-file "etmacs-opencode-export-" t))
-         (file (expand-file-name "session.json" directory)))
+         (file (expand-file-name "session.json" directory))
+         (et/profile-opencode-binary "opencode2")
+         (program nil))
     (unwind-protect
         (cl-letf (((symbol-function 'executable-find)
-                   (lambda (&rest _) "/usr/bin/opencode"))
+                   (lambda (&rest _) "/usr/bin/opencode2"))
                   ((symbol-function 'call-process)
-                   (lambda (&rest _)
+                   (lambda (executable &rest _)
+                     (setq program executable)
                      (insert "{\"ok\":true}")
                      0)))
           (should (et/opencode-session--export
                    (list :id "ses_export"
                          :directory directory
                          :export file)))
+          (should (equal program "opencode2"))
           (should (file-exists-p file))
           (should (= (logand (file-modes file) #o777) #o600))
           (with-temp-buffer
