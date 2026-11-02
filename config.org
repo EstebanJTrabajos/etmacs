@@ -2118,18 +2118,31 @@ syntax is extended locally to allow =$= and =!=.
     (car (et/news--selected-entries)))
    (t (user-error "Open the dashboard or Elfeed first"))))
 
+(defun et/news--json-safe-text (text)
+  "Decode embedded UTF-8 bytes and replace bytes JSON cannot encode."
+  (let ((decoded (decode-coding-string
+                  (encode-coding-string text 'utf-8 t)
+                  'utf-8 t)))
+    (apply #'string
+           (mapcar (lambda (char)
+                     (if (eq (char-charset char) 'eight-bit)
+                         ?\uFFFD
+                       char))
+                   (string-to-list decoded)))))
+
 (defun et/news--summary-prompt (context text complete)
   "Return the summary prompt for CONTEXT and TEXT."
   (let ((words (length (split-string text "\\s-+" t))))
-    (format et/news-summary-template
-            (plist-get context :title)
-            (plist-get context :link)
-            (plist-get context :feed)
-            (plist-get context :date)
-            words
-            (if complete "yes" "no")
-            text
-            (plist-get context :link))))
+    (et/news--json-safe-text
+     (format et/news-summary-template
+             (plist-get context :title)
+             (plist-get context :link)
+             (plist-get context :feed)
+             (plist-get context :date)
+             words
+             (if complete "yes" "no")
+             text
+             (plist-get context :link)))))
 
 (defun et/news--summary-backend ()
   "Return a gptel backend that includes `et/news-summary-model'."

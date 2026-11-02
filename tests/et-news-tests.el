@@ -156,6 +156,23 @@
     (should (string-match-p "\\$microsoft" prompt))
     (should (string-match-p "Text complete: yes" prompt))))
 
+(ert-deftest et/news-summary-prompt-is-json-safe-for-undecoded-bytes ()
+  (let* ((article (concat (encode-coding-string "Café 日本語" 'utf-8)
+                          (unibyte-string #xff)
+                          (encode-coding-string " résumé" 'utf-8)))
+         (context (list :title "Test" :link "https://example.test/a"
+                        :feed "Feed" :date "2026-10-24"))
+         (prompt (et/news--summary-prompt context article t)))
+    (should (stringp (json-serialize prompt)))
+    (should (string-match-p "Café 日本語" prompt))
+    (should (string-match-p "résumé" prompt))
+    (should (string-match-p "\uFFFD" prompt))
+    (should-not (seq-some (lambda (char)
+                            (eq (char-charset char) 'eight-bit))
+                          (string-to-list prompt)))
+    (should (equal "Café 日本語 — résumé"
+                   (et/news--json-safe-text "Café 日本語 — résumé")))))
+
 (ert-deftest et/news-summary-parser-extracts-metadata-and-nodes ()
   (let* ((output
           (concat
