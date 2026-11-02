@@ -21,7 +21,7 @@
 
 (defconst et/packages
   '(evil evil-collection vertico orderless marginalia consult
-    vertico-posframe guava-themes projectile perspective corfu treemacs
+    vertico-posframe guava-themes doom-themes projectile perspective corfu treemacs
     treemacs-evil treemacs-perspective avy ace-window expand-region crux
     gptel request parinfer-rust-mode rainbow-delimiters
     doom-modeline nerd-icons minions elfeed
