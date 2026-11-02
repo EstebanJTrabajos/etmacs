@@ -21,7 +21,7 @@
       scroll-preserve-screen-position t
       auto-revert-remote-files nil
       global-auto-revert-non-file-buffers nil
-      recentf-save-file (expand-file-name "recentf" et/state-directory)
+      recentf-save-file (expand-file-name "recentf" et/profile-state-directory)
       recentf-max-saved-items 300
       recentf-auto-cleanup 'never
       transient-history-file (expand-file-name "transient/history.el" et/state-directory)

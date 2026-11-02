@@ -1,12 +1,12 @@
 ;;; et-roam.el --- Generated from config.org -*- lexical-binding: t; -*-
 (defvar org-roam-directory et/roam-directory)
-(defvar org-roam-db-location (expand-file-name "org-roam.db" et/state-directory))
+(defvar org-roam-db-location (expand-file-name "org-roam.db" et/profile-state-directory))
 (defvar org-roam-dailies-directory)
 (defvar org-roam-dailies-capture-templates)
 (defvar et/roam-map (make-sparse-keymap "roam"))
 (define-key et/notes-map (kbd "r") (cons "roam" et/roam-map))
 (setq org-roam-directory et/roam-directory
-      org-roam-db-location (expand-file-name "org-roam.db" et/state-directory))
+      org-roam-db-location (expand-file-name "org-roam.db" et/profile-state-directory))
 
 (defun et/roam-node-hierarchy (node)
   "Format NODE as its document title, ancestors, and own title."
@@ -57,7 +57,8 @@
        :target (file+head ,(lambda () (et/roam-target domain folder))
                          ,(concat (when (equal key "r")
                                     ":PROPERTIES:\n:ROAM_REFS: %^{URL or cite:key}\n:END:\n")
-                                  "#+title: ${title}\n#+filetags: :" tag ":\n"))
+                                  "#+title: ${title}\n#+filetags: :" tag ":"
+                                  (et/profile-tag domain) ":\n"))
        :unnarrowed t))
    '(("n" "Topic" "topics" "topic" "%?\n")
      ("i" "Idea" "ideas" "idea" "* Idea\n%?\n\n* Next step\n")
@@ -67,7 +68,7 @@
 
 (defun et/roam-capture (domain &optional title key)
   "Capture a new note in DOMAIN, optionally supplying TITLE and template KEY."
-  (interactive (list (completing-read "Capture domain: " et/org-domains nil t nil nil
+  (interactive (list (completing-read "Capture domain: " et/profile-domains nil t nil nil
                                      (et/current-domain))))
   (et/roam-start)
   (setq title (string-trim (or title (read-string "Title: "))))
@@ -148,7 +149,9 @@
    (pcase-lambda (`(,key ,label ,body))
      `(,key ,label entry ,body
        :target (file+head "%<%Y-%m-%d>.org"
-                         ,(concat "#+title: %<%Y-%m-%d> " domain "\n#+filetags: :daily:\n"))
+                         ,(concat "#+title: %<%Y-%m-%d> " domain
+                                  "\n#+filetags: :daily:"
+                                  (et/profile-tag domain) ":\n"))
        :unnarrowed t))
    '(("j" "Journal" "* %<%H:%M> Journal\n%?\n")
      ("l" "Work log" "* %<%H:%M> Work log\nTask: %K\n%?\n")
@@ -158,7 +161,7 @@
   "Capture today's entry with optional KEY; CHOOSE-DOMAIN prompts for a domain."
   (interactive "P")
   (let ((domain (if choose-domain
-                    (completing-read "Daily domain: " et/org-domains nil t nil nil (et/current-domain))
+                    (completing-read "Daily domain: " et/profile-domains nil t nil nil (et/current-domain))
                   (et/current-domain))))
     (et/roam-start)
     (require 'org-roam-dailies)
@@ -186,7 +189,8 @@
      :node (org-roam-node-create :title (format-time-string "Review %G-W%V"))
      :templates `(("w" "Weekly review" plain ,(concat "* Dailies\n" links "\n\n* Review\n%?\n")
                    :target (file+head ,(lambda () (et/roam-target domain "reviews"))
-                                      "#+title: ${title}\n#+filetags: :review:\n")
+                                      ,(concat "#+title: ${title}\n#+filetags: :review:"
+                                               (et/profile-tag domain) ":\n"))
                    :unnarrowed t)))))
 
 (defun et/roam-graph ()

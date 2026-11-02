@@ -287,6 +287,7 @@
          (root (file-name-as-directory directory))
          (et/project-models-file (expand-file-name "models.el" directory))
          (et/project-models nil)
+         (et/profile-opencode-model nil)
          (opencode-calls 0)
          (gptel-calls 0))
     (unwind-protect

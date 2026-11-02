@@ -14,7 +14,7 @@
   ;; Keep package activation in the repo, redirect runtime history/session state.
   (advice-add 'require :before
               (defun et/test-redirect-state (feature &rest _)
-                (when (eq feature 'et-core)
+                (when (memq feature '(et-profile et-core))
                   (setq et/state-directory (file-name-as-directory et/test-state)))))
   (unwind-protect
       (load (expand-file-name "init.el" et/test-root) nil t)
@@ -747,6 +747,7 @@
       (switch-to-buffer original)
       (when (buffer-live-p status-buffer) (kill-buffer status-buffer)))))
 
+(load (expand-file-name "tests/et-profile-tests.el" et/test-root) nil t)
 (load (expand-file-name "tests/et-org-tests.el" et/test-root) nil t)
 (load (expand-file-name "tests/et-dev-tests.el" et/test-root) nil t)
 (load (expand-file-name "tests/et-dashboard-tests.el" et/test-root) nil t)

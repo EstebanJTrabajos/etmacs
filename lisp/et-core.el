@@ -13,9 +13,9 @@
       auth-sources '("~/.authinfo.gpg")
       inhibit-startup-screen t
       use-short-answers t
-      savehist-file (expand-file-name "history" et/state-directory)
-      save-place-file (expand-file-name "places" et/state-directory)
-      bookmark-default-file (expand-file-name "bookmarks" et/state-directory)
+      savehist-file (expand-file-name "history" et/profile-state-directory)
+      save-place-file (expand-file-name "places" et/profile-state-directory)
+      bookmark-default-file (expand-file-name "bookmarks" et/profile-state-directory)
       backup-directory-alist `(("." . ,(expand-file-name "backups/" et/state-directory)))
       auto-save-file-name-transforms
       `((".*" ,(expand-file-name "auto-save/" et/state-directory) t))
@@ -77,6 +77,7 @@
 (define-key et/leader-map (kbd "g") (cons "git" et/git-map))
 (define-key et/leader-map (kbd "h") (cons "help" et/help-map))
 (define-key et/leader-map (kbd "t") (cons "themes" et/theme-map))
+(define-key et/leader-map (kbd "C") (cons "profile" et/profile-map))
 (define-key et/leader-map (kbd "m")
             '(menu-item "mode commands" nil :filter et/local-leader-menu))
 (define-key et/file-map (kbd "f") #'find-file)

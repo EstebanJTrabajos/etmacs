@@ -23,7 +23,7 @@
 (defvar et/dashboard-project-limit 8)
 (defvar et/dashboard-agenda-limit 5
   "Maximum number of tasks shown per domain on the dashboard.")
-(defvar et/dashboard-agenda-domains '("personal" "work" "general")
+(defvar et/dashboard-agenda-domains (copy-sequence et/profile-domains)
   "Domains shown as separate agenda groups on the dashboard.")
 
 (defvar et/dashboard-mode-map

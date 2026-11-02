@@ -23,9 +23,9 @@
       org-tag-line-re
       (format "^\\*+ \\(?:.*[ \t]\\)?%s[ \t]*$" org-tag--group-enclosed-re))
 
-(defvar et/org-domain "personal" "Default note domain in the current workspace.")
+(defvar et/org-domain et/profile "Default note domain in the current workspace.")
 (defvar et/org-domains '("personal" "work" "general"))
-(defvar et/org-agenda-scope "all")
+(defvar et/org-agenda-scope et/profile)
 (defvar et/org-extra-agenda-files nil
   "Existing task files outside the convention; included in all-domain agendas.")
 (defvar et/bibliography-files nil "Local BibTeX files; set in .local/settings.el.")
@@ -51,15 +51,16 @@
 
 (defun et/set-domain (domain)
   "Set the current workspace's default DOMAIN."
-  (interactive (list (completing-read "Domain: " et/org-domains nil t nil nil et/org-domain)))
-  (unless (member domain et/org-domains) (user-error "Unknown domain: %s" domain))
+  (interactive (list (completing-read "Domain: " et/profile-domains nil t nil nil et/org-domain)))
+  (unless (member domain et/profile-domains)
+    (user-error "Domain %s is not available in the %s profile" domain et/profile))
   (setq et/org-domain domain)
   (message "Workspace note domain: %s" domain))
 
 (when (bound-and-true-p persp-mode)
   (persp-make-variable-persp-local 'et/org-domain)
   (add-hook 'persp-created-hook
-            (defun et/new-workspace-domain () (setq et/org-domain "personal"))))
+            (defun et/new-workspace-domain () (setq et/org-domain et/profile))))
 
 (defun et/org-target-file (relative)
   "Prepare RELATIVE capture destination, without overwriting an existing file."
@@ -69,8 +70,13 @@
 
 (defun et/habit-template ()
   "Return an editable daily recurring habit starting today."
-  (format "* TODO %%?\nSCHEDULED: <%s .+1d>\n:PROPERTIES:\n:STYLE: habit\n:END:\n"
+  (format "* TODO %%? :personal:\nSCHEDULED: <%s .+1d>\n:PROPERTIES:\n:STYLE: habit\n:END:\n"
           (format-time-string "%Y-%m-%d %a")))
+
+(defun et/project-task-template ()
+  "Return a project task template tagged for the active profile."
+  (format "* TODO %%? :%s:\n:PROPERTIES:\n:CREATED: %%U\n:END:\n%%a\n"
+          (et/profile-tag)))
 
 (defface et/org-todo-yellow
   '((t :foreground "#b8860b" :weight bold))
@@ -254,8 +260,8 @@ Undated actionable states in `et/org-agenda-undated-states' are kept."
       org-log-into-drawer "LOGBOOK"
       org-clock-into-drawer "LOGBOOK"
       org-clock-persist nil
-      org-id-locations-file (expand-file-name "org-id-locations" et/state-directory)
-      org-persist-directory (expand-file-name "org-persist/" et/state-directory)
+      org-id-locations-file (expand-file-name "org-id-locations" et/profile-state-directory)
+      org-persist-directory (expand-file-name "org-persist/" et/profile-state-directory)
       org-refile-targets '((org-agenda-files :maxlevel . 3))
       org-outline-path-complete-in-steps nil
       org-refile-use-outline-path 'file
@@ -283,28 +289,49 @@ Undated actionable states in `et/org-agenda-undated-states' are kept."
   '(("p" "Personal")
     ("pi" "Inbox" entry
      (file+headline (lambda () (et/org-target-file "personal/inbox.org")) "Inbox")
-     "* %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n%i\n%a\n" :empty-lines 1)
+     "* %? :personal:\n:PROPERTIES:\n:CREATED: %U\n:END:\n%i\n%a\n" :empty-lines 1)
     ("pt" "TODO" entry
      (file+headline (lambda () (et/org-target-file "personal/tasks.org")) "Tasks")
-     "* TODO %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n" :empty-lines 1)
+     "* TODO %? :personal:\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n" :empty-lines 1)
     ("ph" "Daily habit" entry
      (file+headline (lambda () (et/org-target-file "personal/tasks.org")) "Habits")
      (function et/habit-template) :empty-lines 1)
     ("w" "Work")
     ("wi" "Inbox" entry
      (file+headline (lambda () (et/org-target-file "work/inbox.org")) "Inbox")
-     "* %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n%i\n%a\n" :empty-lines 1)
+     "* %? :work:\n:PROPERTIES:\n:CREATED: %U\n:END:\n%i\n%a\n" :empty-lines 1)
     ("wt" "TODO" entry
      (file+headline (lambda () (et/org-target-file "work/tasks.org")) "Tasks")
-     "* TODO %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n" :empty-lines 1)
+     "* TODO %? :work:\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n" :empty-lines 1)
+    ("g" "General")
+    ("gi" "Inbox" entry
+     (file+headline (lambda () (et/org-target-file "general/inbox.org")) "Inbox")
+     "* %? :general:\n:PROPERTIES:\n:CREATED: %U\n:END:\n%i\n%a\n" :empty-lines 1)
+    ("gt" "TODO" entry
+     (file+headline (lambda () (et/org-target-file "general/tasks.org")) "Tasks")
+     "* TODO %? :general:\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n" :empty-lines 1)
+    ("gI" "Idea" entry
+     (file+headline (lambda () (et/org-target-file "general/ideas.org")) "Ideas")
+     "* IDEA %? :general:idea:\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n" :empty-lines 1)
     ("j" "Project task" entry (function et/project-task-target)
-     "* TODO %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n" :empty-lines 1))
+     (function et/project-task-template) :empty-lines 1))
   "Built-in capture templates; interactive templates are prepended.")
 
+(defun et/capture-template-visible-p (template)
+  "Return non-nil when TEMPLATE belongs to the active profile."
+  (let ((key (car template)))
+    (cond
+     ((string-prefix-p "p" key) (member "personal" et/profile-domains))
+     ((string-prefix-p "w" key) (member "work" et/profile-domains))
+     ((string-prefix-p "g" key) (member "general" et/profile-domains))
+     (t t))))
+
 (defun et/rebuild-capture-templates ()
-  "Merge custom capture templates ahead of the built-in defaults."
+  "Merge custom capture templates ahead of the profile's defaults."
   (setq org-capture-templates
-        (append et/custom-capture-templates et/default-capture-templates)))
+        (append et/custom-capture-templates
+                (seq-filter #'et/capture-template-visible-p
+                            et/default-capture-templates))))
 
 (defun et/load-capture-templates ()
   "Load and merge templates created with `et/capture-template-add'."
@@ -381,11 +408,13 @@ are prompted for interactively.  TARGET-TYPE is either
 (defun et/org-refresh-agenda (&optional scope)
   "Refresh agenda files for SCOPE, without creating or modifying notes."
   (let* ((scope (or scope et/org-agenda-scope))
-         (domains (if (equal scope "all") et/org-domains
-                    (delete-dups (list scope "general"))))
+         (domains (cond
+                   ((equal scope "all") et/profile-domains)
+                   ((member scope et/profile-domains)
+                    (delete-dups (list scope "general")))
+                   (t (user-error "Domain %s is not available in the %s profile"
+                                  scope et/profile))))
          files)
-    (unless (or (equal scope "all") (member scope et/org-domains))
-      (user-error "Unknown agenda scope: %s" scope))
     (dolist (domain domains)
       (dolist (name '("inbox.org" "tasks.org"))
         (let ((file (expand-file-name (concat domain "/" name) et/notes-directory)))
@@ -407,8 +436,9 @@ are prompted for interactively.  TARGET-TYPE is either
 
 (defun et/org-agenda (scope)
   "Open the daily dashboard for SCOPE."
-  (interactive (list (completing-read "Agenda domain: " (cons "all" et/org-domains)
-                                     nil t nil nil "all")))
+  (interactive (list (completing-read "Agenda domain: "
+                                     (cons "all" et/profile-domains)
+                                     nil t nil nil et/profile)))
   (et/org-refresh-agenda scope)
   (org-agenda nil "d"))
 (add-hook 'org-capture-after-finalize-hook #'et/org-refresh-agenda)

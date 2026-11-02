@@ -3,7 +3,7 @@
 (require 'subr-x)
 
 (defvar et/news-limit 5)
-(defvar et/news-state-file (expand-file-name "news.el" et/state-directory))
+(defvar et/news-state-file (expand-file-name "news.el" et/profile-state-directory))
 (defvar et/news-selected nil)
 (defvar et/news--refresh-timer nil)
 (defvar et/news-map (make-sparse-keymap "news"))
@@ -420,18 +420,24 @@
   (require 'et-ai)
   (unless (and (boundp 'et/gptel-openai) et/gptel-openai)
     (et/gptel-configure))
-  (unless (and et/news-summary-backend
-               (memq et/news-summary-model
-                     (gptel-backend-models et/news-summary-backend)))
-    (setq et/news-summary-backend
-          (gptel-make-openai
-              "OpenAI Security Summary"
-            :host "api.openai.com"
-            :key (lambda () (et/gptel-key "api.openai.com"))
-            :models (cons et/news-summary-model
-                           (delete et/news-summary-model
-                                   (gptel-backend-models et/gptel-openai))))))
-  et/news-summary-backend)
+  (let ((backend (or et/news-summary-backend et/gptel-openai)))
+    (cond
+     ((memq et/news-summary-model (gptel-backend-models backend))
+      (setq et/news-summary-backend backend))
+     ((eq backend et/gptel-openai)
+      (setq et/news-summary-backend
+            (gptel-make-openai
+                "OpenAI Security Summary"
+              :host "api.openai.com"
+              :key (lambda () (et/gptel-key "api.openai.com"))
+              :models (cons et/news-summary-model
+                             (delete et/news-summary-model
+                                     (gptel-backend-models et/gptel-openai))))))
+     (t
+      (user-error "News summary model %s is not available on %s"
+                  et/news-summary-model
+                  (gptel-backend-name backend))))
+    et/news-summary-backend))
 
 (defun et/news--request-summary (context text complete backend model buffer)
   "Request an article summary for CONTEXT and TEXT into BUFFER.
@@ -463,6 +469,18 @@ BACKEND and MODEL select the gptel backend and model."
   (let ((gptel-backend (or et/news-summary-backend gptel-backend))
         (gptel-model (or et/news-summary-model gptel-model)))
     (et/gptel-select-model)))
+
+(defun et/change-news-summary-model ()
+  "Choose the news summary model for this Emacs session.
+The startup default remains `gpt-6-luna'; this does not persist."
+  (interactive)
+  (let ((choice (et/news--select-model)))
+    (when choice
+      (setq et/news-summary-model (cdr choice)
+            et/news-summary-backend (car choice))
+      (message "News summary model for this session: %s / %s"
+               (gptel-backend-name (car choice))
+               (gptel--model-name (cdr choice))))))
 
 (defvar et/news-summary-mode-map
   (let ((map (make-sparse-keymap)))
@@ -665,7 +683,9 @@ BACKEND and MODEL select the gptel backend and model."
                 (insert (format ":ID: %s\n" id))
                 (insert ":END:\n")
                 (insert (format "#+title: %s\n" title))
-                (insert (format "#+filetags: :%s:\n\n" tag))
+                (insert (format "#+filetags: :%s:%s:\n\n"
+                                tag
+                                (et/profile-tag et/news-related-node-domain)))
                 (insert "* Related articles\n")
                 (org-mode)
                 (save-buffer)
@@ -758,7 +778,8 @@ BACKEND and MODEL select the gptel backend and model."
          (domain (or (plist-get context :domain) (et/current-domain)))
          (tags (delete-dups
                 (append '("news" "reference")
-                        (plist-get parsed :tags))))
+                        (plist-get parsed :tags)
+                        (list (et/profile-tag domain)))))
          (ecosystem (plist-get parsed :ecosystem))
          (description (plist-get parsed :description))
          (body (plist-get parsed :body))
@@ -919,8 +940,9 @@ run with the new buffer so a later AI pass can fill it and add tags."
       (insert (format ":ID: %s\n" (org-id-new)))
       (insert (format ":ROAM_REFS: %s\n" link))
       (insert ":END:\n")
-      (insert (format "#+title: %s\n#+filetags: :news:reference:\n\n"
-                      title))
+      (insert (format "#+title: %s\n#+filetags: :news:reference:%s:\n\n"
+                      title
+                      (et/profile-tag domain)))
       (insert "* Summary\nAI summary placeholder; run the AI workflow in a later iteration.\n\n")
       (insert "* Article\n")
       (insert (format "- Feed: %s\n- Date: %s\n- Link: %s\n" feed date link))
@@ -995,6 +1017,7 @@ run with the new buffer so a later AI pass can fill it and add tags."
 (define-key et/news-map (kbd "r") #'et/news-summarize-at-point)
 (define-key et/news-map (kbd "R") #'et/news-summarize-at-point)
 (define-key et/news-map (kbd "S") #'et/news-summarize-at-point)
+(define-key et/news-map (kbd "C") #'et/change-news-summary-model)
 (et/register-package-leader 'elfeed-search-mode et/news-map)
 (et/news-load-selection)
 (provide 'et-news)
