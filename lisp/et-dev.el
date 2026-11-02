@@ -171,11 +171,25 @@
 
 ;; java-debug is loaded as a jdtls bundle, not as a separate adapter.  Dape
 ;; asks the running Eglot/jdtls for vscode.java.startDebugSession.
+(defvar et/dape-java-debug-bundle
+  (seq-find #'file-exists-p
+            (mapcar #'expand-file-name
+                    '("/usr/share/java-debug/com.microsoft.java.debug.plugin.jar"
+                      "/usr/local/share/java-debug/com.microsoft.java.debug.plugin.jar"
+                      "~/.local/share/java-debug/com.microsoft.java.debug.plugin.jar")))
+  "Path to java-debug's jdtls bundle, or nil when it is not installed.")
+
+(defun et/dape-java-eglot-contact (&optional _interactive _project)
+  "Return the jdtls contact, adding java-debug when it is installed."
+  (append
+   (list "jdtls")
+   (when et/dape-java-debug-bundle
+     (list :initializationOptions
+           (list :bundles (vector et/dape-java-debug-bundle))))))
+
 (add-to-list 'eglot-server-programs
-             '((java-mode java-ts-mode)
-               "jdtls"
-               :initializationOptions
-               (:bundles ["/usr/share/java-debug/com.microsoft.java.debug.plugin.jar"])))
+             (cons '(java-mode java-ts-mode)
+                   #'et/dape-java-eglot-contact))
 
 ;; Prefer basedpyright for Python; fall back to pyright, then pylsp.
 (defun et/python-lsp-contact (&rest _)
@@ -626,11 +640,26 @@ project, then `python' from `exec-path'."
       (user-error "Python debug adapter debugpy is not installed for %s; run `%s -m pip install debugpy' or select a virtualenv that has it with SPC m v"
                   python python))))
 
+(defun et/dape-java-preflight ()
+  "Fail clearly when Java debugging cannot work."
+  (unless (executable-find "jdtls")
+    (user-error "Install jdtls and java-debug, then restart Eglot"))
+  (unless (and (fboundp 'eglot-current-server) (eglot-current-server))
+    (user-error "Start Eglot for this Java buffer first (SPC m l)"))
+  (unless et/dape-java-debug-bundle
+    (user-error "java-debug is not installed; install the java-debug package or set et/dape-java-debug-bundle to com.microsoft.java.debug.plugin.jar"))
+  (unless (seq-contains-p (eglot--server-capable :executeCommandProvider :commands)
+                          "vscode.java.resolveClasspath")
+    (user-error "Restart Eglot so jdtls loads %s, then retry"
+                et/dape-java-debug-bundle)))
+
 (defun et/dape-start ()
-  "Start Dape, checking Python's debug adapter first."
+  "Start Dape after checking the language-specific prerequisites."
   (interactive)
   (when (derived-mode-p 'python-mode 'python-ts-mode)
     (et/dape-python-preflight))
+  (when (derived-mode-p 'java-mode 'java-ts-mode)
+    (et/dape-java-preflight))
   (call-interactively #'dape))
 
 (defun et/dape-toggle-breakpoint-enabled ()
