@@ -93,6 +93,7 @@ Each entry is a recipe accepted by `package-vc-install'.")
                    (format "Missing packages: %s. Run M-x et/install-packages, then restart."
                            missing)
                    :warning))
+(setq ring-bell-function #'ignore)
 
 (use-package meeting-mode
   :if (locate-library "meeting-mode")

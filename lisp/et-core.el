@@ -1,4 +1,5 @@
 ;;; et-core.el --- Generated from config.org -*- lexical-binding: t; -*-
+(require 'cl-lib)
 (require 'seq)
 (require 'which-key)
 (require 'savehist)
@@ -302,7 +303,7 @@
   (define-key et/buffer-map (kbd "b") #'consult-buffer)
   (define-key et/leader-map (kbd "/") #'consult-ripgrep)
   (define-key et/leader-map (kbd "s") #'consult-line)
-  (define-key et/theme-map (kbd "t") #'consult-theme)
+  (define-key et/theme-map (kbd "t") #'et/consult-theme)
   (consult-customize consult-theme :preview-key 'any))
 
 (use-package vertico-posframe
@@ -314,12 +315,187 @@
   (vertico-posframe-mode 1))
 
 (defvar et/default-theme 'guava-themes-ceiba
-  "Trusted theme loaded at startup; change in settings.el to override per machine.")
+  "Trusted theme loaded at startup when nothing was saved interactively.
+Change it in settings.el to override the machine default.")
+
+(defconst et/theme-state-file
+  (expand-file-name "themes.el" et/state-directory)
+  "File saving the selected theme and the theme favorites.")
+
+(defvar et/theme-favorites nil
+  "Theme symbols listed first by `et/consult-theme'.")
+
+(defvar et/theme-selected nil
+  "Theme symbol enabled when the last session ended, or nil for none.")
+
+(defvar et/theme--picker-candidates nil
+  "Candidate list of the theme picker currently reading input.")
+
+(defvar et/theme-picker-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-f") #'et/theme-toggle-favorite)
+    map)
+  "Extra keys active while `et/consult-theme' reads a theme.")
+
+(defun et/theme--read-state ()
+  "Return the saved theme state plist, or nil when there is none."
+  (when (file-readable-p et/theme-state-file)
+    (with-temp-buffer
+      (insert-file-contents et/theme-state-file)
+      (goto-char (point-min))
+      (let ((read-eval nil))
+        (ignore-errors (read (current-buffer)))))))
+
+(defun et/theme--save-state ()
+  "Save `et/theme-selected' and `et/theme-favorites'."
+  (with-temp-file et/theme-state-file
+    (insert ";;; Theme state written by Etmacs; safe to delete.\n")
+    (prin1 (list :selected et/theme-selected
+                 :favorites et/theme-favorites)
+           (current-buffer))
+    (insert "\n")))
+
+(defun et/theme--name< (a b)
+  "Return non-nil when symbol A sorts before symbol B."
+  (string< (symbol-name a) (symbol-name b)))
+
+(defun et/theme--favorite-p (theme)
+  "Return non-nil when THEME is a favorite."
+  (memq theme et/theme-favorites))
+
+(defun et/theme--sort-candidates (candidates)
+  "Return CANDIDATES with favorites first, alphabetical within each group."
+  (sort (copy-sequence candidates)
+        (lambda (a b)
+          (let ((favorite-a (et/theme--favorite-p (intern a)))
+                (favorite-b (et/theme--favorite-p (intern b))))
+            (cond (favorite-a (or (not favorite-b) (string< a b)))
+                  (favorite-b nil)
+                  (t (string< a b)))))))
+
+(defun et/theme--candidates ()
+  "Return installed theme names, favorites first."
+  (let* ((regexp (consult--regexp-filter
+                  (mapcar (lambda (x) (if (stringp x) x (format "\\`%s\\'" x)))
+                          consult-themes)))
+         (themes
+          (cl-loop for dir in (custom-theme--load-path)
+                   for group = (file-name-nondirectory (directory-file-name dir))
+                   if (file-directory-p dir) nconc
+                   (cl-loop for file in (directory-files dir nil "-theme\\.el\\'")
+                            for name = (string-remove-suffix "-theme.el" file)
+                            for sym = (intern name)
+                            if (and (string-match-p regexp name)
+                                    (custom-theme-name-valid-p sym))
+                            collect (propertize name 'consult--group group)))))
+    (et/theme--sort-candidates
+     (delete-consecutive-dups (sort (cons "default" themes) #'string<)))))
+
+(defun et/theme--annotate (candidate)
+  "Return a star annotation when CANDIDATE is a favorite."
+  (when (et/theme--favorite-p (intern candidate))
+    (propertize " ★" 'face 'warning)))
+
+(defun et/theme--replace-candidates (target ordered)
+  "Overwrite TARGET in place with ORDERED, which must be the same length."
+  (while target
+    (setcar target (car ordered))
+    (setq target (cdr target)
+          ordered (cdr ordered))))
+
+(defun et/theme--current-candidate ()
+  "Return the theme name currently selected in the minibuffer."
+  (substring-no-properties
+   (or (run-hook-with-args-until-success 'consult--completion-candidate-hook)
+       (user-error "No theme selected"))))
+
+(defun et/theme--refresh-picker (theme)
+  "Reorder the active picker and keep its cursor on THEME."
+  (when (listp et/theme--picker-candidates)
+    (et/theme--replace-candidates
+     et/theme--picker-candidates
+     (et/theme--sort-candidates et/theme--picker-candidates))
+    (run-hooks 'consult--completion-refresh-hook)
+    (when (and (bound-and-true-p vertico--input)
+               (boundp 'vertico--candidates))
+      (let ((name (symbol-name theme)))
+        (when-let* ((index (seq-position
+                            vertico--candidates name
+                            (lambda (candidate target)
+                              (equal (substring-no-properties candidate)
+                                     target)))))
+          (setq vertico--index index)
+          (vertico--exhibit))))))
+
+(defun et/theme-toggle-favorite ()
+  "Toggle the current theme's favorite status in the theme picker."
+  (interactive)
+  (let* ((theme (intern (et/theme--current-candidate)))
+         (favorite (not (et/theme--favorite-p theme))))
+    (if favorite
+        (setq et/theme-favorites
+              (sort (cons theme (delq theme et/theme-favorites))
+                    #'et/theme--name<))
+      (setq et/theme-favorites (delq theme et/theme-favorites)))
+    (et/theme--save-state)
+    (et/theme--refresh-picker theme)
+    (message "%s %s" (if favorite "Pinned" "Unpinned") theme)))
+
+(defun et/consult-theme (theme)
+  "Choose a theme, previewing it and remembering the choice.
+This extends `consult-theme' with favorites: C-f toggles the current
+theme, favorites are listed first and marked with a star, and both the
+selection and the favorites survive a restart."
+  (interactive
+   (list
+    (let* ((candidates (et/theme--candidates))
+           (et/theme--picker-candidates candidates)
+           (saved-theme (car custom-enabled-themes)))
+      (consult--read
+       candidates
+       :prompt "Theme: "
+       :require-match t
+       :category 'theme
+       :keymap et/theme-picker-map
+       :preview-key 'any
+       :history 'consult--theme-history
+       :group #'consult--group-prop
+       :annotate #'et/theme--annotate
+       :lookup (lambda (selected &rest _)
+                 (or (and selected (intern-soft (car (member selected candidates))))
+                     saved-theme))
+       :state (lambda (action theme)
+                (with-selected-window (or (active-minibuffer-window)
+                                          (selected-window))
+                  (pcase action
+                    ('return (consult-theme (or theme saved-theme)))
+                    ((and 'preview (guard theme)) (consult-theme theme)))))
+       :default (symbol-name (or saved-theme 'default))))))
+  (when (called-interactively-p 'interactive)
+    (setq et/theme-selected (car custom-enabled-themes))
+    (et/theme--save-state)))
+
 (when (locate-library "guava-themes")
   (require 'guava-themes))
-(when (memq et/default-theme (custom-available-themes))
-  (mapc #'disable-theme custom-enabled-themes)
-  (load-theme et/default-theme t))
+
+(defun et/theme--restore ()
+  "Enable the saved theme, falling back to `et/default-theme'.
+Choosing \"default\" in the picker is saved as no theme, which is
+restored as no theme rather than as a fallback."
+  (let* ((state (et/theme--read-state))
+         (saved (and state (plist-get state :selected)))
+         (theme (cond ((null state) et/default-theme)
+                      ((not (plist-member state :selected)) et/default-theme)
+                      ((null saved) nil)
+                      ((memq saved (custom-available-themes)) saved)
+                      (t et/default-theme))))
+    (setq et/theme-favorites (and state (plist-get state :favorites))
+          et/theme-selected theme)
+    (when theme
+      (mapc #'disable-theme custom-enabled-themes)
+      (load-theme theme t))))
+
+(et/theme--restore)
 
 ;; C-j/C-k navigate completion menus and transient menus.  They are not bound
 ;; globally, so ordinary editing keeps its normal C-j/C-k behavior.
