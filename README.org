@@ -648,13 +648,84 @@ and =SPC m D q= quits. A project's =.dir-locals.el= can seed the adapter with
 =dape-command=. Launching a debugger never happens just by opening or saving a
 file.
 
-A breakpoint can run code when hit. With point on an existing breakpoint,
-=SPC m D a= sets a debuggee expression (evaluated in the stopped frame's
-language), an Emacs Lisp expression, a shell command, or a script file.
-Scripts are run with an interpreter inferred from the extension (Python,
-JavaScript/TypeScript, shell, Emacs Lisp, Ruby, or Java) from the project root.
-=SPC m D A= clears the action. Actions last for the current session and fire
-from =dape-stopped-hook= only for a breakpoint stop at that file and line.
+For JavaScript/TypeScript, =et/dape-js-debug-directory= defaults to
+=/usr/lib/js-debug= and is used when =dapDebugServer.js= exists there; this
+replaces Dape's own =<dape-adapter-dir>/js-debug/src/dapDebugServer.js= path.
+Set it to nil to fall back to Dape's adapter directory. TSX buffers in
+=tsx-ts-mode= or =web-mode= are also offered the tsx and Chrome js-debug
+configurations.
+
+Node programs run in a real terminal: js-debug's `:console` is
+`integratedTerminal`, and `et/dape-use-vterm` sends DAP `runInTerminal`
+requests to a vterm buffer (`*dape-vterm*`) instead of Dape's shell buffer.
+Set `et/dape-js-console` to `"internalConsole"` to put program output back in
+the Dape REPL, or `et/dape-use-vterm` to nil to keep Dape's shell buffer.
+
+Python debugging resolves debugpy through `et/dape-python-executable`: the
+buffer's selected virtualenv (or `.venv` next to the file or at the project
+root) first, then `python` on `exec-path`. The `SPC m D s` preflight uses the
+same executable, so a virtualenv with debugpy starts without changing global
+PATH. Python output stays in the Dape REPL because `et/dape-python-console` is
+`"internalConsole"`; set it to `"integratedTerminal"` to use the vterm terminal
+like JavaScript.
+
+Function keys follow IDA/WinDbg/OllyDbg conventions and apply to every
+language. Breakpoint keys work without a session; the rest appear while Dape
+reports a live session, so they do not shadow other uses of F5 or F7 when you
+are not debugging.
+
+| Key                   | Action                      | Session needed |
+|-----------------------+-----------------------------+----------------|
+| F2                    | Toggle breakpoint           | no             |
+| Shift+F2              | Conditional breakpoint      | no             |
+| Ctrl+F2               | Log breakpoint              | no             |
+| F3                    | Breakpoint + code action    | no             |
+| Shift+F3              | Breakpoint + cond. action   | no             |
+| Ctrl+F3               | Toggle watch at point       | yes            |
+| Ctrl+Shift+F3         | Watch an expression         | yes            |
+| F4                    | Run to point                | yes            |
+| F5 / F9               | Continue                    | yes            |
+| F6 / F12              | Pause                       | yes            |
+| F7 / F11              | Step into                   | yes            |
+| F8 / F10              | Step over                   | yes            |
+| Shift+F11, Ctrl+F7    | Step out                    | yes            |
+| Shift+F5              | Stop session                | yes            |
+| Ctrl+Shift+F5         | Restart                     | yes            |
+
+The full map is also bound to `SPC D` in every buffer, so `SPC D s` starts,
+`SPC D r` restarts, and `SPC D q` quits without entering the programming-mode
+leader (`SPC d` is the dashboard). Dape's default `C-x C-a` prefix is unbound;
+the function keys and `SPC D` are the only debugger bindings. Under both
+`SPC m D` and `SPC D`: `s` start,
+`b` breakpoint, `e`/`B` enable/remove all, `l`/`E`/`h`/`F`
+log/conditional/hit/function breakpoints, `a`/`C` action and conditional action,
+`c` continue, `n` over, `i` in, `o` out, `p` pause, `u` run to point,
+`r` restart, `R` REPL, `f` restart frame, `w` watch at point, `W` watch an
+expression, `v` watch buffer, `x` evaluate, `I` info and watch buffers, `k` kill
+the session, `d` disconnect, `t`/`T`/`S` select thread/session/stack, `<`/`>`
+move down/up the stack, `q` quit, and `?` for a help buffer with examples.
+In the REPL, RET submits in every Evil state (both GUI `<return>` and terminal
+`C-m`), `S-RET`/`M-RET` accumulate lines, opening the REPL starts in insert
+state, arrows walk history, and history persists in `.local/dape-repl-history`.
+
+Watches take expressions, not only variables: `values.length`,
+`values.filter(v => v % 2 === 0)`, or
+`this.state.items.filter(item => item.active)`. They refresh on every stop.
+
+For code that runs only under a condition, `SPC m D C` reads a debuggee
+condition such as `value > 10` and then an action — debuggee expression,
+JavaScript statements, Elisp, shell command, or script file. The JavaScript
+action runs statements in the stopped frame's scope and brings `console.log`
+output back to the REPL. `SPC m D a` sets an action that runs on every hit and
+`SPC m D A` clears it; actions last for the session and fire only when the stop
+is a breakpoint at that file and line. `Shift+F2` makes a breakpoint
+conditional before the debugger stops, and `Ctrl+F2` makes a log breakpoint
+that prints interpolated text such as `value={value} index={index}` without
+stopping; braces execute expressions, so log points show values rather than
+echoing code. In the REPL, RET submits in every Evil state (both GUI `<return>`
+and terminal `C-m`), `S-RET`/`M-RET` accumulate lines, opening the REPL starts in
+insert state, arrows walk history, and history persists in
+`.local/dape-repl-history`.
 
 Dape uses adapters installed separately: =debugpy= for Python, =js-debug= for
 JavaScript/TypeScript, =jdtls= with the java-debug plugin for Java, and =gdb=
@@ -683,8 +754,10 @@ python -m pip install basedpyright ruff pytest debugpy
 npm install --save-dev vitest prettier   # or: jest
 # C/C++ tooling (distribution packages vary):
 # clangd, gdb >= 14.1 or lldb-dap, clang-format
-# Node debug adapter for Dape: unpack Microsoft's js-debug release where Dape
-# expects it. Java debugging requires jdtls plus Microsoft's java-debug plugin.
+# Node debug adapter for Dape: install Microsoft's js-debug so that
+# /usr/lib/js-debug/dapDebugServer.js exists, or set
+# et/dape-js-debug-directory. Java debugging requires jdtls plus Microsoft's
+# java-debug plugin.
 #+end_src
 
 =basedpyright-langserver= is the preferred Python server; =pytest=, =debugpy=,
