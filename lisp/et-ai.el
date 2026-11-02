@@ -74,7 +74,7 @@ auth-source entry exists."
 ;;; Model favorites
 
 (defvar et/model-favorites-file
-  (expand-file-name "model-favorites.el" et/state-directory)
+  (expand-file-name "model-favorites.el" et/profile-state-directory)
   "Persistent favorite models for OpenCode and gptel.")
 
 (defvar et/model-favorites nil
@@ -217,7 +217,7 @@ Return the selected model string, or nil when cancelled."
 ;;; Per-project AI models
 
 (defvar et/project-models-file
-  (expand-file-name "project-models.el" et/state-directory)
+  (expand-file-name "project-models.el" et/profile-state-directory)
   "Persistent per-project OpenCode and gptel model choices.")
 
 (defvar et/project-models nil
@@ -275,11 +275,13 @@ Return the selected model string, or nil when cancelled."
     (let ((default-directory
            (file-name-as-directory (expand-file-name root))))
       (condition-case nil
-          (delete-dups
-           (seq-filter
-            (lambda (line)
-              (string-match-p "\\`[^[:space:]/]+/[^[:space:]]+\\'" line))
-            (process-lines "opencode" "models")))
+          (seq-remove
+           #'et/profile-model-hidden-p
+           (delete-dups
+            (seq-filter
+             (lambda (line)
+               (string-match-p "\\`[^[:space:]/]+/[^[:space:]]+\\'" line))
+             (process-lines "opencode" "models"))))
         (error nil)))))
 
 (defun et/opencode--display-provider (display)
@@ -289,22 +291,26 @@ Return the selected model string, or nil when cancelled."
     "Models"))
 
 (defun et/project--opencode-config-model (root)
-  "Return ROOT's existing opencode.json model, when readable."
+  "Return ROOT's existing opencode.json model, when readable and allowed."
   (let ((file (expand-file-name "opencode.json"
                                (et/project--canonical-root root))))
     (when (file-readable-p file)
-      (condition-case nil
-          (with-temp-buffer
-            (insert-file-contents file)
-            (goto-char (point-min))
-            (alist-get 'model (json-parse-buffer :object-type 'alist)))
-        (error nil)))))
+      (let ((model
+             (condition-case nil
+                 (with-temp-buffer
+                   (insert-file-contents file)
+                   (goto-char (point-min))
+                   (alist-get 'model (json-parse-buffer :object-type 'alist)))
+               (error nil))))
+        (unless (et/profile-model-hidden-p model) model)))))
 
 (defun et/opencode--read-project-model (root)
   "Read ROOT's OpenCode model from the CLI catalog."
   (let* ((models (et/opencode--cli-models root))
-         (configured (or (et/project-model-get root :opencode)
-                         (et/project--opencode-config-model root)))
+         (stored (et/project-model-get root :opencode))
+         (configured (or (and (not (et/profile-model-hidden-p stored)) stored)
+                         (et/project--opencode-config-model root)
+                         et/profile-opencode-model))
          (default (if (member configured models) configured (car models))))
     (unless models
       (user-error "OpenCode models are not available"))
@@ -375,7 +381,9 @@ Return the selected model string, or nil when cancelled."
               (model (cdr-safe stored)))
     (let ((backend (et/gptel-backend-by-name name)))
       (when (and backend model
-                 (memq model (gptel-backend-models backend)))
+                 (memq model (gptel-backend-models backend))
+                 (not (et/profile-model-hidden-p
+                       (concat name ":" (gptel--model-name model)))))
         (cons backend model)))))
 
 (defun et/project-apply-gptel-model (&optional root)
@@ -440,14 +448,27 @@ Return the selected model string, or nil when cancelled."
     (when (and root
                (not (file-remote-p root))
                (not (et/project-models-configured-p root)))
-      (unless (et/project-model-get root :opencode)
-        (if (executable-find "opencode")
-            (condition-case err
-                (et/project-configure-opencode-model root)
-              (quit nil)
-              (user-error
-               (message "%s" (error-message-string err))))
-          (message "OpenCode CLI not found; skipping project OpenCode model")))
+      (let ((stored (et/project-model-get root :opencode)))
+        (when (et/profile-model-hidden-p stored)
+          (setq stored nil)
+          (et/project-model-set root :opencode nil)
+          (et/project-models-save))
+        (unless stored
+          (if (executable-find "opencode")
+              (let ((profile-model et/profile-opencode-model))
+                (if (and profile-model
+                         (member profile-model (et/opencode--cli-models root)))
+                    (progn
+                      (et/project-model-set root :opencode profile-model)
+                      (et/project-models-save)
+                      (message "OpenCode project model: %s (profile default)"
+                               profile-model))
+                  (condition-case err
+                      (et/project-configure-opencode-model root)
+                    (quit nil)
+                    (user-error
+                     (message "%s" (error-message-string err))))))
+            (message "OpenCode CLI not found; skipping project OpenCode model"))))
       (unless (et/project-model-get root :gptel)
         (if (locate-library "gptel")
             (condition-case err
@@ -499,11 +520,11 @@ Return the selected model string, or nil when cancelled."
 ;;; Saved OpenCode sessions
 
 (defvar et/opencode-sessions-directory
-  (expand-file-name "opencode-sessions/" et/state-directory)
+  (expand-file-name "opencode-sessions/" et/profile-state-directory)
   "Directory holding exported OpenCode session context.")
 
 (defvar et/opencode-sessions-file
-  (expand-file-name "opencode-sessions.el" et/state-directory)
+  (expand-file-name "opencode-sessions.el" et/profile-state-directory)
   "Persistent OpenCode session bookmarks.")
 
 (defvar et/opencode-sessions nil
@@ -692,7 +713,7 @@ When PROMPT is non-nil, offer saved project roots or read a directory."
                (plist-get record :title)))))
 
 (defvar et/gptel-state-file
-  (expand-file-name "gptel.el" et/state-directory)
+  (expand-file-name "gptel.el" et/profile-state-directory)
   "Persistent gptel default backend and model.")
 
 (defun et/gptel-select-model ()
@@ -703,9 +724,10 @@ When PROMPT is non-nil, offer saved project roots or read a directory."
       (let ((name (car entry))
             (backend (cdr entry)))
         (dolist (model (gptel-backend-models backend))
-          (push (list (concat name ":" (gptel--model-name model))
-                      backend model)
-                models-alist))))
+          (let ((display (concat name ":" (gptel--model-name model))))
+            (unless (et/profile-model-hidden-p display)
+              (push (list display backend model)
+                    models-alist))))))
     (setq models-alist (nreverse models-alist)
           choices (mapcar #'car models-alist))
     (let* ((group-function
@@ -752,7 +774,9 @@ When PROMPT is non-nil, offer saved project roots or read a directory."
                  (backend (or (cdr (assoc name gptel--known-backends))
                               et/gptel-openai)))
             (when (and backend model
-                       (memq model (gptel-backend-models backend)))
+                       (memq model (gptel-backend-models backend))
+                       (not (et/profile-model-hidden-p
+                             (concat name ":" (gptel--model-name model)))))
               (setq gptel-backend backend
                     gptel-model model))))
       (error nil))))
@@ -915,9 +939,13 @@ Within each group, recently used and session-used models stay first."
 
 (defun et/opencode--sorted-candidates (orig &optional connection)
   "Return ORIG's model candidates sorted with paid models first.
-CONNECTION defaults to the current session buffer's connection."
+CONNECTION defaults to the current session buffer's connection. Hidden
+providers for the active profile are removed."
   (et/opencode--sort-model-candidates
-   (funcall orig connection)
+   (seq-remove
+    (lambda (candidate)
+      (et/profile-model-hidden-p (plist-get candidate :display)))
+    (funcall orig connection))
    (or connection opencode-session--connection)))
 
 (defun et/opencode--read-model (connection &optional provider-id)
@@ -988,7 +1016,7 @@ Returns the selected candidate plist, or nil when the prompt is cancelled."
   "Return CONNECTION's saved project model candidate, when available."
   (let* ((root (et/opencode--project-root connection))
          (display (and root (et/project-model-get root :opencode))))
-    (when display
+    (when (and display (not (et/profile-model-hidden-p display)))
       (seq-find
        (lambda (candidate)
          (and (plist-get candidate :connected-p)

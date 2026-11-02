@@ -60,6 +60,8 @@ on arbitrary Org files.
 Optional =.local/settings.el= loads before modules. Set =et/notes-directory=,
 =et/roam-directory=, =et/default-theme=, =et/bibliography-files=, or
 =et/org-extra-agenda-files= there; not every core setting is an override API.
+The active profile is stored in =.local/profile= and profile state in
+=.local/profiles/=; change it with =SPC C s= rather than editing those files.
 Credentials belong in =auth-source=, normally =~/.authinfo.gpg=, not this repo.
 Customize writes to =.local/custom.el= but does not automatically load it;
 promote intentional shared settings into the literate source.
@@ -82,6 +84,7 @@ Custom functions *and variables* use =et/=. File and feature names retain =et-=
 | SPC w u / SPC w r           | Winner layout undo / redo                 |
 | SPC s / SPC /               | Buffer search / project-directory ripgrep |
 | SPC t t                     | Theme picker with live preview            |
+| SPC C s / SPC C n / SPC C P | Switch profile / news model / show profile|
 | SPC P                       | Toggle meeting mode (focus highlighting)  |
 | SPC x / SPC X               | Open scratch / general Org capture menu   |
 | SPC o t / SPC o T           | Toggle vterm popup / open vterm here      |
@@ -89,6 +92,7 @@ Custom functions *and variables* use =et/=. File and feature names retain =et-=
 | SPC N o / u / s             | Elfeed open / update / choose news topics |
 | SPC N / / f / d             | Search / narrow to feed / narrow to dates |
 | SPC N m / M                 | Mark read / unread                        |
+| SPC N C                     | Change the news summary model (session)   |
 | S (dashboard) / SPC N r/R/S | AI summary for article at point           |
 | SPC T i / s                 | Install / report tree-sitter grammars     |
 | RET (Evil normal)           | Follow button, Org link, URL, or id link  |
@@ -101,8 +105,8 @@ ordinary Space inserts spaces in insert state. =C-c SPC= is the alternative
 leader. =SPC ?= shows Which Key for the current mappings, and =SPC m= shows the
 package/mode menu. Evil Collection supplies j/k/h/l navigation in package
 buffers. Which Key groups are labelled files, buffers, windows, projects, notes,
-git, help, themes, workspaces, jump, edit, AI, open, mail, news, tree-sitter
-and mode commands—not just "prefix". =C--= and =C-+= (also =C-==) adjust the global font
+git, help, themes, workspaces, jump, edit, AI, open, mail, news, tree-sitter,
+profile and mode commands—not just "prefix". =C--= and =C-+= (also =C-==) adjust the global font
 size in every buffer and frame; =M--= remains negative-argument.
 
 Package menus available at =SPC m=:
@@ -135,11 +139,45 @@ be previewed. The selection and the favorites are saved in =.local/themes.el=
 and restored on the next start; =et/default-theme= is used when nothing has
 been saved yet.
 
+* Profiles
+
+Etmacs starts in =personal=, =work=, or =general=. The selection is saved in
+=.local/profile= (mode 0600). On a fresh instance, interactive startup asks for a
+profile; batch startup falls back to =general=. Use =SPC C s= or
+=M-x et/switch-profile= to choose another profile and restart Emacs. =SPC C P=
+reports the active profile.
+
+Profiles reuse the existing note domains. =personal= includes the personal and
+general domains, =work= includes work and general, and =general= includes only
+the general domain. Capture, agenda, roam find/insert, the dashboard, and the
+current workspace default follow those domains. Directly opening a note in
+another domain still works, but its file domain wins for that buffer.
+
+Profile-local state lives under =.local/profiles/<profile>=: Projectile
+projects, Perspective layouts, Treemacs state, the roam index, project models,
+OpenCode bookmarks and exports, model favorites, gptel defaults, org IDs, recent
+files, history, and bookmarks. Packages, =.local/settings.el=, =.local/custom.el=,
+and backup/auto-save files remain shared. On a work machine, the fresh profile
+state contains no personal OpenCode bookmarks or exported contexts.
+
+OpenCode defaults are profile-specific: =work= uses =openai/gpt-6-sol= and hides
+DeepSeek models from selectors; =personal= uses
+=deepseek/deepseek-flash=; =general= uses =openai/gpt-6-luna=. A project can
+still override its OpenCode model with =SPC a l= or =SPC p m=. News summaries
+always start on =gpt-6-luna=; =SPC C n= or =M-x et/change-news-summary-model=
+changes that model for the current Emacs session only.
+
+Capture templates are tagged with their profile (for example =:work:= or
+=:general:=). Roam notes add the domain tag to their existing type tag, so a
+work topic is =:topic:work:=. Put cross-cutting notes in =general=; they may
+carry both =:work:= and =:personal:= tags. Tags are organizational metadata, not
+a confidentiality boundary.
+
 * Dashboard and AI
 
 The dashboard opens on startup (=initial-buffer-choice=) and remains available at
-=SPC d=. It shows Projects, Recent files, up to five Personal and five Work
-tasks, Daily journal, and five cached news articles per site. Tasks are sorted
+=SPC d=. It shows Projects, Recent files, up to five tasks per visible profile
+domain, Daily journal, and five cached news articles per site. Tasks are sorted
 by state and explicit priority, then by deadline/schedule, with undated tasks
 last; overflow is reported as =+N more=. =g= refreshes, =q= quits, =RET=
 activates a button or link, and =TAB= collapses or expands the article list for
@@ -156,28 +194,32 @@ normal API host and auth-source user =emacs=; keys are cached for the session.
 Only when no matching entry exists does Emacs prompt for another machine and
 user. The global default model is =gpt-6-luna= on OpenAI. =SPC a w= rewrites the
 active region with a model you choose: use it for that rewrite only, or set it
-as the persistent default. The default is stored in =.local/gptel.el= and
-reloaded at startup. Reasoning text is hidden by default because reasoning
-tokens are billed as output.
+as the persistent default. The default is stored in
+=.local/profiles/<profile>/gptel.el= and reloaded at startup. Reasoning text is
+hidden by default because reasoning tokens are billed as output.
 
-The first AI command in a project asks for both an OpenCode model and a gptel
-model. Choices are saved in =.local/project-models.el= (mode 0600) by canonical
-project root; the OpenCode choice is also written to the project's root
-=opencode.json= =model= key while preserving other settings. Cancelling a prompt
-leaves that half unset so the next AI use asks again. Project buffers use the
-saved gptel model. =SPC a l= changes only the OpenCode project model, and
+The first AI command in a project seeds the OpenCode model from the active
+profile when it is available; otherwise it asks. The gptel project model is
+still chosen once. Choices are saved in
+=.local/profiles/<profile>/project-models.el= (mode 0600) by canonical project
+root; an explicit OpenCode choice is also written to the project's root
+=opencode.json= =model= key while preserving other settings. Cancelling a
+prompt leaves that half unset so the next AI use asks again. Project buffers use
+the saved gptel model. =SPC a l= changes only the OpenCode project model, and
 =SPC p m= reconfigures both.
 
 Both model selectors support favorites. Press =C-f= on the highlighted model to
-add or remove it. Favorites are stored in =.local/model-favorites.el= (mode
-0600) and appear first under a =★ Favorites= group heading, which Vertico
+add or remove it. Favorites are stored in
+=.local/profiles/<profile>/model-favorites.el= (mode 0600) and appear first
+under a =★ Favorites= group heading, which Vertico
 renders as a separator above all other models. =C-f= is bound only during these
 selectors.
 
 OpenCode sessions can be bookmarked per project. =SPC S s= (or =SPC m S= in a
-session buffer) saves the current session to =.local/opencode-sessions.el= and
-exports its transcript with =opencode session export= to
-=.local/opencode-sessions/<id>.json= (mode 0600). =SPC S l= selects a saved
+session buffer) saves the current session to
+=.local/profiles/<profile>/opencode-sessions.el= and exports its transcript with
+=opencode session export= to
+=.local/profiles/<profile>/opencode-sessions/<id>.json= (mode 0600). =SPC S l= selects a saved
 session for the current project and reopens it after restart; outside a project
 it prompts for one of the saved project roots. =SPC S o= opens the live
 project-session picker, and =SPC S d= removes a bookmark while keeping the
@@ -194,11 +236,12 @@ starts a session in the current project, =SPC a O= reopens an existing one,
 the lines around point. Sessions use the saved project model and prompt for a
 replacement if it is no longer available. Session buffers use the client's own
 =C-c C-c= (send), =C-c C-l= (model) and =C-c C-a= (agent) bindings; with Magit
-loaded, =C-c C-d= shows the session's worktree diffs. Project-level
-=opencode.json= sets this branch's OpenCode default to
-=deepseek/deepseek-flash=; this does not change gptel's =gpt-6-luna= summary
-model, and article summaries keep using that model regardless of project
-choices.
+loaded, =C-c C-d= shows the session's worktree diffs. The active profile supplies
+the default OpenCode model: =openai/gpt-6-sol= for work (with DeepSeek models
+hidden) and =deepseek/deepseek-flash= for personal. A project-level
+=opencode.json= model is respected unless the profile hides that provider.
+Article summaries keep using =gpt-6-luna= unless changed for the session with
+=SPC C n=.
 
 | Keys                  | Action                                                     |
 |-----------------------+------------------------------------------------------------|
@@ -235,8 +278,8 @@ All feeds are downloaded; =SPC N s= chooses which topics feed the dashboard's
 five newest articles per site. =SPC N u= updates feeds, =SPC N o=
 opens Elfeed, and each site's dashboard button opens its full Elfeed search.
 =TAB= in the dashboard collapses or expands the article list for the feed at
-point. State lives in =.local/news.el= and =.local/elfeed/=; startup uses only
-the cache.
+point. State lives in =.local/profiles/<profile>/news.el= and =.local/elfeed/=;
+startup uses only the cache.
 
 In an Elfeed search buffer, the same leader prefix adds =SPC N /= (keyword
 search), =SPC N f= (narrow to feed), =SPC N d= (date range), =SPC N m= / =SPC N M=
@@ -245,7 +288,9 @@ and open an AI summary draft). In the dashboard, =S= summarizes the
 article at point.
 
 The summary uses =gpt-6-luna= through gptel and produces a 3–5 paragraph note.
-The prompt classifies the article first. Cybersecurity articles also get
+Use =SPC C n= or =M-x et/change-news-summary-model= to choose another gptel
+model for the current session; restarts return to =gpt-6-luna=. The prompt
+classifies the article first. Cybersecurity articles also get
 vulnerability/incident details, affected software, attack type, explicitly
 reported MITRE techniques, defanged IOCs, and related
 language/platform/package-manager nodes. Missing language/platform/package
@@ -404,7 +449,9 @@ Default layout (created only as captures need it):
     general/{topics,ideas,projects,references,vocabulary,daily,reviews}/
 #+end_example
 
-One org-roam graph indexes all three domains in =~/org/roam=. Nothing migrates
+Each profile indexes only its visible domains: personal and work include
+general, and general includes only general. The selected profile uses the same
+directory layout as before, so existing notes are not moved. Nothing migrates
 existing notes/IDs. Unknown-layout legacy nodes are accessible with all-domain
 lookup. Ordinary task files stay outside roam. Project tasks live inside their
 project notes, not duplicated into daily files. TODOs written in =daily/= notes
@@ -417,13 +464,15 @@ Roam completion shows file nodes by title and heading nodes by their full path:
 applies to both =et/roam-find= and =org-roam-node-find=; aliases remain searchable.
 Only the completion labels change, not note contents, IDs or link descriptions.
 
-Set a workspace's default with =SPC n D=. A domain-specific note overrides that
-default. The default can be reset after restoring a session; it is not serialized
-with layouts. Scoped lookup includes the current domain plus general. Uppercase
-=SPC n r F/I/S= finds/inserts/searches all domains. =SPC u= supplies a prefix
-argument to the next command (Evil reserves =C-u= for scrolling). The database, graph,
-backlinks and explicit links can cross domains: this is not confidentiality
-enforcement. AI integration must not silently send work notes.
+Set a workspace's default with =SPC n D=; the prompt is limited to the active
+profile's visible domains. A domain-specific note overrides that default. The
+default can be reset after restoring a session; it is not serialized with
+layouts. Scoped lookup includes the current domain plus general. Uppercase
+=SPC n r F/I/S= finds/inserts/searches all domains, including legacy layouts.
+=SPC u= supplies a prefix argument to the next command (Evil reserves =C-u= for
+scrolling). The
+database, graph, backlinks and explicit links can cross domains: this is not
+confidentiality enforcement. AI integration must not silently send work notes.
 
 The index starts on the first roam command, not Emacs startup. SQLite support is
 required. The local browser graph starts *only* with =SPC n r g=; it contains
@@ -450,11 +499,14 @@ SQLite files. Each machine rebuilds its own index with =SPC n r u=.
 | SPC n r g / u         | Explicit graph / rebuild local index                               |
 [[id:52099960-9eef-4163-bb0b-0b25fb0d3a3b][org-mode and org-roam hotkeys]]
 Task capture keys: =pi= personal inbox, =pt= personal TODO, =ph= daily personal
-habit, =wi= work inbox, =wt= work TODO, =j= task in an existing project note.
-Choose/create a project note first via roam template =p=. Project capture asks
-for an existing project in the current/shared domain. Plain TODOs have no
-invented deadline/schedule; habit captures supply an editable daily repeater.
-Finalize with =C-c C-c=; cancel with =C-c C-k=.
+habit, =wi= work inbox, =wt= work TODO, =gi= general inbox, =gt= general TODO,
+=gI= general idea, and =j= task in an existing project note. Only templates for
+the active profile's visible domains are offered. Choose/create a project note
+first via roam template =p=. Project capture asks for an existing project in
+the current/shared domain. Captures are tagged with their domain; project tasks
+use the active profile tag. Plain TODOs have no invented deadline/schedule;
+habit captures supply an editable daily repeater. Finalize with =C-c C-c=;
+cancel with =C-c C-k=.
 
 Roam template keys: =n= topic, =i= idea, =p= project, =r= reference, =v=
 vocabulary. References store a URL or =cite:key= in indexed =ROAM_REFS= metadata.
@@ -467,8 +519,9 @@ Org's clock link; they do not create duplicate clock records. Clock/pomodoro
 the real task. Vocabulary notes contain a drill-tagged question and Answer
 heading; Arabic editing/bidi is preserved. Multilingual spelling is a later stage.
 
-Agenda views include general projects plus the chosen personal/work domain, or
-all domains; the interactive prompt defaults to all. The scanned set is
+Agenda views include general projects plus the profile's default domain, or the
+profile's domains; the interactive prompt defaults to the active profile. The
+scanned set is
 =inbox.org=, =tasks.org=, =projects/= and =daily/=
 for the selected domains; lock and autosave files are ignored. The default =d=
 agenda collects open tasks with a deadline or schedule in the next two weeks,
@@ -859,8 +912,10 @@ bookmarks and private context exports, meeting-mode package installation and
 leader binding, Compose validation/cancellation,
 and a real Eglot JSON-RPC connection to a deterministic test fixture for CAPF,
 Flymake, Xref and formatting. Dashboard sections and buttons, gptel auth-source
-prompting and reasoning defaults, persistent capture templates, pomodoro
-segments/logging, and habit archive/restart behavior also have offline tests.
+prompting and reasoning defaults, persistent capture templates, profile
+selection/fallback and profile-local state, news summary model switching,
+pomodoro segments/logging, and habit archive/restart behavior also have offline
+tests.
 This fixture does *not* verify production language-server or debug-adapter
 behavior. Installed servers and adapters remain external tools; the offline suite
 does not depend on them.
@@ -901,7 +956,7 @@ Automated checks (offline; package-specific checks skip until installation):
   #+end_src
 
   #+RESULTS:
-  Ran 201 tests, 201 results as expected, 0 unexpected (2026-10-27 09:08:45-0600, 12.416835 sec)
+  Ran 253 tests, 252 results as expected, 1 skipped, 0 unexpected (2026-11-02 13:43:15-0600, 13.545447 sec)
 
 
 Tests use disposable notes/repositories, not your real vault. They cover source
@@ -924,8 +979,12 @@ keyboard/rendering/server/export checks.
   slurp/barf. Verify EditorConfig, local auto-revert, Git markers and Magit.
   Ordinary buffer switches must not save, and saves must not trim unrelated
   trailing spaces. Check compilation ANSI colors and help placement.
-- [ ] Capture personal/work TODOs and a habit. Create a project note and capture
-  its task, then add a dated TODO to a daily note. Verify the dashboard shows
+- [ ] Remove =.local/profile= and restart; confirm the profile prompt appears.
+  Switch to work with =SPC C s=, verify only work/general captures are offered,
+  DeepSeek models are hidden, and =.local/profiles/work/= holds the profile state.
+  Repeat for personal and general.
+- [ ] Capture personal/work/general TODOs and a habit. Create a project note and
+  capture its task, then add a dated TODO to a daily note. Verify the dashboard shows
   up to five Personal and five Work tasks and that the default agenda shows
   the two-week window; check the right scoped/combined agenda and refile
   destinations. Complete a recurring task; verify its repeater and LOGBOOK
@@ -952,9 +1011,10 @@ keyboard/rendering/server/export checks.
 - [ ] Without configuring mail, SPC M m must explain that mu4e-maildir is
   missing. After setting mu4e-maildir in .local/settings.el, SPC M m opens
   mu4e.
-- [ ] In a fresh project, run =SPC a o= or =SPC a g=; confirm the first AI use
-  prompts for both OpenCode and gptel models, saves them to
-  =.local/project-models.el=, and writes the project =opencode.json= model.
+- [ ] In a fresh project, run =SPC a o= or =SPC a g=; confirm OpenCode uses the
+  active profile default (prompting only if it is unavailable), gptel prompts
+  once, and choices are saved under =.local/profiles/<profile>/project-models.el=.
+  An explicit =SPC a l= or =SPC p m= still writes the project =opencode.json=.
   Use =SPC a l= and =SPC p m=, and verify =C-f= favorites appear first under
   the =★ Favorites= separator in both selectors.
 - [ ] In an OpenCode session buffer, run =SPC S s= and =SPC m S=; verify

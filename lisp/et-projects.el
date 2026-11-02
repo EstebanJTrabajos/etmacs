@@ -171,9 +171,9 @@ ORIGINAL is the original `persp-format-name' function."
   :if (locate-library "projectile")
   :demand t
   :init
-  (setq projectile-cache-file (expand-file-name "projectile.cache" et/state-directory)
-        projectile-known-projects-file (expand-file-name "projectile-bookmarks.eld" et/state-directory)
-        projectile-frecency-file (expand-file-name "projectile-frecency.eld" et/state-directory)
+  (setq projectile-cache-file (expand-file-name "projectile.cache" et/profile-state-directory)
+        projectile-known-projects-file (expand-file-name "projectile-bookmarks.eld" et/profile-state-directory)
+        projectile-frecency-file (expand-file-name "projectile-frecency.eld" et/profile-state-directory)
         projectile-enable-caching nil
         projectile-completion-system 'default
         projectile-auto-track-known-projects nil
@@ -199,7 +199,7 @@ ORIGINAL is the original `persp-format-name' function."
   :demand t
   :init
   (setq persp-mode-prefix-key (kbd "C-c M-p")
-        persp-state-default-file (expand-file-name "workspaces.el" et/state-directory)
+        persp-state-default-file (expand-file-name "workspaces.el" et/profile-state-directory)
         persp-show-modestring t
         persp-modestring-short nil
         persp-modestring-dividers '("[" "]" " | "))
@@ -266,8 +266,8 @@ ORIGINAL is the original `persp-format-name' function."
   :if (locate-library "treemacs")
   :commands (treemacs treemacs-add-and-display-current-project-exclusively)
   :init
-  (setq treemacs-persist-file (expand-file-name "treemacs-persist" et/state-directory)
-        treemacs-last-error-persist-file (expand-file-name "treemacs-errors" et/state-directory))
+  (setq treemacs-persist-file (expand-file-name "treemacs-persist" et/profile-state-directory)
+        treemacs-last-error-persist-file (expand-file-name "treemacs-errors" et/profile-state-directory))
   (define-key et/leader-map (kbd "e") #'treemacs)
   (define-key et/project-map (kbd "e") #'treemacs-add-and-display-current-project-exclusively))
 

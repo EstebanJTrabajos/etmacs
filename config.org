@@ -122,6 +122,7 @@ package directory first. No global bidi or aggressive GC tweaks.
   (add-to-list 'load-path (expand-file-name "lisp/" et/config-directory))
   (let ((settings (expand-file-name "settings.el" et/state-directory)))
     (when (file-exists-p settings) (load settings nil 'nomessage)))
+  (require 'et-profile)
   (require 'et-core)
   (require 'et-modeline)
   (require 'et-projects)
@@ -143,6 +144,200 @@ package directory first. No global bidi or aggressive GC tweaks.
                              missing)
                      :warning))
   (setq ring-bell-function #'ignore)
+#+end_src
+
+* Profiles
+
+A profile selects the default domain and the profile-local state directory.
+The three profiles reuse the existing personal, work, and general note
+directories; selecting =personal= or =work= also includes the shared =general=
+domain. State that belongs to one profile (projects, roam index, OpenCode
+bookmarks and exports, model choices, recent files, and bookmarks) lives under
+=.local/profiles/<profile>/=. The selection itself lives in =.local/profile= and
+is written with mode 0600. If no profile is saved, interactive startup asks for
+one; batch startup falls back to =general= so installation and tests never
+block.
+
+The work profile defaults OpenCode to =openai/gpt-6-sol= and hides DeepSeek
+models. The personal profile defaults OpenCode to
+=deepseek/deepseek-flash=. The general profile uses =openai/gpt-6-luna= as a
+neutral default. News summaries remain on =gpt-6-luna= until changed with
+=SPC C n= or =M-x et/change-news-summary-model= for the current session.
+
+#+begin_src emacs-lisp :tangle lisp/et-profile.el
+;;; et-profile.el --- Generated from config.org -*- lexical-binding: t; -*-
+(require 'seq)
+(require 'subr-x)
+
+(defconst et/profiles
+  '((personal
+     :label "Personal"
+     :domain "personal"
+     :domains ("personal" "general")
+     :tag "personal"
+     :opencode-model "deepseek/deepseek-flash"
+     :hidden-providers nil)
+    (work
+     :label "Work"
+     :domain "work"
+     :domains ("work" "general")
+     :tag "work"
+     :opencode-model "openai/gpt-6-sol"
+     :hidden-providers ("deepseek"))
+    (general
+     :label "General"
+     :domain "general"
+     :domains ("general")
+     :tag "general"
+     :opencode-model "openai/gpt-6-luna"
+     :hidden-providers nil))
+  "Supported profiles and their defaults.")
+
+(defvar et/profile-file (expand-file-name "profile" et/state-directory)
+  "File holding this configuration instance's selected profile.")
+(defvar et/profile "general"
+  "Active profile name.")
+(defvar et/profile-domains '("general")
+  "Note domains visible in the active profile.")
+(defvar et/profile-state-directory
+  (expand-file-name "profiles/general/" et/state-directory)
+  "Profile-local runtime state directory.")
+(defvar et/profile-opencode-model nil
+  "Default OpenCode model for the active profile.")
+(defvar et/profile-hidden-providers nil
+  "Provider names hidden from model selectors in the active profile.")
+(defvar et/profile-map (make-sparse-keymap "profile"))
+(define-key et/profile-map (kbd "s") #'et/switch-profile)
+(define-key et/profile-map (kbd "n") #'et/change-news-summary-model)
+(define-key et/profile-map (kbd "P") #'et/profile-show)
+
+(defun et/profile-key (name)
+  "Return NAME as a profile symbol, or nil."
+  (when name
+    (intern (format "%s" name))))
+
+(defun et/profile-spec (name)
+  "Return the plist for profile NAME, or nil."
+  (let ((key (et/profile-key name)))
+    (and key (alist-get key et/profiles))))
+
+(defun et/profile-valid-p (name)
+  "Return non-nil when NAME names a supported profile."
+  (and (et/profile-spec name) t))
+
+(defun et/profile-names ()
+  "Return supported profile names as strings."
+  (mapcar #'symbol-name (mapcar #'car et/profiles)))
+
+(defun et/profile-tag (&optional name)
+  "Return the Org tag for profile NAME, defaulting to the active profile."
+  (let ((spec (et/profile-spec (or name et/profile))))
+    (or (plist-get spec :tag)
+        (format "%s" (or name et/profile)))))
+
+(defun et/profile-model-hidden-p (model)
+  "Return non-nil when MODEL belongs to a provider hidden by this profile."
+  (and (stringp model) et/profile-hidden-providers
+       (let ((case-fold-search t))
+         (seq-some
+          (lambda (provider)
+            (string-match-p
+             (format "\\(?:\\`\\|/\\)%s\\(?:/\\|:\\|\\'\\)"
+                     (regexp-quote provider))
+             model))
+          et/profile-hidden-providers))))
+
+(defun et/profile--read-selection ()
+  "Return the saved profile name, or nil."
+  (when (file-readable-p et/profile-file)
+    (let ((name (with-temp-buffer
+                  (insert-file-contents et/profile-file)
+                  (string-trim (buffer-string)))))
+      (unless (string-empty-p name) name))))
+
+(defun et/profile-save (name)
+  "Persist NAME as this instance's profile."
+  (unless (et/profile-valid-p name)
+    (user-error "Unknown profile: %s" name))
+  (make-directory (file-name-directory et/profile-file) t)
+  (let ((coding-system-for-write 'utf-8-unix))
+    (with-temp-file et/profile-file
+      (insert (format "%s\n" (et/profile-key name)))))
+  (set-file-modes et/profile-file #o600)
+  name)
+
+(defun et/profile-apply (name)
+  "Apply profile NAME to the current Emacs instance."
+  (let* ((key (et/profile-key name))
+         (spec (et/profile-spec key)))
+    (unless spec
+      (user-error "Unknown profile: %s" name))
+    (setq et/profile (symbol-name key)
+          et/profile-domains (copy-sequence (plist-get spec :domains))
+          et/profile-state-directory
+          (expand-file-name (format "profiles/%s/" key) et/state-directory)
+          et/profile-opencode-model (plist-get spec :opencode-model)
+          et/profile-hidden-providers (plist-get spec :hidden-providers)
+          et/org-domain (plist-get spec :domain)
+          et/org-agenda-scope (symbol-name key)
+          et/dashboard-agenda-domains (copy-sequence (plist-get spec :domains)))
+    (make-directory et/profile-state-directory t)
+    (unless noninteractive
+      (message "Etmacs profile: %s" (plist-get spec :label)))
+    et/profile))
+
+(defun et/profile-load (&optional prompt)
+  "Load the saved profile, prompting when PROMPT permits and none is saved."
+  (let* ((env (getenv "ET_PROFILE"))
+         (env (and env (not (string-empty-p (string-trim env))) (string-trim env)))
+         (saved (or env (et/profile--read-selection)))
+         (name (cond
+                ((et/profile-valid-p saved) (et/profile-key saved))
+                ((and prompt (not noninteractive))
+                 (et/profile-key
+                  (completing-read "Etmacs profile: " (et/profile-names)
+                                   nil t nil nil "general")))
+                (t 'general))))
+    (when (and saved (not (et/profile-valid-p saved)) (not noninteractive))
+      (display-warning 'etmacs
+                       (format "Ignoring unknown profile %s; using %s"
+                               saved name)
+                       :warning))
+    (et/profile-apply name)
+    ;; A batch fallback must not consume the first interactive prompt.
+    (when (or (et/profile-valid-p saved)
+              (and prompt (not noninteractive)))
+      (et/profile-save name))
+    et/profile))
+
+(defun et/profile-show ()
+  "Show the active profile and its defaults."
+  (interactive)
+  (message "Profile: %s | domains: %s | OpenCode: %s | state: %s"
+           et/profile
+           (string-join et/profile-domains ", ")
+           (or et/profile-opencode-model "none")
+           et/profile-state-directory))
+
+(defun et/switch-profile (name)
+  "Switch to profile NAME and restart Emacs."
+  (interactive
+   (list (completing-read "Switch to profile: " (et/profile-names)
+                          nil t nil nil et/profile)))
+  (let ((name (et/profile-key name)))
+    (unless (et/profile-valid-p name)
+      (user-error "Unknown profile: %s" name))
+    (et/profile-save name)
+    (if noninteractive
+        (et/profile-apply name)
+      (when (yes-or-no-p
+             (format "Switch to %s and restart Emacs? "
+                     (plist-get (et/profile-spec name) :label)))
+        (et/reload-config)))))
+
+(et/profile-load t)
+(provide 'et-profile)
+;;; et-profile.el ends here
 #+end_src
 
 * Editing, paths, and leader maps
@@ -176,9 +371,9 @@ Collection supplies j/k/h/l navigation in package buffers.
       auth-sources '("~/.authinfo.gpg")
       inhibit-startup-screen t
       use-short-answers t
-      savehist-file (expand-file-name "history" et/state-directory)
-      save-place-file (expand-file-name "places" et/state-directory)
-      bookmark-default-file (expand-file-name "bookmarks" et/state-directory)
+      savehist-file (expand-file-name "history" et/profile-state-directory)
+      save-place-file (expand-file-name "places" et/profile-state-directory)
+      bookmark-default-file (expand-file-name "bookmarks" et/profile-state-directory)
       backup-directory-alist `(("." . ,(expand-file-name "backups/" et/state-directory)))
       auto-save-file-name-transforms
       `((".*" ,(expand-file-name "auto-save/" et/state-directory) t))
@@ -240,6 +435,7 @@ Collection supplies j/k/h/l navigation in package buffers.
 (define-key et/leader-map (kbd "g") (cons "git" et/git-map))
 (define-key et/leader-map (kbd "h") (cons "help" et/help-map))
 (define-key et/leader-map (kbd "t") (cons "themes" et/theme-map))
+(define-key et/leader-map (kbd "C") (cons "profile" et/profile-map))
 (define-key et/leader-map (kbd "m")
             '(menu-item "mode commands" nil :filter et/local-leader-menu))
 (define-key et/file-map (kbd "f") #'find-file)
@@ -805,7 +1001,9 @@ Project workspace names include a hash of the full root, so two repositories
 with the same basename do not collide. Project discovery is explicit; do not
 recursively scan the user's home or remote hosts at startup. Use =SPC p a= to
 register a project and =SPC p p= to switch. =SPC p w= associates the current
-project with a workspace. Picking a file happens after switching workspaces.
+project with a workspace. Projectile projects, Perspective layouts, and Treemacs
+state are profile-local under =.local/profiles/<profile>/=. Picking a file
+happens after switching workspaces.
 
 Persistence is deliberately explicit: =SPC TAB S= saves and =SPC TAB L= restores
 trusted local state. There is no automatic restore at startup or save on exit
@@ -1009,9 +1207,9 @@ ORIGINAL is the original `persp-format-name' function."
   :if (locate-library "projectile")
   :demand t
   :init
-  (setq projectile-cache-file (expand-file-name "projectile.cache" et/state-directory)
-        projectile-known-projects-file (expand-file-name "projectile-bookmarks.eld" et/state-directory)
-        projectile-frecency-file (expand-file-name "projectile-frecency.eld" et/state-directory)
+  (setq projectile-cache-file (expand-file-name "projectile.cache" et/profile-state-directory)
+        projectile-known-projects-file (expand-file-name "projectile-bookmarks.eld" et/profile-state-directory)
+        projectile-frecency-file (expand-file-name "projectile-frecency.eld" et/profile-state-directory)
         projectile-enable-caching nil
         projectile-completion-system 'default
         projectile-auto-track-known-projects nil
@@ -1037,7 +1235,7 @@ ORIGINAL is the original `persp-format-name' function."
   :demand t
   :init
   (setq persp-mode-prefix-key (kbd "C-c M-p")
-        persp-state-default-file (expand-file-name "workspaces.el" et/state-directory)
+        persp-state-default-file (expand-file-name "workspaces.el" et/profile-state-directory)
         persp-show-modestring t
         persp-modestring-short nil
         persp-modestring-dividers '("[" "]" " | "))
@@ -1104,8 +1302,8 @@ ORIGINAL is the original `persp-format-name' function."
   :if (locate-library "treemacs")
   :commands (treemacs treemacs-add-and-display-current-project-exclusively)
   :init
-  (setq treemacs-persist-file (expand-file-name "treemacs-persist" et/state-directory)
-        treemacs-last-error-persist-file (expand-file-name "treemacs-errors" et/state-directory))
+  (setq treemacs-persist-file (expand-file-name "treemacs-persist" et/profile-state-directory)
+        treemacs-last-error-persist-file (expand-file-name "treemacs-errors" et/profile-state-directory))
   (define-key et/leader-map (kbd "e") #'treemacs)
   (define-key et/project-map (kbd "e") #'treemacs-add-and-display-current-project-exclusively))
 
@@ -1173,7 +1371,7 @@ feed actions remain available. =SPC d= opens the dashboard; set
 (defvar et/dashboard-project-limit 8)
 (defvar et/dashboard-agenda-limit 5
   "Maximum number of tasks shown per domain on the dashboard.")
-(defvar et/dashboard-agenda-domains '("personal" "work" "general")
+(defvar et/dashboard-agenda-domains (copy-sequence et/profile-domains)
   "Domains shown as separate agenda groups on the dashboard.")
 
 (defvar et/dashboard-mode-map
@@ -1503,6 +1701,9 @@ reference note with an AI-summary placeholder (extension hook:
 =SPC N S= in Elfeed downloads the article and opens an unsaved AI summary
 draft. In the draft, =C-c= accepts and saves, =C-k= cancels, =C-r=
 regenerates with the current model, and =C-m= chooses another gptel model.
+Summaries default to =gpt-6-luna=; =SPC C n= or
+=M-x et/change-news-summary-model= changes the summary model for the current
+session without persisting it.
 The prompt first classifies the article: cybersecurity articles get the full
 =* Security details= structure, while other articles contain only metadata and
 =* Summary=, with no security section or forced security tag. Summary tags use
@@ -1516,7 +1717,7 @@ syntax is extended locally to allow =$= and =!=.
 (require 'subr-x)
 
 (defvar et/news-limit 5)
-(defvar et/news-state-file (expand-file-name "news.el" et/state-directory))
+(defvar et/news-state-file (expand-file-name "news.el" et/profile-state-directory))
 (defvar et/news-selected nil)
 (defvar et/news--refresh-timer nil)
 (defvar et/news-map (make-sparse-keymap "news"))
@@ -1933,18 +2134,24 @@ syntax is extended locally to allow =$= and =!=.
   (require 'et-ai)
   (unless (and (boundp 'et/gptel-openai) et/gptel-openai)
     (et/gptel-configure))
-  (unless (and et/news-summary-backend
-               (memq et/news-summary-model
-                     (gptel-backend-models et/news-summary-backend)))
-    (setq et/news-summary-backend
-          (gptel-make-openai
-              "OpenAI Security Summary"
-            :host "api.openai.com"
-            :key (lambda () (et/gptel-key "api.openai.com"))
-            :models (cons et/news-summary-model
-                           (delete et/news-summary-model
-                                   (gptel-backend-models et/gptel-openai))))))
-  et/news-summary-backend)
+  (let ((backend (or et/news-summary-backend et/gptel-openai)))
+    (cond
+     ((memq et/news-summary-model (gptel-backend-models backend))
+      (setq et/news-summary-backend backend))
+     ((eq backend et/gptel-openai)
+      (setq et/news-summary-backend
+            (gptel-make-openai
+                "OpenAI Security Summary"
+              :host "api.openai.com"
+              :key (lambda () (et/gptel-key "api.openai.com"))
+              :models (cons et/news-summary-model
+                             (delete et/news-summary-model
+                                     (gptel-backend-models et/gptel-openai))))))
+     (t
+      (user-error "News summary model %s is not available on %s"
+                  et/news-summary-model
+                  (gptel-backend-name backend))))
+    et/news-summary-backend))
 
 (defun et/news--request-summary (context text complete backend model buffer)
   "Request an article summary for CONTEXT and TEXT into BUFFER.
@@ -1976,6 +2183,18 @@ BACKEND and MODEL select the gptel backend and model."
   (let ((gptel-backend (or et/news-summary-backend gptel-backend))
         (gptel-model (or et/news-summary-model gptel-model)))
     (et/gptel-select-model)))
+
+(defun et/change-news-summary-model ()
+  "Choose the news summary model for this Emacs session.
+The startup default remains `gpt-6-luna'; this does not persist."
+  (interactive)
+  (let ((choice (et/news--select-model)))
+    (when choice
+      (setq et/news-summary-model (cdr choice)
+            et/news-summary-backend (car choice))
+      (message "News summary model for this session: %s / %s"
+               (gptel-backend-name (car choice))
+               (gptel--model-name (cdr choice))))))
 
 (defvar et/news-summary-mode-map
   (let ((map (make-sparse-keymap)))
@@ -2178,7 +2397,9 @@ BACKEND and MODEL select the gptel backend and model."
                 (insert (format ":ID: %s\n" id))
                 (insert ":END:\n")
                 (insert (format "#+title: %s\n" title))
-                (insert (format "#+filetags: :%s:\n\n" tag))
+                (insert (format "#+filetags: :%s:%s:\n\n"
+                                tag
+                                (et/profile-tag et/news-related-node-domain)))
                 (insert "* Related articles\n")
                 (org-mode)
                 (save-buffer)
@@ -2271,7 +2492,8 @@ BACKEND and MODEL select the gptel backend and model."
          (domain (or (plist-get context :domain) (et/current-domain)))
          (tags (delete-dups
                 (append '("news" "reference")
-                        (plist-get parsed :tags))))
+                        (plist-get parsed :tags)
+                        (list (et/profile-tag domain)))))
          (ecosystem (plist-get parsed :ecosystem))
          (description (plist-get parsed :description))
          (body (plist-get parsed :body))
@@ -2432,8 +2654,9 @@ run with the new buffer so a later AI pass can fill it and add tags."
       (insert (format ":ID: %s\n" (org-id-new)))
       (insert (format ":ROAM_REFS: %s\n" link))
       (insert ":END:\n")
-      (insert (format "#+title: %s\n#+filetags: :news:reference:\n\n"
-                      title))
+      (insert (format "#+title: %s\n#+filetags: :news:reference:%s:\n\n"
+                      title
+                      (et/profile-tag domain)))
       (insert "* Summary\nAI summary placeholder; run the AI workflow in a later iteration.\n\n")
       (insert "* Article\n")
       (insert (format "- Feed: %s\n- Date: %s\n- Link: %s\n" feed date link))
@@ -2508,6 +2731,7 @@ run with the new buffer so a later AI pass can fill it and add tags."
 (define-key et/news-map (kbd "r") #'et/news-summarize-at-point)
 (define-key et/news-map (kbd "R") #'et/news-summarize-at-point)
 (define-key et/news-map (kbd "S") #'et/news-summarize-at-point)
+(define-key et/news-map (kbd "C") #'et/change-news-summary-model)
 (et/register-package-leader 'elfeed-search-mode et/news-map)
 (et/news-load-selection)
 (provide 'et-news)
@@ -2710,17 +2934,18 @@ Only when no matching entry exists does Emacs prompt for a different machine and
 user. The global default model is =gpt-6-luna= on OpenAI. =SPC a w= rewrites the
 active region with a model selected from gptel's provider/model completion;
 choose either a one-off model or set it as the persistent default. The default
-is saved in =.local/gptel.el= and reloaded at startup. Reasoning text is hidden
-by default because providers bill reasoning tokens as output; =SPC a r= toggles
-it deliberately for one session. Article summaries use a dedicated OpenAI
-backend with =gpt-6-luna=; change =et/news-summary-model= to use another model.
-That summary model is independent of both project defaults and the project-level
-=opencode.json=, which sets OpenCode's default to =deepseek/deepseek-flash= for
-this branch.
+is saved in =.local/profiles/<profile>/gptel.el= and reloaded at startup.
+Reasoning text is hidden by default because providers bill reasoning tokens as
+output; =SPC a r= toggles it deliberately for one session. Article summaries use
+=gpt-6-luna= by default; =SPC C n= or =M-x et/change-news-summary-model= changes
+the model for the current session only. That summary model is independent of
+project defaults and the project-level =opencode.json=.
 
-The first AI command in a project asks for both an OpenCode model and a gptel
-model. Choices are stored in =.local/project-models.el= (mode 0600) by canonical
-project root. The OpenCode choice is also written to the project's root
+The first AI command in a project seeds OpenCode from the active profile's
+default when it is available; otherwise it asks. The gptel project model is
+still chosen once. Choices are stored in
+=.local/profiles/<profile>/project-models.el= (mode 0600) by canonical project
+root. An explicit OpenCode choice is also written to the project's root
 =opencode.json= =model= key, preserving any other settings; a JSONC file or a
 JSON file containing comments is left unchanged. Cancelling either prompt
 leaves that half unset so the next AI use asks again. Remote projects are not
@@ -2729,15 +2954,17 @@ prompted. In project buffers, gptel uses the saved project model;
 both.
 
 Both model selectors support favorites. Press =C-f= on the highlighted model to
-add or remove it; favorites are saved in =.local/model-favorites.el= (mode 0600)
-and are sorted first under a =★ Favorites= group heading, which Vertico renders
-as a separator line above all other models. =C-f= is bound only while one of
-these selectors is open, so ordinary minibuffer behavior is unchanged.
+add or remove it; favorites are saved in
+=.local/profiles/<profile>/model-favorites.el= (mode 0600) and are sorted first
+under a =★ Favorites= group heading, which Vertico renders as a separator line
+above all other models. =C-f= is bound only while one of these selectors is
+open, so ordinary minibuffer behavior is unchanged.
 
 Saved OpenCode sessions are project bookmarks with a local context export.
 =SPC S s= (or =SPC m S= inside a session) saves the current session to
-=.local/opencode-sessions.el= and exports its complete transcript with
-=opencode session export= to =.local/opencode-sessions/<id>.json= (mode 0600).
+=.local/profiles/<profile>/opencode-sessions.el= and exports its complete
+transcript with =opencode session export= to
+=.local/profiles/<profile>/opencode-sessions/<id>.json= (mode 0600).
 =SPC S l= selects a saved session for the current project and reopens it after
 a restart; outside a project it prompts for one of the saved project roots.
 =SPC S o= opens the live OpenCode project-session picker, and =SPC S d= removes
@@ -2753,8 +2980,10 @@ service and starts it on demand. Opening a session does not send anything until
 a prompt is submitted. =SPC a o= starts a new session, =SPC a O= reopens an
 existing one, =SPC a a= asks a one-shot question, and =SPC a c= sends the active
 region (or the lines around point) along with the prompt. Sessions use the saved
-project model; if it is no longer available, the session prompts for a
-replacement. Connected providers with an API key or subscription credential
+project model, then the active profile's default (=openai/gpt-6-sol= for work
+with DeepSeek hidden, =deepseek/deepseek-flash= for personal); if neither is
+available, the session prompts for a replacement. Connected providers with an
+API key or subscription credential
 appear before free/local providers and providers that still need connecting. In
 an OpenCode session buffer, use =SPC m l= to switch that session only,
 =SPC a l= to change the project default and current session together, =SPC m a=
@@ -2839,7 +3068,7 @@ auth-source entry exists."
 ;;; Model favorites
 
 (defvar et/model-favorites-file
-  (expand-file-name "model-favorites.el" et/state-directory)
+  (expand-file-name "model-favorites.el" et/profile-state-directory)
   "Persistent favorite models for OpenCode and gptel.")
 
 (defvar et/model-favorites nil
@@ -2982,7 +3211,7 @@ Return the selected model string, or nil when cancelled."
 ;;; Per-project AI models
 
 (defvar et/project-models-file
-  (expand-file-name "project-models.el" et/state-directory)
+  (expand-file-name "project-models.el" et/profile-state-directory)
   "Persistent per-project OpenCode and gptel model choices.")
 
 (defvar et/project-models nil
@@ -3040,11 +3269,13 @@ Return the selected model string, or nil when cancelled."
     (let ((default-directory
            (file-name-as-directory (expand-file-name root))))
       (condition-case nil
-          (delete-dups
-           (seq-filter
-            (lambda (line)
-              (string-match-p "\\`[^[:space:]/]+/[^[:space:]]+\\'" line))
-            (process-lines "opencode" "models")))
+          (seq-remove
+           #'et/profile-model-hidden-p
+           (delete-dups
+            (seq-filter
+             (lambda (line)
+               (string-match-p "\\`[^[:space:]/]+/[^[:space:]]+\\'" line))
+             (process-lines "opencode" "models"))))
         (error nil)))))
 
 (defun et/opencode--display-provider (display)
@@ -3054,22 +3285,26 @@ Return the selected model string, or nil when cancelled."
     "Models"))
 
 (defun et/project--opencode-config-model (root)
-  "Return ROOT's existing opencode.json model, when readable."
+  "Return ROOT's existing opencode.json model, when readable and allowed."
   (let ((file (expand-file-name "opencode.json"
                                (et/project--canonical-root root))))
     (when (file-readable-p file)
-      (condition-case nil
-          (with-temp-buffer
-            (insert-file-contents file)
-            (goto-char (point-min))
-            (alist-get 'model (json-parse-buffer :object-type 'alist)))
-        (error nil)))))
+      (let ((model
+             (condition-case nil
+                 (with-temp-buffer
+                   (insert-file-contents file)
+                   (goto-char (point-min))
+                   (alist-get 'model (json-parse-buffer :object-type 'alist)))
+               (error nil))))
+        (unless (et/profile-model-hidden-p model) model)))))
 
 (defun et/opencode--read-project-model (root)
   "Read ROOT's OpenCode model from the CLI catalog."
   (let* ((models (et/opencode--cli-models root))
-         (configured (or (et/project-model-get root :opencode)
-                         (et/project--opencode-config-model root)))
+         (stored (et/project-model-get root :opencode))
+         (configured (or (and (not (et/profile-model-hidden-p stored)) stored)
+                         (et/project--opencode-config-model root)
+                         et/profile-opencode-model))
          (default (if (member configured models) configured (car models))))
     (unless models
       (user-error "OpenCode models are not available"))
@@ -3140,7 +3375,9 @@ Return the selected model string, or nil when cancelled."
               (model (cdr-safe stored)))
     (let ((backend (et/gptel-backend-by-name name)))
       (when (and backend model
-                 (memq model (gptel-backend-models backend)))
+                 (memq model (gptel-backend-models backend))
+                 (not (et/profile-model-hidden-p
+                       (concat name ":" (gptel--model-name model)))))
         (cons backend model)))))
 
 (defun et/project-apply-gptel-model (&optional root)
@@ -3205,14 +3442,27 @@ Return the selected model string, or nil when cancelled."
     (when (and root
                (not (file-remote-p root))
                (not (et/project-models-configured-p root)))
-      (unless (et/project-model-get root :opencode)
-        (if (executable-find "opencode")
-            (condition-case err
-                (et/project-configure-opencode-model root)
-              (quit nil)
-              (user-error
-               (message "%s" (error-message-string err))))
-          (message "OpenCode CLI not found; skipping project OpenCode model")))
+      (let ((stored (et/project-model-get root :opencode)))
+        (when (et/profile-model-hidden-p stored)
+          (setq stored nil)
+          (et/project-model-set root :opencode nil)
+          (et/project-models-save))
+        (unless stored
+          (if (executable-find "opencode")
+              (let ((profile-model et/profile-opencode-model))
+                (if (and profile-model
+                         (member profile-model (et/opencode--cli-models root)))
+                    (progn
+                      (et/project-model-set root :opencode profile-model)
+                      (et/project-models-save)
+                      (message "OpenCode project model: %s (profile default)"
+                               profile-model))
+                  (condition-case err
+                      (et/project-configure-opencode-model root)
+                    (quit nil)
+                    (user-error
+                     (message "%s" (error-message-string err))))))
+            (message "OpenCode CLI not found; skipping project OpenCode model"))))
       (unless (et/project-model-get root :gptel)
         (if (locate-library "gptel")
             (condition-case err
@@ -3264,11 +3514,11 @@ Return the selected model string, or nil when cancelled."
 ;;; Saved OpenCode sessions
 
 (defvar et/opencode-sessions-directory
-  (expand-file-name "opencode-sessions/" et/state-directory)
+  (expand-file-name "opencode-sessions/" et/profile-state-directory)
   "Directory holding exported OpenCode session context.")
 
 (defvar et/opencode-sessions-file
-  (expand-file-name "opencode-sessions.el" et/state-directory)
+  (expand-file-name "opencode-sessions.el" et/profile-state-directory)
   "Persistent OpenCode session bookmarks.")
 
 (defvar et/opencode-sessions nil
@@ -3457,7 +3707,7 @@ When PROMPT is non-nil, offer saved project roots or read a directory."
                (plist-get record :title)))))
 
 (defvar et/gptel-state-file
-  (expand-file-name "gptel.el" et/state-directory)
+  (expand-file-name "gptel.el" et/profile-state-directory)
   "Persistent gptel default backend and model.")
 
 (defun et/gptel-select-model ()
@@ -3468,9 +3718,10 @@ When PROMPT is non-nil, offer saved project roots or read a directory."
       (let ((name (car entry))
             (backend (cdr entry)))
         (dolist (model (gptel-backend-models backend))
-          (push (list (concat name ":" (gptel--model-name model))
-                      backend model)
-                models-alist))))
+          (let ((display (concat name ":" (gptel--model-name model))))
+            (unless (et/profile-model-hidden-p display)
+              (push (list display backend model)
+                    models-alist))))))
     (setq models-alist (nreverse models-alist)
           choices (mapcar #'car models-alist))
     (let* ((group-function
@@ -3517,7 +3768,9 @@ When PROMPT is non-nil, offer saved project roots or read a directory."
                  (backend (or (cdr (assoc name gptel--known-backends))
                               et/gptel-openai)))
             (when (and backend model
-                       (memq model (gptel-backend-models backend)))
+                       (memq model (gptel-backend-models backend))
+                       (not (et/profile-model-hidden-p
+                             (concat name ":" (gptel--model-name model)))))
               (setq gptel-backend backend
                     gptel-model model))))
       (error nil))))
@@ -3680,9 +3933,13 @@ Within each group, recently used and session-used models stay first."
 
 (defun et/opencode--sorted-candidates (orig &optional connection)
   "Return ORIG's model candidates sorted with paid models first.
-CONNECTION defaults to the current session buffer's connection."
+CONNECTION defaults to the current session buffer's connection. Hidden
+providers for the active profile are removed."
   (et/opencode--sort-model-candidates
-   (funcall orig connection)
+   (seq-remove
+    (lambda (candidate)
+      (et/profile-model-hidden-p (plist-get candidate :display)))
+    (funcall orig connection))
    (or connection opencode-session--connection)))
 
 (defun et/opencode--read-model (connection &optional provider-id)
@@ -3753,7 +4010,7 @@ Returns the selected candidate plist, or nil when the prompt is cancelled."
   "Return CONNECTION's saved project model candidate, when available."
   (let* ((root (et/opencode--project-root connection))
          (display (and root (et/project-model-get root :opencode))))
-    (when display
+    (when (and display (not (et/profile-model-hidden-p display)))
       (seq-find
        (lambda (candidate)
          (and (plist-get candidate :connected-p)
@@ -3922,6 +4179,15 @@ Call ON-CREATED with the new session, as `opencode--create-session' does."
 (provide 'et-ai)
 ;;; et-ai.el ends here
 #+end_src
+
+** TODO Explore other models for news summaries
+
+The news summary default is deliberately =gpt-6-luna=. Use =SPC C n= or
+=M-x et/change-news-summary-model= to try another gptel model for the current
+session. When exploring, compare cost, latency, instruction-following, and
+whether the model reliably returns Org syntax for the cybersecurity and general
+summary templates. Do not persist a work-profile override that would make
+DeepSeek models available on the work machine.
 
 * Terminal: vterm
 
@@ -4132,7 +4398,7 @@ Compile keeps its save prompt and does not automatically kill an existing job.
       scroll-preserve-screen-position t
       auto-revert-remote-files nil
       global-auto-revert-non-file-buffers nil
-      recentf-save-file (expand-file-name "recentf" et/state-directory)
+      recentf-save-file (expand-file-name "recentf" et/profile-state-directory)
       recentf-max-saved-items 300
       recentf-auto-cleanup 'never
       transient-history-file (expand-file-name "transient/history.el" et/state-directory)
@@ -4363,17 +4629,20 @@ Capture creates only its selected destination's parents. Starting Emacs does
 not create notes, index the vault, or connect to a graph server. Agenda sources
 are refreshed explicitly on agenda invocation and after capture, scanning only
 the designated project-note directories, not every topic/research/daily note.
-Personal/work agendas include general projects; the all view includes both.
+Each profile's agenda includes its own domain plus general; general alone shows
+only general.
 
 Domain defaults are workspace-local when Perspective is active and can be set
-with =SPC n D=. A domain-specific note overrides the workspace default. General
-notes are shared organizationally, not by a privacy/security boundary.
+with =SPC n D=, limited to the active profile's visible domains. A
+domain-specific note overrides the workspace default. General notes are shared
+organizationally, not by a privacy/security boundary.
 
 Capture keys: =SPC X= opens the general menu; =pi= personal inbox, =pt= personal
-TODO, =ph= daily personal habit, =wi= work inbox, =wt= work TODO, =j= project
-task. Only the habit template
-introduces a schedule/repeater; normal TODOs have no invented dates/deadlines.
-The initial daily habit schedule is editable before finalizing.
+TODO, =ph= daily personal habit, =wi= work inbox, =wt= work TODO, =gi= general
+inbox, =gt= general TODO, =gI= general idea, =j= project task. Templates are
+filtered to the active profile, and captures carry their domain tag. Only the
+habit template introduces a schedule/repeater; normal TODOs have no invented
+dates/deadlines. The initial daily habit schedule is editable before finalizing.
 
 =SPC m Y= copies the active region, or the whole Org buffer, as Google Chat
 markup instead of Org syntax. It leaves the buffer and region untouched.
@@ -4409,9 +4678,9 @@ email.
       org-tag-line-re
       (format "^\\*+ \\(?:.*[ \t]\\)?%s[ \t]*$" org-tag--group-enclosed-re))
 
-(defvar et/org-domain "personal" "Default note domain in the current workspace.")
+(defvar et/org-domain et/profile "Default note domain in the current workspace.")
 (defvar et/org-domains '("personal" "work" "general"))
-(defvar et/org-agenda-scope "all")
+(defvar et/org-agenda-scope et/profile)
 (defvar et/org-extra-agenda-files nil
   "Existing task files outside the convention; included in all-domain agendas.")
 (defvar et/bibliography-files nil "Local BibTeX files; set in .local/settings.el.")
@@ -4437,15 +4706,16 @@ email.
 
 (defun et/set-domain (domain)
   "Set the current workspace's default DOMAIN."
-  (interactive (list (completing-read "Domain: " et/org-domains nil t nil nil et/org-domain)))
-  (unless (member domain et/org-domains) (user-error "Unknown domain: %s" domain))
+  (interactive (list (completing-read "Domain: " et/profile-domains nil t nil nil et/org-domain)))
+  (unless (member domain et/profile-domains)
+    (user-error "Domain %s is not available in the %s profile" domain et/profile))
   (setq et/org-domain domain)
   (message "Workspace note domain: %s" domain))
 
 (when (bound-and-true-p persp-mode)
   (persp-make-variable-persp-local 'et/org-domain)
   (add-hook 'persp-created-hook
-            (defun et/new-workspace-domain () (setq et/org-domain "personal"))))
+            (defun et/new-workspace-domain () (setq et/org-domain et/profile))))
 
 (defun et/org-target-file (relative)
   "Prepare RELATIVE capture destination, without overwriting an existing file."
@@ -4455,8 +4725,13 @@ email.
 
 (defun et/habit-template ()
   "Return an editable daily recurring habit starting today."
-  (format "* TODO %%?\nSCHEDULED: <%s .+1d>\n:PROPERTIES:\n:STYLE: habit\n:END:\n"
+  (format "* TODO %%? :personal:\nSCHEDULED: <%s .+1d>\n:PROPERTIES:\n:STYLE: habit\n:END:\n"
           (format-time-string "%Y-%m-%d %a")))
+
+(defun et/project-task-template ()
+  "Return a project task template tagged for the active profile."
+  (format "* TODO %%? :%s:\n:PROPERTIES:\n:CREATED: %%U\n:END:\n%%a\n"
+          (et/profile-tag)))
 
 (defface et/org-todo-yellow
   '((t :foreground "#b8860b" :weight bold))
@@ -4640,8 +4915,8 @@ Undated actionable states in `et/org-agenda-undated-states' are kept."
       org-log-into-drawer "LOGBOOK"
       org-clock-into-drawer "LOGBOOK"
       org-clock-persist nil
-      org-id-locations-file (expand-file-name "org-id-locations" et/state-directory)
-      org-persist-directory (expand-file-name "org-persist/" et/state-directory)
+      org-id-locations-file (expand-file-name "org-id-locations" et/profile-state-directory)
+      org-persist-directory (expand-file-name "org-persist/" et/profile-state-directory)
       org-refile-targets '((org-agenda-files :maxlevel . 3))
       org-outline-path-complete-in-steps nil
       org-refile-use-outline-path 'file
@@ -4669,28 +4944,49 @@ Undated actionable states in `et/org-agenda-undated-states' are kept."
   '(("p" "Personal")
     ("pi" "Inbox" entry
      (file+headline (lambda () (et/org-target-file "personal/inbox.org")) "Inbox")
-     "* %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n%i\n%a\n" :empty-lines 1)
+     "* %? :personal:\n:PROPERTIES:\n:CREATED: %U\n:END:\n%i\n%a\n" :empty-lines 1)
     ("pt" "TODO" entry
      (file+headline (lambda () (et/org-target-file "personal/tasks.org")) "Tasks")
-     "* TODO %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n" :empty-lines 1)
+     "* TODO %? :personal:\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n" :empty-lines 1)
     ("ph" "Daily habit" entry
      (file+headline (lambda () (et/org-target-file "personal/tasks.org")) "Habits")
      (function et/habit-template) :empty-lines 1)
     ("w" "Work")
     ("wi" "Inbox" entry
      (file+headline (lambda () (et/org-target-file "work/inbox.org")) "Inbox")
-     "* %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n%i\n%a\n" :empty-lines 1)
+     "* %? :work:\n:PROPERTIES:\n:CREATED: %U\n:END:\n%i\n%a\n" :empty-lines 1)
     ("wt" "TODO" entry
      (file+headline (lambda () (et/org-target-file "work/tasks.org")) "Tasks")
-     "* TODO %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n" :empty-lines 1)
+     "* TODO %? :work:\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n" :empty-lines 1)
+    ("g" "General")
+    ("gi" "Inbox" entry
+     (file+headline (lambda () (et/org-target-file "general/inbox.org")) "Inbox")
+     "* %? :general:\n:PROPERTIES:\n:CREATED: %U\n:END:\n%i\n%a\n" :empty-lines 1)
+    ("gt" "TODO" entry
+     (file+headline (lambda () (et/org-target-file "general/tasks.org")) "Tasks")
+     "* TODO %? :general:\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n" :empty-lines 1)
+    ("gI" "Idea" entry
+     (file+headline (lambda () (et/org-target-file "general/ideas.org")) "Ideas")
+     "* IDEA %? :general:idea:\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n" :empty-lines 1)
     ("j" "Project task" entry (function et/project-task-target)
-     "* TODO %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n" :empty-lines 1))
+     (function et/project-task-template) :empty-lines 1))
   "Built-in capture templates; interactive templates are prepended.")
 
+(defun et/capture-template-visible-p (template)
+  "Return non-nil when TEMPLATE belongs to the active profile."
+  (let ((key (car template)))
+    (cond
+     ((string-prefix-p "p" key) (member "personal" et/profile-domains))
+     ((string-prefix-p "w" key) (member "work" et/profile-domains))
+     ((string-prefix-p "g" key) (member "general" et/profile-domains))
+     (t t))))
+
 (defun et/rebuild-capture-templates ()
-  "Merge custom capture templates ahead of the built-in defaults."
+  "Merge custom capture templates ahead of the profile's defaults."
   (setq org-capture-templates
-        (append et/custom-capture-templates et/default-capture-templates)))
+        (append et/custom-capture-templates
+                (seq-filter #'et/capture-template-visible-p
+                            et/default-capture-templates))))
 
 (defun et/load-capture-templates ()
   "Load and merge templates created with `et/capture-template-add'."
@@ -4767,11 +5063,13 @@ are prompted for interactively.  TARGET-TYPE is either
 (defun et/org-refresh-agenda (&optional scope)
   "Refresh agenda files for SCOPE, without creating or modifying notes."
   (let* ((scope (or scope et/org-agenda-scope))
-         (domains (if (equal scope "all") et/org-domains
-                    (delete-dups (list scope "general"))))
+         (domains (cond
+                   ((equal scope "all") et/profile-domains)
+                   ((member scope et/profile-domains)
+                    (delete-dups (list scope "general")))
+                   (t (user-error "Domain %s is not available in the %s profile"
+                                  scope et/profile))))
          files)
-    (unless (or (equal scope "all") (member scope et/org-domains))
-      (user-error "Unknown agenda scope: %s" scope))
     (dolist (domain domains)
       (dolist (name '("inbox.org" "tasks.org"))
         (let ((file (expand-file-name (concat domain "/" name) et/notes-directory)))
@@ -4793,8 +5091,9 @@ are prompted for interactively.  TARGET-TYPE is either
 
 (defun et/org-agenda (scope)
   "Open the daily dashboard for SCOPE."
-  (interactive (list (completing-read "Agenda domain: " (cons "all" et/org-domains)
-                                     nil t nil nil "all")))
+  (interactive (list (completing-read "Agenda domain: "
+                                     (cons "all" et/profile-domains)
+                                     nil t nil nil et/profile)))
   (et/org-refresh-agenda scope)
   (org-agenda nil "d"))
 (add-hook 'org-capture-after-finalize-hook #'et/org-refresh-agenda)
@@ -5629,14 +5928,17 @@ is an optional Org date string; it defaults to today."
 
 =org-roam= supplies stable IDs, aliases, tags, backlinks, and a disposable local
 SQLite index. =org-roam-ui= supplies an interactive browser graph, started only
-by =SPC n r g=. The graph/database include ALL domains: filters are not security.
-SQLite support must be available in Emacs. Do not sync the live database with
-Syncthing; sync source notes/attachments and rebuild each machine's index.
+by =SPC n r g=. Each profile has its own disposable index and indexes only its
+visible domains (personal or work plus general, or general alone); filters are
+not security. SQLite support must be available in Emacs. Do not sync live
+databases with Syncthing; sync source notes/attachments and rebuild each
+machine's index.
 
 Find/insert default to the current domain plus general; a prefix argument shows
-all domains. Unknown-layout legacy nodes remain available through all-domain
-lookup; we never migrate them automatically. Capture asks a domain explicitly.
-File-level aliases and subject tags use upstream commands, not a parallel index.
+all domains, including legacy layouts. Unknown-layout legacy nodes remain
+available through all-domain lookup; we never migrate them automatically.
+Capture asks among the profile's visible domains. File-level aliases and
+subject tags use upstream commands, not a parallel index.
 
 Completion labels show file nodes by title and heading nodes as
 =Document title -> Parent heading -> Heading=. The indexed outline path includes
@@ -5654,13 +5956,13 @@ Zotero is optional, not a prerequisite.
 #+begin_src emacs-lisp :tangle lisp/et-roam.el
 ;;; et-roam.el --- Generated from config.org -*- lexical-binding: t; -*-
 (defvar org-roam-directory et/roam-directory)
-(defvar org-roam-db-location (expand-file-name "org-roam.db" et/state-directory))
+(defvar org-roam-db-location (expand-file-name "org-roam.db" et/profile-state-directory))
 (defvar org-roam-dailies-directory)
 (defvar org-roam-dailies-capture-templates)
 (defvar et/roam-map (make-sparse-keymap "roam"))
 (define-key et/notes-map (kbd "r") (cons "roam" et/roam-map))
 (setq org-roam-directory et/roam-directory
-      org-roam-db-location (expand-file-name "org-roam.db" et/state-directory))
+      org-roam-db-location (expand-file-name "org-roam.db" et/profile-state-directory))
 
 (defun et/roam-node-hierarchy (node)
   "Format NODE as its document title, ancestors, and own title."
@@ -5711,7 +6013,8 @@ Zotero is optional, not a prerequisite.
        :target (file+head ,(lambda () (et/roam-target domain folder))
                          ,(concat (when (equal key "r")
                                     ":PROPERTIES:\n:ROAM_REFS: %^{URL or cite:key}\n:END:\n")
-                                  "#+title: ${title}\n#+filetags: :" tag ":\n"))
+                                  "#+title: ${title}\n#+filetags: :" tag ":"
+                                  (et/profile-tag domain) ":\n"))
        :unnarrowed t))
    '(("n" "Topic" "topics" "topic" "%?\n")
      ("i" "Idea" "ideas" "idea" "* Idea\n%?\n\n* Next step\n")
@@ -5721,7 +6024,7 @@ Zotero is optional, not a prerequisite.
 
 (defun et/roam-capture (domain &optional title key)
   "Capture a new note in DOMAIN, optionally supplying TITLE and template KEY."
-  (interactive (list (completing-read "Capture domain: " et/org-domains nil t nil nil
+  (interactive (list (completing-read "Capture domain: " et/profile-domains nil t nil nil
                                      (et/current-domain))))
   (et/roam-start)
   (setq title (string-trim (or title (read-string "Title: "))))
@@ -5802,7 +6105,9 @@ Zotero is optional, not a prerequisite.
    (pcase-lambda (`(,key ,label ,body))
      `(,key ,label entry ,body
        :target (file+head "%<%Y-%m-%d>.org"
-                         ,(concat "#+title: %<%Y-%m-%d> " domain "\n#+filetags: :daily:\n"))
+                         ,(concat "#+title: %<%Y-%m-%d> " domain
+                                  "\n#+filetags: :daily:"
+                                  (et/profile-tag domain) ":\n"))
        :unnarrowed t))
    '(("j" "Journal" "* %<%H:%M> Journal\n%?\n")
      ("l" "Work log" "* %<%H:%M> Work log\nTask: %K\n%?\n")
@@ -5812,7 +6117,7 @@ Zotero is optional, not a prerequisite.
   "Capture today's entry with optional KEY; CHOOSE-DOMAIN prompts for a domain."
   (interactive "P")
   (let ((domain (if choose-domain
-                    (completing-read "Daily domain: " et/org-domains nil t nil nil (et/current-domain))
+                    (completing-read "Daily domain: " et/profile-domains nil t nil nil (et/current-domain))
                   (et/current-domain))))
     (et/roam-start)
     (require 'org-roam-dailies)
@@ -5840,7 +6145,8 @@ Zotero is optional, not a prerequisite.
      :node (org-roam-node-create :title (format-time-string "Review %G-W%V"))
      :templates `(("w" "Weekly review" plain ,(concat "* Dailies\n" links "\n\n* Review\n%?\n")
                    :target (file+head ,(lambda () (et/roam-target domain "reviews"))
-                                      "#+title: ${title}\n#+filetags: :review:\n")
+                                      ,(concat "#+title: ${title}\n#+filetags: :review:"
+                                               (et/profile-tag domain) ":\n"))
                    :unnarrowed t)))))
 
 (defun et/roam-graph ()
