@@ -5,7 +5,8 @@
 (define-key et/leader-map (kbd "M") (cons "mail" et/mail-map))
 
 (defvar et/mu4e-directories
-  '("/usr/share/emacs/site-lisp/mu4e"
+  (list (expand-file-name "share/emacs/site-lisp/mu4e" et/dependency-directory)
+    "/usr/share/emacs/site-lisp/mu4e"
     "/usr/local/share/emacs/site-lisp/mu4e"
     "~/.emacs.d/mu4e")
   "Candidate directories containing mu4e.")

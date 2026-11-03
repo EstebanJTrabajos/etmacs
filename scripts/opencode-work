@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Work-profile AI uses an isolated service and credential store.
+set -euo pipefail
+umask 077
+binary="${ETMACS_OPENCODE:-opencode}"
+version="$("$binary" --version)"
+if [[ ! "$version" =~ ([0-9]+)\.([0-9]+)\.([0-9]+) ]] ||
+   (( BASH_REMATCH[1] < 2 ||
+      (BASH_REMATCH[1] == 2 && BASH_REMATCH[2] < 2) ||
+      (BASH_REMATCH[1] == 2 && BASH_REMATCH[2] == 2 && BASH_REMATCH[3] < 3) )); then
+  printf 'Work AI requires OpenCode 2.2.3+ for provider policy enforcement.\n' >&2
+  exit 1
+fi
+prefix="${ETMACS_PREFIX:-$HOME/.config/emacs/.local}"
+root="${ETMACS_WORK_ROOT:-$prefix/profiles/work/opencode}"
+export XDG_CONFIG_HOME="$root/config"
+export XDG_DATA_HOME="$root/data"
+export XDG_STATE_HOME="$root/state"
+export XDG_CACHE_HOME="$root/cache"
+mkdir -p "$XDG_CONFIG_HOME/opencode" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"
+
+# Routers can expose forbidden families under aliases; allow only direct OpenAI.
+config="$XDG_CONFIG_HOME/opencode/opencode.json"
+temporary="$(mktemp "$config.XXXXXX")"
+trap 'rm -f "$temporary"' EXIT
+cat > "$temporary" <<'JSON'
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "openai/gpt-6-sol",
+  "policies": [
+    {"action": "provider.use", "resource": "*", "effect": "deny"},
+    {"action": "provider.use", "resource": "openai", "effect": "allow"},
+    {"action": "integration.connect", "resource": "*", "effect": "deny"},
+    {"action": "integration.connect", "resource": "openai", "effect": "allow"}
+  ]
+}
+JSON
+if ! cmp -s "$temporary" "$config"; then
+  mv -f "$temporary" "$config"
+fi
+unset OPENCODE_CONFIG OPENCODE_CONFIG_CONTENT OPENCODE_CONFIG_DIR
+unset OPENCODE_SERVER_URL OPENCODE_SERVER_PASSWORD
+unset ANTHROPIC_API_KEY DEEPSEEK_API_KEY
+exec "$binary" "$@"

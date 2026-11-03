@@ -1,6 +1,52 @@
 ;;; et-profile-tests.el --- Profile isolation checks -*- lexical-binding: t; -*-
 ;; Loaded by et-core-tests.el after isolated configuration startup.
 
+(ert-deftest et/profile-custom-names-persist-and-inherit-general ()
+  (let* ((et/state-directory et/test-state)
+         (et/custom-profiles nil)
+         (et/custom-profiles-file (expand-file-name "custom-profiles.json" et/test-state)))
+    (et/profile-create "research")
+    (should (member "research" (et/profile-names)))
+    (should (equal (plist-get (et/profile-spec "research") :label) "Research"))
+    (should (equal (plist-get (et/profile-spec "research") :domains) '("general")))
+    (should (= (logand (file-modes et/custom-profiles-file) #o777) #o600))
+    (setq et/custom-profiles nil)
+    (et/profile-load-custom)
+    (should (et/profile-valid-p "research"))
+    (dolist (name '("" "../work" "/tmp/work" "Work" "a/b" ".." "a b"))
+      (should-error (et/profile-create name) :type 'user-error))))
+
+(ert-deftest et/profile-picker-initializes-vertico-and-allows-new-input ()
+  (let ((called nil))
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (_prompt choices _predicate require-match &rest _)
+                 (should vertico-mode)
+                 (should vertico-posframe-mode)
+                 (should-not require-match)
+                 (should (member "work" choices))
+                 (setq called t)
+                 "research")))
+      (should (equal "research" (et/profile-read "Profile: " "general")))
+      (should called))))
+
+(ert-deftest et/profile-cancelled-switch-does-not-persist ()
+  (let ((et/profile-file (expand-file-name "cancel-profile" et/test-state))
+        (et/custom-profiles-file (expand-file-name "cancel-profiles.json" et/test-state))
+        (et/custom-profiles nil)
+        (noninteractive nil))
+    (cl-letf (((symbol-function 'yes-or-no-p) (lambda (&rest _) nil)))
+      (et/switch-profile "cancelled"))
+    (should-not (file-exists-p et/profile-file))
+    (should-not (et/profile-valid-p "cancelled"))))
+
+(ert-deftest et/profile-work-blocks-forbidden-families-through-routers ()
+  (let ((et/profile "work") (et/profile-hidden-providers nil))
+    (dolist (name '("anthropic/claude-sonnet" "DeepSeek/deepseek-chat"
+                    "amazon-bedrock/anthropic.claude-v4" "openrouter/deepseek/r1"
+                    "openai/claude-proxy" "api.anthropic.com"))
+      (should-error (et/profile-check-model name) :type 'user-error))
+    (should-not (et/profile-model-hidden-p "openai/gpt-6-sol"))))
+
 (ert-deftest et/profile-catalog-has-personal-work-and-general ()
   (dolist (name '("personal" "work" "general"))
     (should (et/profile-valid-p name)))

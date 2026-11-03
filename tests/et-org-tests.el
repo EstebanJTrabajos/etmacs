@@ -390,9 +390,9 @@
       (org-clock-out)
       (with-current-buffer project (save-buffer))
       (let ((text (et/test-file-text daily)))
-        (should (string-match-p "Investigated the sample" text))
+        (should (string-match-p "Investigated[[:space:]]+the[[:space:]]+sample" text))
         (should (string-match-p "A second entry" text))
-        (should (string-match-p (regexp-quote "Task: [[") text))
+        (should (string-match-p "Task:[[:space:]]+\\[\\[" text))
         (should-not (string-match-p "CLOCK:" text)))
       (should (string-match-p "CLOCK:" (et/test-file-text (org-roam-node-file node)))))))
 

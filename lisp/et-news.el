@@ -472,8 +472,10 @@ BACKEND and MODEL select the gptel backend and model."
               (insert
                (if (stringp response)
                    response
-                 (format "# Summary request failed: %s\n"
-                         (or (plist-get info :status) "unknown error"))))
+                  (format "# Summary request failed: %s\n"
+                          (or (plist-get info :status) "unknown error"))))
+              (when (stringp response)
+                (et/document-format-region (point-min) (point-max)))
               (set-buffer-modified-p nil)
               (goto-char (point-min)))))))))
 
@@ -840,6 +842,7 @@ The startup default remains `gpt-6-luna'; this does not persist."
                           row)))
                     related))))
         (when nodes (et/news--link-related-table nodes))
+        (et/document-format-region (point-min) (point-max))
         (save-buffer)
         (when (fboundp 'org-roam-db-update-file)
           (org-roam-db-update-file file))

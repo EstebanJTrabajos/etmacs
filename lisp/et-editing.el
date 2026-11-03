@@ -210,5 +210,105 @@
 
 ;; git-modes provides auto-mode entries through package autoloads; no global
 ;; git-modes minor mode or eager Magit startup is needed.
+;; Only prose is filled; tables and literal blocks have their own layout.
+(declare-function markdown-code-block-at-point-p "markdown-mode" (&optional pos))
+(declare-function markdown-text-property-at-point "markdown-mode" (prop))
+(declare-function markdown-table-at-point-p "markdown-mode" ())
+(declare-function markdown-heading-at-point "markdown-mode" (&optional pos))
+(declare-function markdown-table-align "markdown-mode" ())
+
+(defun et/document-protected-p ()
+  "Whether point is on structural text that must not be hard-wrapped."
+  (or (looking-at-p "[ \t]*\\(?:$\\||\\|#\\|:.*:\\|```\\|~~~\\)")
+      (and (derived-mode-p 'org-mode)
+           (or (org-in-src-block-p t)
+               (memq (org-element-type (org-element-context))
+                     '(table table-row table-cell src-block example-block
+                       export-block fixed-width keyword node-property
+                       drawer property-drawer headline))))
+      (and (derived-mode-p 'markdown-mode)
+           (or (markdown-code-block-at-point-p)
+               (markdown-text-property-at-point 'markdown-yaml-metadata-section)
+               (markdown-text-property-at-point 'markdown-yaml-metadata-begin)
+               (markdown-text-property-at-point 'markdown-yaml-metadata-end)
+               (markdown-table-at-point-p)
+               (markdown-heading-at-point)))))
+
+(defun et/document-format-region (beg end)
+  "Fill generated prose in BEG..END to 95 columns and align its tables.
+Do not fill code, metadata, headings, or tables, or touch text outside the
+region.  A long indivisible URL or table row can exceed the prose width."
+  (when (and beg end (derived-mode-p 'org-mode 'markdown-mode 'text-mode)
+             (not buffer-read-only))
+    (save-excursion
+      (save-restriction
+        (narrow-to-region beg end)
+        (let ((fill-column 95)
+              (end-marker (copy-marker (point-max) t)))
+          (unwind-protect
+              (progn
+                ;; Major-mode filling understands list indentation and links.
+                (goto-char (point-min))
+                (while (< (point) end-marker)
+                  (beginning-of-line)
+                  (if (et/document-protected-p)
+                      (forward-line 1)
+                    (let ((start (point)))
+                      (forward-line 1)
+                      (while (and (< (point) end-marker)
+                                  (not (et/document-protected-p)))
+                        (forward-line 1))
+                      (let ((next (copy-marker (point) t)))
+                        (when (save-excursion
+                                (goto-char start)
+                                (re-search-forward "^.\\{96\\}" (marker-position next) t))
+                          (let ((fill-nobreak-predicate
+                                 (cons (lambda ()
+                                         (and (derived-mode-p 'org-mode)
+                                              (org-in-regexp org-link-bracket-re 1)))
+                                       (ensure-list fill-nobreak-predicate))))
+                            (fill-region start (point))))
+                        (goto-char next)
+                        (set-marker next nil)))))
+                (goto-char (point-min))
+                (while (< (point) end-marker)
+                  (cond
+                   ((and (derived-mode-p 'org-mode)
+                         (org-at-table-p)
+                         (not (org-in-src-block-p t))
+                         (eq (org-element-type (org-element-at-point)) 'table))
+                    (org-table-align)
+                    (goto-char (org-table-end)))
+                   ((and (derived-mode-p 'markdown-mode)
+                         (markdown-table-at-point-p)
+                         (not (markdown-code-block-at-point-p)))
+                    (markdown-table-align)
+                    (while (and (< (point) end-marker)
+                                (markdown-table-at-point-p))
+                      (forward-line 1)))
+                   (t (forward-line 1)))))
+            (set-marker end-marker nil)))))))
+
+(defun et/document-format-buffer ()
+  "Apply document layout on save, never to programming buffers."
+  (et/document-format-region (point-min) (point-max)))
+
+(defun et/document-auto-fill ()
+  "Fill prose while typing, but never split literal or structural lines."
+  (unless (save-excursion (beginning-of-line) (et/document-protected-p))
+    (do-auto-fill)))
+
+(defun et/document-mode-defaults ()
+  "Use hard-wrapped prose and automatic table alignment in documents."
+  (setq-local fill-column 95)
+  (setq-local normal-auto-fill-function #'et/document-auto-fill)
+  (auto-fill-mode 1)
+  (add-hook 'before-save-hook #'et/document-format-buffer nil t))
+
+(add-hook 'text-mode-hook #'et/document-mode-defaults)
+(use-package markdown-mode
+  :if (locate-library "markdown-mode")
+  :mode (("\\.md\\'" . markdown-mode) ("\\.markdown\\'" . markdown-mode)))
+
 (provide 'et-editing)
 ;;; et-editing.el ends here

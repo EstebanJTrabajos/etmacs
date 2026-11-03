@@ -498,6 +498,41 @@
                                  (et/opencode-session--records root)))))
       (delete-directory directory t))))
 
+(ert-deftest et/ai-work-policy-guards-gptel-and-transports ()
+  (require 'gptel)
+  (let* ((et/profile "work")
+         (gptel--known-backends nil)
+         (allowed (gptel-make-openai "Allowed" :host "api.openai.com" :models '(gpt-6-sol)))
+         (denied (gptel-make-openai "Proxy" :host "api.deepseek.com" :models '(deepseek-chat)))
+         (gptel-backend denied)
+         (gptel-model 'deepseek-chat))
+    (should (advice-member-p #'et/gptel-check-request 'gptel-request))
+    (should (advice-member-p #'et/gptel-check-transport 'gptel-curl-get-response))
+    (should-error (gptel-request "Must never leave this process") :type 'user-error)
+    (should-error (et/gptel-save-default denied 'deepseek-chat) :type 'user-error)
+    (let ((fsm (gptel-make-fsm)))
+      (setf (gptel-fsm-info fsm) (list :backend allowed :model 'claude-sonnet))
+      (should-error (et/gptel-check-transport fsm) :type 'user-error))
+    (et/gptel-prune-backends)
+    (should (assoc "Allowed" gptel--known-backends))
+    (should-not (assoc "Proxy" gptel--known-backends))))
+
+(ert-deftest et/ai-work-policy-guards-opencode-requests ()
+  (let ((et/profile "work"))
+    (should (string-suffix-p "scripts/opencode-work" (et/opencode--binary)))
+    (should (string-suffix-p "profiles/work/opencode/state/opencode/service.json"
+                            (et/opencode-registration-file #'ignore)))
+    (dolist (model '("anthropic/claude-sonnet" "deepseek/deepseek-chat"
+                     "openrouter/anthropic/claude-sonnet" "openai/claude-alias"))
+      (should-error (et/opencode-check-run "prompt" #'ignore :model model) :type 'user-error))
+    (should-error
+     (et/opencode-check-request nil 'POST "/api/session"
+                                :json '((model . ((providerID . "anthropic") (id . "claude")))))
+     :type 'user-error)
+    (should-not
+     (et/opencode-check-request nil 'POST "/api/session"
+                                :json '((model . ((providerID . "openai") (id . "gpt-6-sol"))))))))
+
 (ert-deftest et/ai-opencode-cli-models-use-profile-binary ()
   (let ((et/profile-opencode-binary "opencode2")
         (calls nil))

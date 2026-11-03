@@ -36,16 +36,52 @@ instance, not an existing server client. Nothing migrates existing notes.
    emacs -nw --init-directory "$PWD" --debug-init
    #+end_src
 
-For a repeatable setup, run:
+For a complete setup, run the installer for your distribution as your ordinary
+user (not as root):
 #+begin_src sh
-./install.sh
+./install-ubuntu.sh            # Ubuntu 22.04 LTS
+# OR
+./install-arch.sh              # Arch Linux
 #+end_src
-It tangles =config.org=, installs packages into =.local/elpa=, installs the
-optional parinfer-rust native library, verifies the package set, and runs the
-ERT suite. Use =./install.sh --fonts= to also install the Nerd Fonts glyphs,
-=--skip-parinfer= to skip the native library, or =--skip-tests= for a faster
-install-only run. It never installs system packages, language servers, debug
-adapters, or tree-sitter grammars.
+Both installers install system prerequisites with =sudo=, then download/build
+missing tools as the ordinary user under =~/.config/emacs/.local=. Ubuntu reuses
+a suitable Emacs 31.1+ with modules, SQLite and tree-sitter; otherwise it builds
+*Emacs 31.1*, leaving the distro Emacs untouched. Arch uses official packages
+where possible; no AUR helper is invoked. Arch's package step performs a full
+system upgrade to avoid an unsupported partial upgrade.
+
+The complete installation includes:
+- Emacs packages, all configured tree-sitter grammars, Parinfer and Nerd Fonts.
+- A compiled and load-tested *vterm* module: no first-use build prompt.
+- Node, a tool-only Python environment, Go and a compatible JDK where needed.
+- BasedPyright, TypeScript, YAML, Dockerfile, SQL, YARA (YLS), Bash, JSON, HTML
+  and CSS language servers.
+- Ruff, Prettier, clang-format, pytest, Jest, Vitest, IPython and TS runners.
+- GDB 14.1+, debugpy, js-debug, JDTLS and the Java debug bundle.
+- OpenCode 2.2.3+, Git/search tools, Docker/Compose, mail clients and tools,
+  Pandoc, LaTeX/PDF/citation tools, Hugo, Chromium and document viewers.
+
+Allow substantial download/build time and disk space, especially for Emacs,
+the TeX packages and Chromium. Downloads with published checksums or signatures
+are verified; source revisions and resolved package versions are recorded in
+=install-manifest.json= under the dependency prefix. Docker's static release
+has no published checksum: it is fetched over HTTPS and its hash is recorded.
+This is not a fully pinned/reproducible package lock.
+
+Use =--dry-run= to inspect the plan without changing anything, =--check= to
+audit an installation, =--skip-system= when prerequisites are already present,
+=--prefix /absolute/path= to change the dependency prefix, or =--skip-tests=
+to omit ERT. The selected prefix is saved in =.local/dependencies.json= so
+desktop-launched Emacs finds it without shell startup files. Emacs packages
+and grammars stay in the checkout's =.local/= directory; installing the checkout
+at =~/.config/emacs= puts everything under the requested prefix.
+
+The scripts do not configure credentials, mail accounts, database connections,
+project virtualenvs, or project npm dependencies. They do not start Docker or
+language servers. For local Docker, configure/start the daemon explicitly;
+rootless Docker or remote Docker also needs your chosen connection setup.
+Selecting a project Python virtualenv still requires =pytest=/=debugpy= in
+that environment. No installer modifies an existing project's dependencies.
 
 Runtime packages and state live in ignored =.local/=. Native caches and editor
 locks are not source. Packages are not version-locked; this is not a claim of
@@ -69,6 +105,13 @@ promote intentional shared settings into the literate source.
 Custom functions *and variables* use =et/=. File and feature names retain =et-=
 (for example, =et-core.el=). Update any old =et-notes-directory= or
 =et-default-theme= local overrides. Restart after renaming, not hot-reloading.
+
+Absolute line numbers are enabled globally. Prose is hard-wrapped at *95
+columns* while typing and when saving documents; completed AI responses and
+news drafts receive the same layout. Org and Markdown tables align
+automatically. Code/literal blocks, metadata and headings are preserved;
+unbreakable links and aligned table rows may exceed 95 columns. Short prose
+lines are not needlessly reflowed, and programming files are not reformatted.
 
 * Core keys and completion
 
@@ -141,7 +184,15 @@ been saved yet.
 
 * Profiles
 
-Etmacs starts in =personal=, =work=, or =general=. The selection is saved in
+Etmacs provides =personal=, =work=, and =general= profiles. First-time selection
+and =SPC C s= use a Vertico floating posframe in graphical Emacs (normal Vertico
+in a terminal). Choose an existing profile or type a new lowercase name using
+letters, digits, underscores or hyphens. New profiles get separate runtime
+state and inherit General's note domains and AI defaults; they do not create
+new note domains or move existing notes. Cancelled switches do not change the
+saved selection.
+
+The selection is saved in
 =.local/profile= (mode 0600). On a fresh instance, interactive startup asks for a
 profile; batch startup falls back to =general=. Use =SPC C s= or
 =M-x et/switch-profile= to choose another profile and restart Emacs. =SPC C P=
@@ -160,13 +211,24 @@ files, history, and bookmarks. Packages, =.local/settings.el=, =.local/custom.el
 and backup/auto-save files remain shared. On a work machine, the fresh profile
 state contains no personal OpenCode bookmarks or exported contexts.
 
-OpenCode defaults are profile-specific: =work= uses the =opencode2= executable,
-=openai/gpt-6-sol=, and hides DeepSeek models from selectors; =personal= uses
+OpenCode defaults are profile-specific: =work= uses an isolated OpenCode 2
+service with =openai/gpt-6-sol=; =personal= uses
 the =opencode= executable and =deepseek/deepseek-flash=; =general= uses
 =opencode= and =openai/gpt-6-luna=. A project can
 still override its OpenCode model with =SPC a l= or =SPC p m=. News summaries
 always start on =gpt-6-luna=; =SPC C n= or =M-x et/change-news-summary-model=
 changes that model for the current Emacs session only.
+
+*Work AI permits only direct OpenAI.* Claude/Anthropic, DeepSeek and routed
+providers are unavailable in every AI module. This covers native gptel menus,
+saved/project models, news summaries, rewrites, one-shot prompts, and requests
+after model transforms. OpenCode has a separate work service/config/credential
+store and server-side provider policy, so server-selected subagents cannot
+fall back to forbidden providers. Authenticate work separately with
+=ETMACS_WORK_ROOT="$PWD/.local/profiles/work/opencode" scripts/opencode-work=.
+=opencode2= is installed as a convenience launcher for this checkout's work store.
+These are application restrictions, not a sandbox against arbitrary user Lisp
+or system-admin policy changes.
 
 Capture templates are tagged with their profile (for example =:work:= or
 =:general:=). Roam notes add the domain tag to their existing type tag, so a
@@ -382,10 +444,10 @@ with a short empty session. Do not enable desktop restoration over these layouts
 
 * Terminal
 
-=vterm= provides a libvterm-backed terminal. Emacs must be built with dynamic
-modules, and =vterm-module.so= must compile; the first launch can build it with
-=cmake=, =make=, and a C compiler, or use your distribution's libvterm. No shell
-starts at startup.
+=vterm= provides a libvterm-backed terminal. The distribution installer builds
+and verifies =vterm-module.so= before first use, including a newer local
+libvterm when needed. Run the installer again if the module is missing after
+a package update. No shell starts at startup.
 
 | Keys            | Action                                                       |
 |-----------------+--------------------------------------------------------------|
@@ -640,7 +702,7 @@ runs on startup.
 | YAML       | yaml-mode; built-in yaml-ts-mode with grammar                     | yaml-language-server --stdio                                     |
 | Java       | Built-in java-mode / java-ts-mode                                 | jdtls with a compatible JDK, or java-language-server             |
 | SQL        | Built-in sql-mode and optional sql.el REPL                        | sqls; dialect/connection setup remains explicit                  |
-| YARA       | yara-mode (.yar/.yara)                                            | yr-ls via Emacs 31's Eglot mapping                               |
+| YARA       | yara-mode (.yar/.yara)                                            | yls (explicit Eglot mapping)                                    |
 | Dockerfile | dockerfile-mode / dockerfile-ts-mode                              | docker-langserver --stdio                                        |
 | Compose    | Small YAML-derived et/compose-mode                                | yaml-language-server --stdio                                     |
 
@@ -794,7 +856,7 @@ and terminal `C-m`), `S-RET`/`M-RET` accumulate lines, opening the REPL starts i
 insert state, arrows walk history, and history persists in
 `.local/dape-repl-history`.
 
-Dape uses adapters installed separately: =debugpy= for Python, =js-debug= for
+Dape uses adapters installed by the distribution scripts: =debugpy= for Python, =js-debug= for
 JavaScript/TypeScript, =jdtls= with the java-debug plugin for Java, and =gdb=
 (14.1 or newer) or =lldb-dap= for C/C++. For the Python example, install
 =debugpy= in the interpreter Dape will use, or select a virtualenv containing it
@@ -809,8 +871,10 @@ its own =.projectile= marker and Dape configuration where applicable.
 
 ** Installing tools separately
 
-Use the package/environment manager you trust; these are examples, not commands
-the configuration executes. Server versions must support your Node/JDK runtime.
+The distribution installers provision these tools already. The examples below
+are alternatives for manual installation and for project-specific environments;
+they are not executed at Emacs startup. Server versions must support your
+Node/JDK runtime.
 
 #+begin_src sh
 # Example Node-based servers (run yourself if desired):
@@ -830,7 +894,7 @@ npm install --save-dev vitest prettier   # or: jest
 =basedpyright-langserver= is the preferred Python server; =pytest=, =debugpy=,
 and =ruff= drive =SPC m t/T/u=, Dape, and =SPC m F= respectively. For JS/TS,
 install =jest= or =vitest= (project-local =devDependencies=) plus =prettier= for
-=SPC m F= and the js-debug adapter for Dape. Install JDT LS, sqls and yr-ls using
+=SPC m F= and the js-debug adapter for Dape. Install JDT LS, sqls and yls using
 their supported distribution instructions; check runtime requirements. Ensure
 each server/runner executable is visible in Emacs's PATH (or the selected venv /
 project =node_modules/.bin=), not just a shell.
@@ -932,9 +996,9 @@ C compiler (or an already-built =vterm-module.so=) and libvterm headers when
 compiling against the system library. mu4e needs the
 system =mu= package (already separate from ELPA); set =mu4e-maildir= in
 =.local/settings.el=. C/C++ development needs =clangd= for Eglot and either GDB
-14.1 or newer or =lldb-dap= for Dape. Doom Modeline's Nerd Font glyphs need a
-one-time =M-x et/install-nerd-fonts=. No system packages, language servers,
-debug adapters, dictionaries, or tree-sitter grammars are silently installed.
+14.1 or newer or =lldb-dap= for Dape. The distribution scripts install these
+dependencies, Nerd Font glyphs, and grammars explicitly. Nothing is downloaded
+or installed automatically during ordinary Emacs startup.
 Babel needs the corresponding interpreter/database/HTTP service for the blocks
 you execute.
 
