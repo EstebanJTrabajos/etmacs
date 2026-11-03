@@ -166,6 +166,7 @@
 (add-to-list 'eglot-server-programs
              '((et/compose-mode :language-id "yaml") . ("yaml-language-server" "--stdio")))
 (add-to-list 'eglot-server-programs '(sql-mode . ("sqls")))
+(add-to-list 'eglot-server-programs '(yara-mode . ("yls")))
 (add-to-list 'eglot-server-programs
              '((web-mode :language-id "typescriptreact") . ("typescript-language-server" "--stdio")))
 
@@ -174,7 +175,9 @@
 (defvar et/dape-java-debug-bundle
   (seq-find #'file-exists-p
             (mapcar #'expand-file-name
-                    '("/usr/share/java-debug/com.microsoft.java.debug.plugin.jar"
+                     (list (expand-file-name "share/java-debug/com.microsoft.java.debug.plugin.jar"
+                                             et/dependency-directory)
+                       "/usr/share/java-debug/com.microsoft.java.debug.plugin.jar"
                       "/usr/local/share/java-debug/com.microsoft.java.debug.plugin.jar"
                       "~/.local/share/java-debug/com.microsoft.java.debug.plugin.jar")))
   "Path to java-debug's jdtls bundle, or nil when it is not installed.")
@@ -504,7 +507,9 @@ Uses Ruff for Python, Prettier for JS/TS, and clang-format for C/C++."
                                (list "docker" "compose" "-f" buffer-file-name "config" "--quiet")
                                " ")))
 
-(defvar et/dape-js-debug-directory "/usr/lib/js-debug"
+(defvar et/dape-js-debug-directory
+  (let ((local (expand-file-name "share/js-debug" et/dependency-directory)))
+    (if (file-directory-p local) local "/usr/lib/js-debug"))
   "Directory holding a system-wide js-debug install, or nil to ignore it.
 Dape otherwise looks for <dape-adapter-dir>/js-debug/src/dapDebugServer.js.
 `dape-adapter-dir' defaults under `user-emacs-directory', which here is the

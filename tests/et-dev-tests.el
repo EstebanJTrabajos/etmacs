@@ -48,7 +48,7 @@
                       (and (listp (car entry))
                            (memq 'c++-ts-mode (car entry))))
                     eglot-server-programs))
-  (should (equal (cdr (assq 'yara-mode eglot-server-programs)) '("yr-ls"))))
+  (should (equal (cdr (assq 'yara-mode eglot-server-programs)) '("yls"))))
 
 (ert-deftest et/dev-tree-sitter-is-optional ()
   (cl-letf (((symbol-function 'treesit-ready-p) (lambda (language quiet)
@@ -150,9 +150,11 @@
 
 (ert-deftest et/dev-python-auto-prompts-once-when-none-found ()
   (let* ((root (expand-file-name "auto-no-venv-fixture/" et/test-state))
+         (process-environment (copy-sequence process-environment))
          (et/python-environment-selected (make-hash-table :test #'equal))
          (et/python-environment-declined (make-hash-table :test #'equal))
          (prompts 0))
+    (setenv "VIRTUAL_ENV" nil)
     (unwind-protect
         (progn
           (make-directory root t)

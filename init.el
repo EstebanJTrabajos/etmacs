@@ -7,6 +7,25 @@
   "Directory holding this configuration, independent of the working directory.")
 (defconst et/state-directory (expand-file-name ".local/" et/config-directory))
 (make-directory et/state-directory t)
+(require 'json)
+
+(defvar et/dependency-directory
+  (file-name-as-directory
+   (expand-file-name
+    (or (getenv "ETMACS_PREFIX")
+        (let ((file (expand-file-name "dependencies.json" et/state-directory)))
+          (when (file-readable-p file)
+            (with-temp-buffer
+              (insert-file-contents file)
+              (alist-get 'prefix (json-parse-buffer :object-type 'alist)))))
+        "~/.config/emacs/.local")))
+  "Prefix used by the distribution installers for external tools.")
+;; Desktop-launched Emacs does not necessarily inherit a login shell's PATH.
+(dolist (directory (reverse (delete-dups
+                            (list (expand-file-name "bin/" et/state-directory)
+                                  (expand-file-name "bin/" et/dependency-directory)))))
+  (add-to-list 'exec-path directory)
+  (setenv "PATH" (concat directory path-separator (getenv "PATH"))))
 
 (require 'package)
 (require 'seq)
@@ -23,12 +42,12 @@
   '(evil evil-collection vertico orderless marginalia consult
     vertico-posframe guava-themes doom-themes projectile perspective corfu treemacs
     treemacs-evil treemacs-perspective avy ace-window expand-region crux
-    gptel request parinfer-rust-mode rainbow-delimiters
+    gptel request parinfer-rust-mode rainbow-delimiters markdown-mode
     doom-modeline nerd-icons minions elfeed
     vterm hide-mode-line
     magit diff-hl git-timemachine git-modes hl-todo
     org-roam org-roam-ui org-pomodoro org-drill citar ox-hugo ox-pandoc
-    org-super-agenda org-modern
+    org-super-agenda org-modern htmlize
     restclient ob-restclient typescript-mode web-mode yaml-mode yara-mode
     dockerfile-mode docker dape)
   "Direct dependencies for the current slice; package.el resolves dependencies.")
@@ -69,6 +88,20 @@ Each entry is a recipe accepted by `package-vc-install'.")
   (require 'ob-tangle)
   (org-babel-tangle-file (expand-file-name "config.org" et/config-directory))
   (message "Configuration tangled; restart Emacs to apply changes"))
+
+(defvar et/installing-vterm nil
+  "Non-nil only while the explicit installer builds the terminal module.")
+(defvar vterm-always-compile-module)
+(defvar vterm-module-cmake-args)
+(defun et/install-vterm ()
+  "Build and load vterm now, not on the first interactive terminal use."
+  (interactive)
+  (let ((et/installing-vterm t)
+        (vterm-always-compile-module t)
+        (vterm-module-cmake-args "-DUSE_SYSTEM_LIBVTERM=ON"))
+    (require 'vterm)
+    (unless (featurep 'vterm-module)
+      (error "vterm native module did not load"))))
 
 (add-to-list 'load-path (expand-file-name "lisp/" et/config-directory))
 (let ((settings (expand-file-name "settings.el" et/state-directory)))

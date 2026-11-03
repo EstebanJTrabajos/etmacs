@@ -757,3 +757,4 @@
 (load (expand-file-name "tests/et-links-tests.el" et/test-root) nil t)
 (load (expand-file-name "tests/et-news-tests.el" et/test-root) nil t)
 (load (expand-file-name "tests/et-mail-tests.el" et/test-root) nil t)
+(load (expand-file-name "tests/et-document-tests.el" et/test-root) nil t)

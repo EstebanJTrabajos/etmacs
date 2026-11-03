@@ -31,6 +31,7 @@
   "Return HOST's auth-source key for user \"emacs\".
 Prompt for a different machine and user only when no matching
 auth-source entry exists."
+  (et/profile-check-model host)
   (require 'gptel)
   (let ((key nil))
     (condition-case nil
@@ -44,6 +45,7 @@ auth-source entry exists."
 
 (defun et/gptel-key (host)
   "Return HOST's cached key, prompting through auth-source when needed."
+  (et/profile-check-model host)
   (or (alist-get host et/gptel-keys nil nil #'equal)
       (let ((key (et/gptel-auth-source-key host)))
         (setf (alist-get host et/gptel-keys nil nil #'equal) key)
@@ -53,10 +55,10 @@ auth-source entry exists."
   "Prompt for and cache API keys for PROVIDER, or all providers."
   (interactive
    (list (completing-read "Provider: "
-                          '("all" "api.openai.com" "api.anthropic.com" "api.deepseek.com")
+                           (cons "all" (et/gptel-allowed-hosts))
                           nil t nil nil "all")))
   (let ((hosts (if (equal provider "all")
-                   '("api.openai.com" "api.anthropic.com" "api.deepseek.com")
+                    (et/gptel-allowed-hosts)
                  (list provider))))
     (dolist (host hosts)
       (setf (alist-get host et/gptel-keys nil nil #'equal)
@@ -271,7 +273,48 @@ Return the selected model string, or nil when cancelled."
 
 (defun et/opencode--binary ()
   "Return the OpenCode executable for the active profile."
-  et/profile-opencode-binary)
+  (if (equal et/profile "work")
+      (expand-file-name "scripts/opencode-work" et/config-directory)
+    et/profile-opencode-binary))
+
+(defun et/opencode-work-directory ()
+  "Return the isolated work-profile OpenCode root."
+  (expand-file-name "profiles/work/opencode/" et/state-directory))
+
+(defun et/opencode-registration-file (original)
+  "Use a separate service registration in work, otherwise call ORIGINAL."
+  (if (equal et/profile "work")
+      (expand-file-name "state/opencode/service.json" (et/opencode-work-directory))
+    (funcall original)))
+
+(defun et/opencode-check-reference (model)
+  "Validate a MODEL string or OpenCode model-reference alist."
+  (let* ((provider (and (listp model) (alist-get 'providerID model)))
+         (name (if (stringp model) model
+                 (format "%s/%s" provider (or (alist-get 'id model)
+                                              (alist-get 'modelID model))))))
+    (et/profile-check-model name)
+    ;; The direct provider restriction also covers agent-selected models.
+    (when (and (equal et/profile "work") model
+               (not (if (stringp model) (string-prefix-p "openai/" model)
+                      (equal provider "openai"))))
+      (user-error "Work AI requires the direct OpenAI provider"))))
+
+(defun et/opencode-check-request (_connection _method _path &rest args)
+  "Validate explicit model references before the HTTP client sends ARGS."
+  (when-let* ((model (alist-get 'model (plist-get args :json))))
+    (et/opencode-check-reference model)))
+
+(defun et/opencode-check-run (_prompt _callback &rest args)
+  "Validate the MODEL option in one-shot OpenCode calls with ARGS."
+  (when-let* ((model (plist-get args :model)))
+    (et/opencode-check-reference model)))
+
+(defun et/opencode-model-hidden-p (model)
+  "Whether OpenCode MODEL is unavailable under the active profile policy."
+  (or (et/profile-model-hidden-p model)
+      (and model (equal et/profile "work")
+           (not (string-prefix-p "openai/" model)))))
 
 (defun et/opencode--cli-models (root)
   "Return OpenCode's model names for ROOT using the CLI."
@@ -280,7 +323,7 @@ Return the selected model string, or nil when cancelled."
            (file-name-as-directory (expand-file-name root))))
       (condition-case nil
           (seq-remove
-           #'et/profile-model-hidden-p
+           #'et/opencode-model-hidden-p
            (delete-dups
             (seq-filter
              (lambda (line)
@@ -306,13 +349,13 @@ Return the selected model string, or nil when cancelled."
                    (goto-char (point-min))
                    (alist-get 'model (json-parse-buffer :object-type 'alist)))
                (error nil))))
-        (unless (et/profile-model-hidden-p model) model)))))
+        (unless (et/opencode-model-hidden-p model) model)))))
 
 (defun et/opencode--read-project-model (root)
   "Read ROOT's OpenCode model from the CLI catalog."
   (let* ((models (et/opencode--cli-models root))
          (stored (et/project-model-get root :opencode))
-         (configured (or (and (not (et/profile-model-hidden-p stored)) stored)
+         (configured (or (and (not (et/opencode-model-hidden-p stored)) stored)
                          (et/project--opencode-config-model root)
                          et/profile-opencode-model))
          (default (if (member configured models) configured (car models))))
@@ -453,7 +496,7 @@ Return the selected model string, or nil when cancelled."
                (not (file-remote-p root))
                (not (et/project-models-configured-p root)))
       (let ((stored (et/project-model-get root :opencode)))
-        (when (et/profile-model-hidden-p stored)
+        (when (et/opencode-model-hidden-p stored)
           (setq stored nil)
           (et/project-model-set root :opencode nil)
           (et/project-models-save))
@@ -756,6 +799,7 @@ When PROMPT is non-nil, offer saved project roots or read a directory."
 
 (defun et/gptel-save-default (backend model)
   "Persist BACKEND and MODEL as the default gptel choice."
+  (et/gptel-check-model backend model)
   (let ((coding-system-for-write 'utf-8-unix))
     (with-temp-file et/gptel-state-file
       (insert ";; Generated by et/gptel-set-default; do not edit by hand.\n")
@@ -848,16 +892,63 @@ With prefix ARG, set the selected model as the persistent default."
           :host "api.openai.com"
           :key (lambda () (et/gptel-key "api.openai.com")))
         et/gptel-anthropic
-        (gptel-make-anthropic "Anthropic"
+        (unless (equal et/profile "work")
+          (gptel-make-anthropic "Anthropic"
           :host "api.anthropic.com"
-          :key (lambda () (et/gptel-key "api.anthropic.com")))
+          :key (lambda () (et/gptel-key "api.anthropic.com"))))
         et/gptel-deepseek
-        (gptel-make-deepseek "DeepSeek"
+        (unless (equal et/profile "work")
+          (gptel-make-deepseek "DeepSeek"
           :host "api.deepseek.com"
-          :key (lambda () (et/gptel-key "api.deepseek.com")))
+          :key (lambda () (et/gptel-key "api.deepseek.com"))))
         gptel-backend et/gptel-openai
         gptel-model 'gpt-6-luna)
   (et/gptel-load-default))
+
+(defun et/gptel-allowed-hosts ()
+  "Return the auth hosts permitted in this profile."
+  (seq-remove #'et/profile-model-hidden-p
+              '("api.openai.com" "api.anthropic.com" "api.deepseek.com")))
+
+(defun et/gptel-check-model (backend model)
+  "Check BACKEND and MODEL, including custom proxy names and hosts."
+  (dolist (identifier (list (gptel-backend-name backend)
+                           (gptel-backend-host backend)
+                           (format "%s" model)))
+    (et/profile-check-model identifier))
+  (when (and (equal et/profile "work")
+             (not (equal (gptel-backend-host backend) "api.openai.com")))
+    (user-error "Work AI requires the direct OpenAI backend")))
+
+(defun et/gptel-check-request (&rest _)
+  "Guard direct gptel calls as well as Etmacs commands."
+  (et/gptel-check-model gptel-backend gptel-model))
+
+(defun et/gptel-check-transport (fsm)
+  "Recheck the final FSM after transforms, retries, and tool calls."
+  (let ((info (gptel-fsm-info fsm)))
+    (et/gptel-check-model (plist-get info :backend) (plist-get info :model))
+    (when-let* ((model (plist-get (plist-get info :data) :model)))
+      (et/profile-check-model (format "%s" model)))))
+
+(defun et/gptel-prune-backends ()
+  "Remove forbidden backends and models from gptel's native menu too."
+  (setq gptel--known-backends
+        (seq-remove
+         (lambda (entry)
+           (let ((backend (cdr entry)))
+             (or (et/profile-model-hidden-p (car entry))
+                 (et/profile-model-hidden-p (gptel-backend-host backend))
+                 (and (equal et/profile "work")
+                      (not (equal (gptel-backend-host backend) "api.openai.com"))))))
+         gptel--known-backends))
+  ;; gptel installs the struct setter only when loaded, after this file is read.
+  (when (equal et/profile "work")
+    (dolist (entry gptel--known-backends)
+      (let ((models (seq-remove (lambda (model)
+                                 (et/profile-model-hidden-p (format "%s" model)))
+                               (gptel-backend-models (cdr entry)))))
+        (eval `(setf (gptel-backend-models ',(cdr entry)) ',models) t)))))
 
 (use-package gptel
   :if (locate-library "gptel")
@@ -867,7 +958,15 @@ With prefix ARG, set the selected model as the persistent default."
   :config
   (setq gptel-include-reasoning nil)
   (et/gptel-configure)
+  (et/gptel-prune-backends)
+  (advice-add 'gptel-request :before #'et/gptel-check-request)
+  (advice-add 'gptel--url-get-response :before #'et/gptel-check-transport)
+  (advice-add 'gptel-curl-get-response :before #'et/gptel-check-transport)
+  (add-hook 'gptel-post-response-functions #'et/document-format-region)
   (add-hook 'find-file-hook #'et/project-apply-gptel-model))
+
+(with-eval-after-load 'gptel-rewrite
+  (add-hook 'gptel-post-rewrite-functions #'et/document-format-region))
 
 ;; OpenCode's built-in model picker prioritizes recent and connected models.
 ;; Etmacs additionally puts providers with a stored API key or subscription
@@ -948,7 +1047,9 @@ providers for the active profile are removed."
   (et/opencode--sort-model-candidates
    (seq-remove
     (lambda (candidate)
-      (et/profile-model-hidden-p (plist-get candidate :display)))
+      (or (et/profile-model-hidden-p (plist-get candidate :display))
+          (and (equal et/profile "work")
+               (not (equal (plist-get candidate :provider-id) "openai")))))
     (funcall orig connection))
    (or connection opencode-session--connection)))
 
@@ -964,6 +1065,9 @@ Returns the selected candidate plist, or nil when the prompt is cancelled."
     (dolist (candidate candidates)
       (let ((display (plist-get candidate :display)))
         (when (and (stringp display)
+                   (not (et/profile-model-hidden-p display))
+                   (or (not (equal et/profile "work"))
+                       (equal (plist-get candidate :provider-id) "openai"))
                    (or (null provider-id)
                        (and (plist-get candidate :connected-p)
                             (equal (plist-get candidate :provider-id)
@@ -1020,7 +1124,7 @@ Returns the selected candidate plist, or nil when the prompt is cancelled."
   "Return CONNECTION's saved project model candidate, when available."
   (let* ((root (et/opencode--project-root connection))
          (display (and root (et/project-model-get root :opencode))))
-    (when (and display (not (et/profile-model-hidden-p display)))
+    (when (and display (not (et/opencode-model-hidden-p display)))
       (seq-find
        (lambda (candidate)
          (and (plist-get candidate :connected-p)
@@ -1134,7 +1238,10 @@ Call ON-CREATED with the new session, as `opencode--create-session' does."
   (advice-remove 'opencode-session--provider-model-candidates
                  #'et/opencode--sorted-candidates)
   (advice-add 'opencode-session--provider-model-candidates :around
-              #'et/opencode--sorted-candidates))
+              #'et/opencode--sorted-candidates)
+  (advice-add 'opencode-request :before #'et/opencode-check-request)
+  (advice-add 'opencode-connection-registration-file :around
+              #'et/opencode-registration-file))
 
 (defvar et/session-map
   (let ((map (make-sparse-keymap "sessions")))
@@ -1164,13 +1271,19 @@ Call ON-CREATED with the new session, as `opencode--create-session' does."
 (use-package emacs-opencode
   :if (locate-library "emacs-opencode")
   :commands (opencode opencode-ask opencode-ask-contextual
-             opencode-open-session opencode-send-to-session
-             opencode-send-context-to-session opencode-mcp-status
-             opencode-disconnect opencode-restart)
+              opencode-open-session opencode-send-to-session
+              opencode-send-context-to-session opencode-mcp-status
+              opencode-disconnect opencode-restart)
+  :init
+  (setq opencode-server-command (et/opencode--binary))
+  (setenv "ETMACS_WORK_ROOT" (et/opencode-work-directory))
   :config
   (when (locate-library "emacs-opencode-magit")
     (require 'emacs-opencode-magit))
   (et/opencode--install-model-selection))
+
+(with-eval-after-load 'emacs-opencode-run
+  (advice-add 'opencode-run :before #'et/opencode-check-run))
 
 (define-key et/ai-map (kbd "g") #'et/gptel)
 (define-key et/ai-map (kbd "s") #'et/gptel-send)

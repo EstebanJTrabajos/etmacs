@@ -56,6 +56,25 @@ package directory first. No global bidi or aggressive GC tweaks.
     "Directory holding this configuration, independent of the working directory.")
   (defconst et/state-directory (expand-file-name ".local/" et/config-directory))
   (make-directory et/state-directory t)
+  (require 'json)
+
+  (defvar et/dependency-directory
+    (file-name-as-directory
+     (expand-file-name
+      (or (getenv "ETMACS_PREFIX")
+          (let ((file (expand-file-name "dependencies.json" et/state-directory)))
+            (when (file-readable-p file)
+              (with-temp-buffer
+                (insert-file-contents file)
+                (alist-get 'prefix (json-parse-buffer :object-type 'alist)))))
+          "~/.config/emacs/.local")))
+    "Prefix used by the distribution installers for external tools.")
+  ;; Desktop-launched Emacs does not necessarily inherit a login shell's PATH.
+  (dolist (directory (reverse (delete-dups
+                              (list (expand-file-name "bin/" et/state-directory)
+                                    (expand-file-name "bin/" et/dependency-directory)))))
+    (add-to-list 'exec-path directory)
+    (setenv "PATH" (concat directory path-separator (getenv "PATH"))))
 
   (require 'package)
   (require 'seq)
@@ -72,12 +91,12 @@ package directory first. No global bidi or aggressive GC tweaks.
     '(evil evil-collection vertico orderless marginalia consult
       vertico-posframe guava-themes doom-themes projectile perspective corfu treemacs
       treemacs-evil treemacs-perspective avy ace-window expand-region crux
-      gptel request parinfer-rust-mode rainbow-delimiters
+      gptel request parinfer-rust-mode rainbow-delimiters markdown-mode
       doom-modeline nerd-icons minions elfeed
       vterm hide-mode-line
       magit diff-hl git-timemachine git-modes hl-todo
       org-roam org-roam-ui org-pomodoro org-drill citar ox-hugo ox-pandoc
-      org-super-agenda org-modern
+      org-super-agenda org-modern htmlize
       restclient ob-restclient typescript-mode web-mode yaml-mode yara-mode
       dockerfile-mode docker dape)
     "Direct dependencies for the current slice; package.el resolves dependencies.")
@@ -119,6 +138,20 @@ package directory first. No global bidi or aggressive GC tweaks.
     (org-babel-tangle-file (expand-file-name "config.org" et/config-directory))
     (message "Configuration tangled; restart Emacs to apply changes"))
 
+  (defvar et/installing-vterm nil
+    "Non-nil only while the explicit installer builds the terminal module.")
+  (defvar vterm-always-compile-module)
+  (defvar vterm-module-cmake-args)
+  (defun et/install-vterm ()
+    "Build and load vterm now, not on the first interactive terminal use."
+    (interactive)
+    (let ((et/installing-vterm t)
+          (vterm-always-compile-module t)
+          (vterm-module-cmake-args "-DUSE_SYSTEM_LIBVTERM=ON"))
+      (require 'vterm)
+      (unless (featurep 'vterm-module)
+        (error "vterm native module did not load"))))
+
   (add-to-list 'load-path (expand-file-name "lisp/" et/config-directory))
   (let ((settings (expand-file-name "settings.el" et/state-directory)))
     (when (file-exists-p settings) (load settings nil 'nomessage)))
@@ -158,8 +191,16 @@ is written with mode 0600. If no profile is saved, interactive startup asks for
 one; batch startup falls back to =general= so installation and tests never
 block.
 
-The work profile defaults OpenCode to =openai/gpt-6-sol= and hides DeepSeek
-models. The personal profile defaults OpenCode to
+First-time selection and =SPC C s= initialize Vertico/Posframe before prompting.
+The menu accepts existing profiles or new lowercase names (letters, digits,
+underscores, hyphens). Custom profiles persist in =.local/profiles.json=,
+have their own runtime state, and inherit General's note-domain defaults.
+Terminal Emacs uses Vertico's normal minibuffer fallback.
+
+The work profile defaults OpenCode to =openai/gpt-6-sol= and allows only direct
+OpenAI in every AI integration. Claude/Anthropic, DeepSeek, and indirect
+providers are blocked, including saved settings and request-time overrides.
+The personal profile defaults OpenCode to
 =deepseek/deepseek-flash=. The general profile uses =openai/gpt-6-luna= as a
 neutral default. News summaries remain on =gpt-6-luna= until changed with
 =SPC C n= or =M-x et/change-news-summary-model= for the current session.
@@ -168,6 +209,8 @@ neutral default. News summaries remain on =gpt-6-luna= until changed with
 ;;; et-profile.el --- Generated from config.org -*- lexical-binding: t; -*-
 (require 'seq)
 (require 'subr-x)
+(require 'cl-lib)
+(require 'json)
 
 (defconst et/profiles
   '((personal
@@ -184,7 +227,7 @@ neutral default. News summaries remain on =gpt-6-luna= until changed with
      :tag "work"
      :opencode-model "openai/gpt-6-sol"
      :opencode-binary "opencode2"
-     :hidden-providers ("deepseek"))
+     :hidden-providers ("anthropic" "claude" "deepseek"))
     (general
      :label "General"
      :domain "general"
@@ -196,6 +239,73 @@ neutral default. News summaries remain on =gpt-6-luna= until changed with
 
 (defvar et/profile-file (expand-file-name "profile" et/state-directory)
   "File holding this configuration instance's selected profile.")
+(defvar et/custom-profiles-file (expand-file-name "profiles.json" et/state-directory)
+  "Data-only catalog of user-created profile names.")
+(defvar et/custom-profiles nil
+  "User-created profiles, stored separately from the built-in defaults.")
+(defun et/profile-name-safe-p (name)
+  "Whether NAME is safe to use as a profile directory and identifier."
+  (let ((case-fold-search nil))
+    (and (stringp name)
+         (string-match-p "\\`[a-z][a-z0-9_-]*\\'" name)
+         (<= (length name) 64))))
+
+(defun et/profile-custom-spec (name)
+  "Return General's defaults with a distinct display label for NAME."
+  (let ((spec (copy-tree (cdr (assq 'general et/profiles)))))
+    (plist-put spec :label (capitalize name))))
+
+(defun et/profile-load-custom ()
+  "Load custom names without evaluating Lisp or changing built-in profiles."
+  (setq et/custom-profiles nil)
+  (when (file-readable-p et/custom-profiles-file)
+    (condition-case err
+        (let ((names (with-temp-buffer
+                       (insert-file-contents et/custom-profiles-file)
+                       (json-parse-buffer :array-type 'list))))
+          (dolist (name names)
+            (when (and (et/profile-name-safe-p name)
+                       (not (assq (intern name) et/profiles)))
+              (push (cons (intern name) (et/profile-custom-spec name))
+                    et/custom-profiles))))
+      (error (display-warning 'etmacs
+                              (format "Cannot read custom profiles: %s" err))))))
+
+(defun et/profile-create (name)
+  "Persist a custom profile NAME inheriting General's note and AI defaults."
+  (unless (et/profile-name-safe-p name)
+    (user-error "Use a lowercase letter followed by letters, digits, _ or - (max 64)"))
+  (unless (et/profile-valid-p name)
+    (push (cons (intern name) (et/profile-custom-spec name))
+          et/custom-profiles)
+    (make-directory (file-name-directory et/custom-profiles-file) t)
+    (let ((file (make-temp-file
+                 (expand-file-name ".profiles-" et/state-directory))))
+      (unwind-protect
+          (progn
+            (with-temp-file file
+              (insert (json-serialize
+                       (vconcat (mapcar (lambda (entry) (symbol-name (car entry)))
+                                        et/custom-profiles)))))
+            (set-file-modes file #o600)
+            (rename-file file et/custom-profiles-file t))
+        (when (file-exists-p file) (delete-file file)))))
+  name)
+
+(defun et/profile-read (prompt &optional default)
+  "Read an existing or new profile using PROMPT and DEFAULT."
+  ;; Profile state paths are needed before other modules load.  Initialize just
+  ;; the completion UI here rather than moving profile selection after startup.
+  (when (require 'vertico nil t)
+    (vertico-mode 1)
+    (when (require 'vertico-posframe nil t)
+      (setq vertico-posframe-border-width 2)
+      (vertico-posframe-mode 1)))
+  (let ((name (string-trim
+               (completing-read prompt (et/profile-names) nil nil nil nil default))))
+    (unless (et/profile-name-safe-p name)
+      (user-error "Invalid profile name: %s" name))
+    name))
 (defvar et/profile "general"
   "Active profile name.")
 (defvar et/profile-domains '("general")
@@ -222,7 +332,8 @@ neutral default. News summaries remain on =gpt-6-luna= until changed with
 (defun et/profile-spec (name)
   "Return the plist for profile NAME, or nil."
   (let ((key (et/profile-key name)))
-    (and key (alist-get key et/profiles))))
+    (and key (or (alist-get key et/profiles)
+                 (alist-get key et/custom-profiles)))))
 
 (defun et/profile-valid-p (name)
   "Return non-nil when NAME names a supported profile."
@@ -230,7 +341,8 @@ neutral default. News summaries remain on =gpt-6-luna= until changed with
 
 (defun et/profile-names ()
   "Return supported profile names as strings."
-  (mapcar #'symbol-name (mapcar #'car et/profiles)))
+  (delete-dups (mapcar (lambda (entry) (symbol-name (car entry)))
+                       (append et/profiles et/custom-profiles))))
 
 (defun et/profile-tag (&optional name)
   "Return the Org tag for profile NAME, defaulting to the active profile."
@@ -240,15 +352,25 @@ neutral default. News summaries remain on =gpt-6-luna= until changed with
 
 (defun et/profile-model-hidden-p (model)
   "Return non-nil when MODEL belongs to a provider hidden by this profile."
-  (and (stringp model) et/profile-hidden-providers
-       (let ((case-fold-search t))
-         (seq-some
-          (lambda (provider)
-            (string-match-p
-             (format "\\(?:\\`\\|/\\)%s\\(?:/\\|:\\|\\'\\)"
-                     (regexp-quote provider))
-             model))
-          et/profile-hidden-providers))))
+  (and (stringp model)
+       (or (when (equal et/profile "work")
+             (let ((case-fold-search t))
+               ;; Match families behind routers too, e.g. Bedrock/OpenRouter.
+               (string-match-p "anthropic\\|claude\\|deepseek" model)))
+           (and et/profile-hidden-providers
+                (let ((case-fold-search t))
+                  (seq-some
+                   (lambda (provider)
+                     (string-match-p
+                      (format "\\(?:\\`\\|/\\)%s\\(?:/\\|:\\|\\'\\)"
+                              (regexp-quote provider))
+                      model))
+                   et/profile-hidden-providers))))))
+
+(defun et/profile-check-model (model)
+  "Refuse MODEL when the active profile forbids it."
+  (when (et/profile-model-hidden-p model)
+    (user-error "Model/provider %s is forbidden in the %s profile" model et/profile)))
 
 (defun et/profile--read-selection ()
   "Return the saved profile name, or nil."
@@ -284,7 +406,7 @@ neutral default. News summaries remain on =gpt-6-luna= until changed with
                                          "opencode")
           et/profile-hidden-providers (plist-get spec :hidden-providers)
           et/org-domain (plist-get spec :domain)
-          et/org-agenda-scope (symbol-name key)
+          et/org-agenda-scope (plist-get spec :domain)
           et/dashboard-agenda-domains (copy-sequence (plist-get spec :domains)))
     (make-directory et/profile-state-directory t)
     (unless noninteractive
@@ -298,10 +420,9 @@ neutral default. News summaries remain on =gpt-6-luna= until changed with
          (saved (or env (et/profile--read-selection)))
          (name (cond
                 ((et/profile-valid-p saved) (et/profile-key saved))
-                ((and prompt (not noninteractive))
-                 (et/profile-key
-                  (completing-read "Etmacs profile: " (et/profile-names)
-                                   nil t nil nil "general")))
+                 ((and prompt (not noninteractive))
+                  (et/profile-key
+                   (et/profile-create (et/profile-read "Etmacs profile: " "general"))))
                 (t 'general))))
     (when (and saved (not (et/profile-valid-p saved)) (not noninteractive))
       (display-warning 'etmacs
@@ -327,19 +448,21 @@ neutral default. News summaries remain on =gpt-6-luna= until changed with
 (defun et/switch-profile (name)
   "Switch to profile NAME and restart Emacs."
   (interactive
-   (list (completing-read "Switch to profile: " (et/profile-names)
-                          nil t nil nil et/profile)))
+   (list (et/profile-read "Switch to profile: " et/profile)))
   (let ((name (et/profile-key name)))
-    (unless (et/profile-valid-p name)
-      (user-error "Unknown profile: %s" name))
-    (et/profile-save name)
     (if noninteractive
-        (et/profile-apply name)
+        (progn
+          (et/profile-create (symbol-name name))
+          (et/profile-save name)
+          (et/profile-apply name))
       (when (yes-or-no-p
-             (format "Switch to %s and restart Emacs? "
-                     (plist-get (et/profile-spec name) :label)))
+              (format "Switch to %s and restart Emacs? "
+                      name))
+        (et/profile-create (symbol-name name))
+        (et/profile-save name)
         (et/reload-config)))))
 
+(et/profile-load-custom)
 (et/profile-load t)
 (provide 'et-profile)
 ;;; et-profile.el ends here
@@ -359,6 +482,11 @@ where Evil Collection binds =SPC= to a package command. =C-c SPC= remains
 available in insert/Emacs states. =SPC m= resolves a buffer-local or registered
 package menu, and =SPC ?= opens Which Key for the active mappings. Evil
 Collection supplies j/k/h/l navigation in package buffers.
+
+Absolute line numbers are enabled globally. Text uses a 95-column fill width,
+with automatic hard line breaks in prose and aligned Org/Markdown tables on
+save and after document generation. Code/literal blocks, metadata, headings,
+and indivisible links are preserved. Short prose lines are not reflowed.
 
 #+begin_src emacs-lisp :tangle lisp/et-core.el
 ;;; et-core.el --- Generated from config.org -*- lexical-binding: t; -*-
@@ -391,7 +519,11 @@ Collection supplies j/k/h/l navigation in package buffers.
 (setq which-key-idle-delay 0.5)
 (which-key-mode 1)
 (column-number-mode 1)
-(add-hook 'prog-mode-hook #'display-line-numbers-mode)
+(setq-default display-line-numbers-type t
+              fill-column 95
+              truncate-lines t
+              word-wrap nil)
+(global-display-line-numbers-mode 1)
 
 (defvar et/leader-map (make-sparse-keymap "leader"))
 (defvar et/file-map (make-sparse-keymap "files"))
@@ -2191,8 +2323,10 @@ BACKEND and MODEL select the gptel backend and model."
               (insert
                (if (stringp response)
                    response
-                 (format "# Summary request failed: %s\n"
-                         (or (plist-get info :status) "unknown error"))))
+                  (format "# Summary request failed: %s\n"
+                          (or (plist-get info :status) "unknown error"))))
+              (when (stringp response)
+                (et/document-format-region (point-min) (point-max)))
               (set-buffer-modified-p nil)
               (goto-char (point-min)))))))))
 
@@ -2559,6 +2693,7 @@ The startup default remains `gpt-6-luna'; this does not persist."
                           row)))
                     related))))
         (when nodes (et/news--link-related-table nodes))
+        (et/document-format-region (point-min) (point-max))
         (save-buffer)
         (when (fboundp 'org-roam-db-update-file)
           (org-roam-db-update-file file))
@@ -2886,7 +3021,8 @@ instead of failing inside mu4e. =SPC M= is the mail group.
 (define-key et/leader-map (kbd "M") (cons "mail" et/mail-map))
 
 (defvar et/mu4e-directories
-  '("/usr/share/emacs/site-lisp/mu4e"
+  (list (expand-file-name "share/emacs/site-lisp/mu4e" et/dependency-directory)
+    "/usr/share/emacs/site-lisp/mu4e"
     "/usr/local/share/emacs/site-lisp/mu4e"
     "~/.emacs.d/mu4e")
   "Candidate directories containing mu4e.")
@@ -2999,7 +3135,7 @@ a prompt is submitted. =SPC a o= starts a new session, =SPC a O= reopens an
 existing one, =SPC a a= asks a one-shot question, and =SPC a c= sends the active
 region (or the lines around point) along with the prompt. Sessions use the saved
 project model, then the active profile's default (=openai/gpt-6-sol= for work
-with DeepSeek hidden, =deepseek/deepseek-flash= for personal); if neither is
+with direct OpenAI only, =deepseek/deepseek-flash= for personal); if neither is
 available, the session prompts for a replacement. Connected providers with an
 API key or subscription credential
 appear before free/local providers and providers that still need connecting. In
@@ -3043,6 +3179,7 @@ optional =emacs-opencode-magit= integration adds repository diffs under
   "Return HOST's auth-source key for user \"emacs\".
 Prompt for a different machine and user only when no matching
 auth-source entry exists."
+  (et/profile-check-model host)
   (require 'gptel)
   (let ((key nil))
     (condition-case nil
@@ -3056,6 +3193,7 @@ auth-source entry exists."
 
 (defun et/gptel-key (host)
   "Return HOST's cached key, prompting through auth-source when needed."
+  (et/profile-check-model host)
   (or (alist-get host et/gptel-keys nil nil #'equal)
       (let ((key (et/gptel-auth-source-key host)))
         (setf (alist-get host et/gptel-keys nil nil #'equal) key)
@@ -3065,10 +3203,10 @@ auth-source entry exists."
   "Prompt for and cache API keys for PROVIDER, or all providers."
   (interactive
    (list (completing-read "Provider: "
-                          '("all" "api.openai.com" "api.anthropic.com" "api.deepseek.com")
+                           (cons "all" (et/gptel-allowed-hosts))
                           nil t nil nil "all")))
   (let ((hosts (if (equal provider "all")
-                   '("api.openai.com" "api.anthropic.com" "api.deepseek.com")
+                    (et/gptel-allowed-hosts)
                  (list provider))))
     (dolist (host hosts)
       (setf (alist-get host et/gptel-keys nil nil #'equal)
@@ -3283,7 +3421,48 @@ Return the selected model string, or nil when cancelled."
 
 (defun et/opencode--binary ()
   "Return the OpenCode executable for the active profile."
-  et/profile-opencode-binary)
+  (if (equal et/profile "work")
+      (expand-file-name "scripts/opencode-work" et/config-directory)
+    et/profile-opencode-binary))
+
+(defun et/opencode-work-directory ()
+  "Return the isolated work-profile OpenCode root."
+  (expand-file-name "profiles/work/opencode/" et/state-directory))
+
+(defun et/opencode-registration-file (original)
+  "Use a separate service registration in work, otherwise call ORIGINAL."
+  (if (equal et/profile "work")
+      (expand-file-name "state/opencode/service.json" (et/opencode-work-directory))
+    (funcall original)))
+
+(defun et/opencode-check-reference (model)
+  "Validate a MODEL string or OpenCode model-reference alist."
+  (let* ((provider (and (listp model) (alist-get 'providerID model)))
+         (name (if (stringp model) model
+                 (format "%s/%s" provider (or (alist-get 'id model)
+                                              (alist-get 'modelID model))))))
+    (et/profile-check-model name)
+    ;; The direct provider restriction also covers agent-selected models.
+    (when (and (equal et/profile "work") model
+               (not (if (stringp model) (string-prefix-p "openai/" model)
+                      (equal provider "openai"))))
+      (user-error "Work AI requires the direct OpenAI provider"))))
+
+(defun et/opencode-check-request (_connection _method _path &rest args)
+  "Validate explicit model references before the HTTP client sends ARGS."
+  (when-let* ((model (alist-get 'model (plist-get args :json))))
+    (et/opencode-check-reference model)))
+
+(defun et/opencode-check-run (_prompt _callback &rest args)
+  "Validate the MODEL option in one-shot OpenCode calls with ARGS."
+  (when-let* ((model (plist-get args :model)))
+    (et/opencode-check-reference model)))
+
+(defun et/opencode-model-hidden-p (model)
+  "Whether OpenCode MODEL is unavailable under the active profile policy."
+  (or (et/profile-model-hidden-p model)
+      (and model (equal et/profile "work")
+           (not (string-prefix-p "openai/" model)))))
 
 (defun et/opencode--cli-models (root)
   "Return OpenCode's model names for ROOT using the CLI."
@@ -3292,7 +3471,7 @@ Return the selected model string, or nil when cancelled."
            (file-name-as-directory (expand-file-name root))))
       (condition-case nil
           (seq-remove
-           #'et/profile-model-hidden-p
+           #'et/opencode-model-hidden-p
            (delete-dups
             (seq-filter
              (lambda (line)
@@ -3318,13 +3497,13 @@ Return the selected model string, or nil when cancelled."
                    (goto-char (point-min))
                    (alist-get 'model (json-parse-buffer :object-type 'alist)))
                (error nil))))
-        (unless (et/profile-model-hidden-p model) model)))))
+        (unless (et/opencode-model-hidden-p model) model)))))
 
 (defun et/opencode--read-project-model (root)
   "Read ROOT's OpenCode model from the CLI catalog."
   (let* ((models (et/opencode--cli-models root))
          (stored (et/project-model-get root :opencode))
-         (configured (or (and (not (et/profile-model-hidden-p stored)) stored)
+         (configured (or (and (not (et/opencode-model-hidden-p stored)) stored)
                          (et/project--opencode-config-model root)
                          et/profile-opencode-model))
          (default (if (member configured models) configured (car models))))
@@ -3465,7 +3644,7 @@ Return the selected model string, or nil when cancelled."
                (not (file-remote-p root))
                (not (et/project-models-configured-p root)))
       (let ((stored (et/project-model-get root :opencode)))
-        (when (et/profile-model-hidden-p stored)
+        (when (et/opencode-model-hidden-p stored)
           (setq stored nil)
           (et/project-model-set root :opencode nil)
           (et/project-models-save))
@@ -3768,6 +3947,7 @@ When PROMPT is non-nil, offer saved project roots or read a directory."
 
 (defun et/gptel-save-default (backend model)
   "Persist BACKEND and MODEL as the default gptel choice."
+  (et/gptel-check-model backend model)
   (let ((coding-system-for-write 'utf-8-unix))
     (with-temp-file et/gptel-state-file
       (insert ";; Generated by et/gptel-set-default; do not edit by hand.\n")
@@ -3860,16 +4040,63 @@ With prefix ARG, set the selected model as the persistent default."
           :host "api.openai.com"
           :key (lambda () (et/gptel-key "api.openai.com")))
         et/gptel-anthropic
-        (gptel-make-anthropic "Anthropic"
+        (unless (equal et/profile "work")
+          (gptel-make-anthropic "Anthropic"
           :host "api.anthropic.com"
-          :key (lambda () (et/gptel-key "api.anthropic.com")))
+          :key (lambda () (et/gptel-key "api.anthropic.com"))))
         et/gptel-deepseek
-        (gptel-make-deepseek "DeepSeek"
+        (unless (equal et/profile "work")
+          (gptel-make-deepseek "DeepSeek"
           :host "api.deepseek.com"
-          :key (lambda () (et/gptel-key "api.deepseek.com")))
+          :key (lambda () (et/gptel-key "api.deepseek.com"))))
         gptel-backend et/gptel-openai
         gptel-model 'gpt-6-luna)
   (et/gptel-load-default))
+
+(defun et/gptel-allowed-hosts ()
+  "Return the auth hosts permitted in this profile."
+  (seq-remove #'et/profile-model-hidden-p
+              '("api.openai.com" "api.anthropic.com" "api.deepseek.com")))
+
+(defun et/gptel-check-model (backend model)
+  "Check BACKEND and MODEL, including custom proxy names and hosts."
+  (dolist (identifier (list (gptel-backend-name backend)
+                           (gptel-backend-host backend)
+                           (format "%s" model)))
+    (et/profile-check-model identifier))
+  (when (and (equal et/profile "work")
+             (not (equal (gptel-backend-host backend) "api.openai.com")))
+    (user-error "Work AI requires the direct OpenAI backend")))
+
+(defun et/gptel-check-request (&rest _)
+  "Guard direct gptel calls as well as Etmacs commands."
+  (et/gptel-check-model gptel-backend gptel-model))
+
+(defun et/gptel-check-transport (fsm)
+  "Recheck the final FSM after transforms, retries, and tool calls."
+  (let ((info (gptel-fsm-info fsm)))
+    (et/gptel-check-model (plist-get info :backend) (plist-get info :model))
+    (when-let* ((model (plist-get (plist-get info :data) :model)))
+      (et/profile-check-model (format "%s" model)))))
+
+(defun et/gptel-prune-backends ()
+  "Remove forbidden backends and models from gptel's native menu too."
+  (setq gptel--known-backends
+        (seq-remove
+         (lambda (entry)
+           (let ((backend (cdr entry)))
+             (or (et/profile-model-hidden-p (car entry))
+                 (et/profile-model-hidden-p (gptel-backend-host backend))
+                 (and (equal et/profile "work")
+                      (not (equal (gptel-backend-host backend) "api.openai.com"))))))
+         gptel--known-backends))
+  ;; gptel installs the struct setter only when loaded, after this file is read.
+  (when (equal et/profile "work")
+    (dolist (entry gptel--known-backends)
+      (let ((models (seq-remove (lambda (model)
+                                 (et/profile-model-hidden-p (format "%s" model)))
+                               (gptel-backend-models (cdr entry)))))
+        (eval `(setf (gptel-backend-models ',(cdr entry)) ',models) t)))))
 
 (use-package gptel
   :if (locate-library "gptel")
@@ -3879,7 +4106,15 @@ With prefix ARG, set the selected model as the persistent default."
   :config
   (setq gptel-include-reasoning nil)
   (et/gptel-configure)
+  (et/gptel-prune-backends)
+  (advice-add 'gptel-request :before #'et/gptel-check-request)
+  (advice-add 'gptel--url-get-response :before #'et/gptel-check-transport)
+  (advice-add 'gptel-curl-get-response :before #'et/gptel-check-transport)
+  (add-hook 'gptel-post-response-functions #'et/document-format-region)
   (add-hook 'find-file-hook #'et/project-apply-gptel-model))
+
+(with-eval-after-load 'gptel-rewrite
+  (add-hook 'gptel-post-rewrite-functions #'et/document-format-region))
 
 ;; OpenCode's built-in model picker prioritizes recent and connected models.
 ;; Etmacs additionally puts providers with a stored API key or subscription
@@ -3960,7 +4195,9 @@ providers for the active profile are removed."
   (et/opencode--sort-model-candidates
    (seq-remove
     (lambda (candidate)
-      (et/profile-model-hidden-p (plist-get candidate :display)))
+      (or (et/profile-model-hidden-p (plist-get candidate :display))
+          (and (equal et/profile "work")
+               (not (equal (plist-get candidate :provider-id) "openai")))))
     (funcall orig connection))
    (or connection opencode-session--connection)))
 
@@ -3976,6 +4213,9 @@ Returns the selected candidate plist, or nil when the prompt is cancelled."
     (dolist (candidate candidates)
       (let ((display (plist-get candidate :display)))
         (when (and (stringp display)
+                   (not (et/profile-model-hidden-p display))
+                   (or (not (equal et/profile "work"))
+                       (equal (plist-get candidate :provider-id) "openai"))
                    (or (null provider-id)
                        (and (plist-get candidate :connected-p)
                             (equal (plist-get candidate :provider-id)
@@ -4032,7 +4272,7 @@ Returns the selected candidate plist, or nil when the prompt is cancelled."
   "Return CONNECTION's saved project model candidate, when available."
   (let* ((root (et/opencode--project-root connection))
          (display (and root (et/project-model-get root :opencode))))
-    (when (and display (not (et/profile-model-hidden-p display)))
+    (when (and display (not (et/opencode-model-hidden-p display)))
       (seq-find
        (lambda (candidate)
          (and (plist-get candidate :connected-p)
@@ -4146,7 +4386,10 @@ Call ON-CREATED with the new session, as `opencode--create-session' does."
   (advice-remove 'opencode-session--provider-model-candidates
                  #'et/opencode--sorted-candidates)
   (advice-add 'opencode-session--provider-model-candidates :around
-              #'et/opencode--sorted-candidates))
+              #'et/opencode--sorted-candidates)
+  (advice-add 'opencode-request :before #'et/opencode-check-request)
+  (advice-add 'opencode-connection-registration-file :around
+              #'et/opencode-registration-file))
 
 (defvar et/session-map
   (let ((map (make-sparse-keymap "sessions")))
@@ -4176,13 +4419,19 @@ Call ON-CREATED with the new session, as `opencode--create-session' does."
 (use-package emacs-opencode
   :if (locate-library "emacs-opencode")
   :commands (opencode opencode-ask opencode-ask-contextual
-             opencode-open-session opencode-send-to-session
-             opencode-send-context-to-session opencode-mcp-status
-             opencode-disconnect opencode-restart)
+              opencode-open-session opencode-send-to-session
+              opencode-send-context-to-session opencode-mcp-status
+              opencode-disconnect opencode-restart)
+  :init
+  (setq opencode-server-command (et/opencode--binary))
+  (setenv "ETMACS_WORK_ROOT" (et/opencode-work-directory))
   :config
   (when (locate-library "emacs-opencode-magit")
     (require 'emacs-opencode-magit))
   (et/opencode--install-model-selection))
+
+(with-eval-after-load 'emacs-opencode-run
+  (advice-add 'opencode-run :before #'et/opencode-check-run))
 
 (define-key et/ai-map (kbd "g") #'et/gptel)
 (define-key et/ai-map (kbd "s") #'et/gptel-send)
@@ -4213,11 +4462,10 @@ DeepSeek models available on the work machine.
 
 * Terminal: vterm
 
-=vterm= provides a real terminal through libvterm. It needs an Emacs built with
-dynamic modules and the compiled =vterm-module.so=; the first launch may build
-the module with =cmake=, =make=, and a C compiler, or you can install your
-distribution's libvterm and compile it yourself. Nothing terminal-related starts
-at boot: the shell starts only when you ask for it.
+=vterm= provides a real terminal through libvterm. The distribution installers
+build and verify =vterm-module.so= before the first terminal opens, installing
+a newer local libvterm if required. Nothing terminal-related starts at boot:
+the shell starts only when you ask for it.
 
 =SPC o t= toggles a persistent popup at the bottom of the frame in the current
 workspace, using the project root as its directory. With a prefix argument it
@@ -4256,7 +4504,8 @@ disabled.
 (defun et/vterm-available-p ()
   "Return non-nil when vterm and dynamic modules are available."
   (and (locate-library "vterm")
-       (fboundp 'module-load)))
+       (fboundp 'module-load)
+       (locate-file (concat "vterm-module" module-file-suffix) load-path)))
 
 (defun et/vterm--buffer-name ()
   "Return the current workspace's vterm popup buffer name."
@@ -4297,7 +4546,7 @@ disabled.
   "Call FUNCTION at the project root, or with ARG at `default-directory'.
 Export the project root as PROOT for the shell."
   (unless (et/vterm-available-p)
-    (user-error "vterm is not installed, or this Emacs lacks dynamic module support"))
+    (user-error "vterm is not ready; run the distribution installer to build its native module"))
   (let* ((root (et/vterm--project-root))
          (default-directory (if arg default-directory root)))
     (setenv "PROOT" root)
@@ -4351,8 +4600,7 @@ With prefix ARG, use `default-directory' instead."
        (vterm vterm-buffer-name)))))
 
 (use-package vterm
-  :if (and (locate-library "vterm")
-           (bound-and-true-p module-file-suffix))
+  :if (et/vterm-available-p)
   :commands (vterm vterm-mode)
   :config
   (setq vterm-kill-buffer-on-exit t
@@ -4635,6 +4883,106 @@ Diff highlighting is local-only here to avoid automatic remote Git processes.
 
 ;; git-modes provides auto-mode entries through package autoloads; no global
 ;; git-modes minor mode or eager Magit startup is needed.
+;; Only prose is filled; tables and literal blocks have their own layout.
+(declare-function markdown-code-block-at-point-p "markdown-mode" (&optional pos))
+(declare-function markdown-text-property-at-point "markdown-mode" (prop))
+(declare-function markdown-table-at-point-p "markdown-mode" ())
+(declare-function markdown-heading-at-point "markdown-mode" (&optional pos))
+(declare-function markdown-table-align "markdown-mode" ())
+
+(defun et/document-protected-p ()
+  "Whether point is on structural text that must not be hard-wrapped."
+  (or (looking-at-p "[ \t]*\\(?:$\\||\\|#\\|:.*:\\|```\\|~~~\\)")
+      (and (derived-mode-p 'org-mode)
+           (or (org-in-src-block-p t)
+               (memq (org-element-type (org-element-context))
+                     '(table table-row table-cell src-block example-block
+                       export-block fixed-width keyword node-property
+                       drawer property-drawer headline))))
+      (and (derived-mode-p 'markdown-mode)
+           (or (markdown-code-block-at-point-p)
+               (markdown-text-property-at-point 'markdown-yaml-metadata-section)
+               (markdown-text-property-at-point 'markdown-yaml-metadata-begin)
+               (markdown-text-property-at-point 'markdown-yaml-metadata-end)
+               (markdown-table-at-point-p)
+               (markdown-heading-at-point)))))
+
+(defun et/document-format-region (beg end)
+  "Fill generated prose in BEG..END to 95 columns and align its tables.
+Do not fill code, metadata, headings, or tables, or touch text outside the
+region.  A long indivisible URL or table row can exceed the prose width."
+  (when (and beg end (derived-mode-p 'org-mode 'markdown-mode 'text-mode)
+             (not buffer-read-only))
+    (save-excursion
+      (save-restriction
+        (narrow-to-region beg end)
+        (let ((fill-column 95)
+              (end-marker (copy-marker (point-max) t)))
+          (unwind-protect
+              (progn
+                ;; Major-mode filling understands list indentation and links.
+                (goto-char (point-min))
+                (while (< (point) end-marker)
+                  (beginning-of-line)
+                  (if (et/document-protected-p)
+                      (forward-line 1)
+                    (let ((start (point)))
+                      (forward-line 1)
+                      (while (and (< (point) end-marker)
+                                  (not (et/document-protected-p)))
+                        (forward-line 1))
+                      (let ((next (copy-marker (point) t)))
+                        (when (save-excursion
+                                (goto-char start)
+                                (re-search-forward "^.\\{96\\}" (marker-position next) t))
+                          (let ((fill-nobreak-predicate
+                                 (cons (lambda ()
+                                         (and (derived-mode-p 'org-mode)
+                                              (org-in-regexp org-link-bracket-re 1)))
+                                       (ensure-list fill-nobreak-predicate))))
+                            (fill-region start (point))))
+                        (goto-char next)
+                        (set-marker next nil)))))
+                (goto-char (point-min))
+                (while (< (point) end-marker)
+                  (cond
+                   ((and (derived-mode-p 'org-mode)
+                         (org-at-table-p)
+                         (not (org-in-src-block-p t))
+                         (eq (org-element-type (org-element-at-point)) 'table))
+                    (org-table-align)
+                    (goto-char (org-table-end)))
+                   ((and (derived-mode-p 'markdown-mode)
+                         (markdown-table-at-point-p)
+                         (not (markdown-code-block-at-point-p)))
+                    (markdown-table-align)
+                    (while (and (< (point) end-marker)
+                                (markdown-table-at-point-p))
+                      (forward-line 1)))
+                   (t (forward-line 1)))))
+            (set-marker end-marker nil)))))))
+
+(defun et/document-format-buffer ()
+  "Apply document layout on save, never to programming buffers."
+  (et/document-format-region (point-min) (point-max)))
+
+(defun et/document-auto-fill ()
+  "Fill prose while typing, but never split literal or structural lines."
+  (unless (save-excursion (beginning-of-line) (et/document-protected-p))
+    (do-auto-fill)))
+
+(defun et/document-mode-defaults ()
+  "Use hard-wrapped prose and automatic table alignment in documents."
+  (setq-local fill-column 95)
+  (setq-local normal-auto-fill-function #'et/document-auto-fill)
+  (auto-fill-mode 1)
+  (add-hook 'before-save-hook #'et/document-format-buffer nil t))
+
+(add-hook 'text-mode-hook #'et/document-mode-defaults)
+(use-package markdown-mode
+  :if (locate-library "markdown-mode")
+  :mode (("\\.md\\'" . markdown-mode) ("\\.markdown\\'" . markdown-mode)))
+
 (provide 'et-editing)
 ;;; et-editing.el ends here
 #+end_src
@@ -6239,7 +6587,7 @@ dedicated YAML-derived mode so its commands and filename detection remain useful
 C and C++ use clangd through Eglot's built-in mappings; =compile_flags.txt= or
 =compile_commands.json= lets clangd resolve the project's build flags.
 
-| Language | External server (install separately) |
+| Language | External server (included by the distribution installers) |
 |----------+--------------------------------------|
 | Python | basedpyright-langserver (preferred); pyright/pylsp fall back automatically |
 | JavaScript/TypeScript/TSX | typescript-language-server --stdio, plus TypeScript |
@@ -6248,10 +6596,10 @@ C and C++ use clangd through Eglot's built-in mappings; =compile_flags.txt= or
 | Java | jdtls (requires a compatible JDK), or Eglot's java-language-server alternative |
 | SQL | sqls; configure dialect/connections deliberately, no stored credentials here |
 | Dockerfile | docker-langserver --stdio |
-| YARA | yr-ls, through Emacs 31's built-in Eglot mapping |
+| YARA | yls, explicitly configured (YARA Language Server) |
 
 Eglot's built-in server mappings are retained except for adding our mode variants
-and SQL. SQL evaluation/REPL uses built-in sql.el, only when explicitly invoked.
+and SQL/YARA. SQL evaluation/REPL uses built-in sql.el, only when explicitly invoked.
 YARA matching runs rules against data, not just syntax checks, so no automatic
 matching/validation command runs on opening or saving a rule.
 
@@ -6582,6 +6930,7 @@ marker so Projectile and Dape use the example directory as the project root.
 (add-to-list 'eglot-server-programs
              '((et/compose-mode :language-id "yaml") . ("yaml-language-server" "--stdio")))
 (add-to-list 'eglot-server-programs '(sql-mode . ("sqls")))
+(add-to-list 'eglot-server-programs '(yara-mode . ("yls")))
 (add-to-list 'eglot-server-programs
              '((web-mode :language-id "typescriptreact") . ("typescript-language-server" "--stdio")))
 
@@ -6590,7 +6939,9 @@ marker so Projectile and Dape use the example directory as the project root.
 (defvar et/dape-java-debug-bundle
   (seq-find #'file-exists-p
             (mapcar #'expand-file-name
-                    '("/usr/share/java-debug/com.microsoft.java.debug.plugin.jar"
+                     (list (expand-file-name "share/java-debug/com.microsoft.java.debug.plugin.jar"
+                                             et/dependency-directory)
+                       "/usr/share/java-debug/com.microsoft.java.debug.plugin.jar"
                       "/usr/local/share/java-debug/com.microsoft.java.debug.plugin.jar"
                       "~/.local/share/java-debug/com.microsoft.java.debug.plugin.jar")))
   "Path to java-debug's jdtls bundle, or nil when it is not installed.")
@@ -6920,7 +7271,9 @@ Uses Ruff for Python, Prettier for JS/TS, and clang-format for C/C++."
                                (list "docker" "compose" "-f" buffer-file-name "config" "--quiet")
                                " ")))
 
-(defvar et/dape-js-debug-directory "/usr/lib/js-debug"
+(defvar et/dape-js-debug-directory
+  (let ((local (expand-file-name "share/js-debug" et/dependency-directory)))
+    (if (file-directory-p local) local "/usr/lib/js-debug"))
   "Directory holding a system-wide js-debug install, or nil to ignore it.
 Dape otherwise looks for <dape-adapter-dir>/js-debug/src/dapDebugServer.js.
 `dape-adapter-dir' defaults under `user-emacs-directory', which here is the

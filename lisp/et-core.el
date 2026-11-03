@@ -28,7 +28,11 @@
 (setq which-key-idle-delay 0.5)
 (which-key-mode 1)
 (column-number-mode 1)
-(add-hook 'prog-mode-hook #'display-line-numbers-mode)
+(setq-default display-line-numbers-type t
+              fill-column 95
+              truncate-lines t
+              word-wrap nil)
+(global-display-line-numbers-mode 1)
 
 (defvar et/leader-map (make-sparse-keymap "leader"))
 (defvar et/file-map (make-sparse-keymap "files"))

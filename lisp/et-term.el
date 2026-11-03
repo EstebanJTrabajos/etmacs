@@ -24,7 +24,8 @@
 (defun et/vterm-available-p ()
   "Return non-nil when vterm and dynamic modules are available."
   (and (locate-library "vterm")
-       (fboundp 'module-load)))
+       (fboundp 'module-load)
+       (locate-file (concat "vterm-module" module-file-suffix) load-path)))
 
 (defun et/vterm--buffer-name ()
   "Return the current workspace's vterm popup buffer name."
@@ -65,7 +66,7 @@
   "Call FUNCTION at the project root, or with ARG at `default-directory'.
 Export the project root as PROOT for the shell."
   (unless (et/vterm-available-p)
-    (user-error "vterm is not installed, or this Emacs lacks dynamic module support"))
+    (user-error "vterm is not ready; run the distribution installer to build its native module"))
   (let* ((root (et/vterm--project-root))
          (default-directory (if arg default-directory root)))
     (setenv "PROOT" root)
@@ -119,8 +120,7 @@ With prefix ARG, use `default-directory' instead."
        (vterm vterm-buffer-name)))))
 
 (use-package vterm
-  :if (and (locate-library "vterm")
-           (bound-and-true-p module-file-suffix))
+  :if (et/vterm-available-p)
   :commands (vterm vterm-mode)
   :config
   (setq vterm-kill-buffer-on-exit t

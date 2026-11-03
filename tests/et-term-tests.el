@@ -1,6 +1,20 @@
 ;;; et-term-tests.el --- Terminal configuration checks -*- lexical-binding: t; -*-
 ;; Loaded by et-core-tests.el after isolated configuration startup.
 
+(ert-deftest et/term-installer-enables-compilation-before-loading-vterm ()
+  (let ((required nil))
+    (cl-letf (((symbol-function 'require)
+               (lambda (feature &rest _)
+                 (should (eq feature 'vterm))
+                 (should et/installing-vterm)
+                 (should vterm-always-compile-module)
+                 (should (equal vterm-module-cmake-args "-DUSE_SYSTEM_LIBVTERM=ON"))
+                 (setq required t)))
+              ((symbol-function 'featurep)
+               (lambda (feature &rest _) (eq feature 'vterm-module))))
+      (et/install-vterm))
+    (should required)))
+
 (ert-deftest et/term-vterm-bindings ()
   (should (eq (lookup-key et/leader-map (kbd "o")) et/open-map))
   (should (eq (lookup-key et/open-map (kbd "t")) #'et/vterm-toggle))
