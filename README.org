@@ -242,14 +242,33 @@ The dashboard opens on startup (=initial-buffer-choice=) and remains available a
 =SPC d=. It shows Projects, Recent files, up to five tasks per visible profile
 domain, Daily journal, and five cached news articles per site. Tasks are sorted
 by state and explicit priority, then by deadline/schedule, with undated tasks
-last; overflow is reported as =+N more=. =g= refreshes, =q= quits, =RET=
-activates a button or link, and =TAB= collapses or expands the article list for
+last; overflow is reported as =+N more=. Evil stays in Normal state and
+=j/k= move as usual. =SPC m g= refreshes, =SPC m q= quits, =SPC m RET=
+activates a button or link, and =SPC m TAB= collapses or expands the article list for
 the feed at point. The News section places =Update feeds= directly beneath the
-=News= heading, and each feed title has a dashed underline. =TAB= returns point
+=News= heading, and each feed title has a dashed underline. =SPC m TAB= returns point
 to the feed title after folding or unfolding. =SPC q= quits Emacs; =SPC R= re-tangles
 =config.org= and restarts Emacs after saving buffers. Set
 =et/dashboard-on-startup= to nil in =.local/settings.el= to start on scratch
 instead.
+
+Task rows can be edited without leaving the dashboard, using its =SPC m= leader:
+
+| Key | Action                    |
+|-----+---------------------------|
+| SPC m t | Change TODO status        |
+| SPC m s | Set scheduled date/time   |
+| SPC m D | Set deadline date/time    |
+| SPC m P | Set priority              |
+| SPC m T | Edit tags                 |
+| SPC m E | Set effort estimate       |
+| SPC m e | Menu of all task edits, including removing dates |
+
+These use Org's normal prompts, save the source Org file, and refresh the
+dashboard. If a status change requires a log note, finish it with =C-c C-c=.
+Use =SPC m d= for the journal and =SPC m S= for news summaries.
+Single-key mode bindings remain available outside Evil; with Evil active,
+use the leader bindings to avoid overriding its commands.
 
 =gptel= provides OpenAI, Anthropic and DeepSeek backends. API keys are read from
 =~/.authinfo.gpg= through =gptel-api-key-from-auth-source= using the provider's
@@ -340,14 +359,14 @@ Chua's Emacs News, Mastering Emacs, System Crafters, and Emacs Stack Exchange.
 All feeds are downloaded; =SPC N s= chooses which topics feed the dashboard's
 five newest articles per site. =SPC N u= updates feeds, =SPC N o=
 opens Elfeed, and each site's dashboard button opens its full Elfeed search.
-=TAB= in the dashboard collapses or expands the article list for the feed at
+=SPC m TAB= in the dashboard collapses or expands the article list for the feed at
 point. State lives in =.local/profiles/<profile>/news.el= and =.local/elfeed/=;
 startup uses only the cache.
 
 In an Elfeed search buffer, the same leader prefix adds =SPC N /= (keyword
 search), =SPC N f= (narrow to feed), =SPC N d= (date range), =SPC N m= / =SPC N M=
 (mark read / unread), and =SPC N r= / =SPC N R= / =SPC N S= (download the article
-and open an AI summary draft). In the dashboard, =S= summarizes the
+and open an AI summary draft). In the dashboard, =SPC m S= summarizes the
 article at point.
 
 The summary uses =gpt-6-luna= through gptel and produces a 3–5 paragraph note.

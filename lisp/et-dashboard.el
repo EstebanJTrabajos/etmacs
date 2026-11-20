@@ -2,6 +2,7 @@
 (require 'button)
 (require 'seq)
 (require 'subr-x)
+(require 'org)
 
 (declare-function et/capture "et-org" (&optional key))
 (declare-function et/current-domain "et-org" (&optional buffer))
@@ -28,6 +29,7 @@
   "Maximum number of tasks shown per domain on the dashboard.")
 (defvar et/dashboard-agenda-domains (copy-sequence et/profile-domains)
   "Domains shown as separate agenda groups on the dashboard.")
+(defvar-local et/dashboard-task-markers nil)
 
 (defvar et/dashboard-mode-map
   (let ((map (make-sparse-keymap)))
@@ -37,6 +39,13 @@
     (define-key map (kbd "a") #'et/dashboard-agenda)
     (define-key map (kbd "p") #'et/dashboard-switch-project)
     (define-key map (kbd "c") #'et/capture)
+    (define-key map (kbd "t") #'et/dashboard-task-todo)
+    (define-key map (kbd "s") #'et/dashboard-task-schedule)
+    (define-key map (kbd "D") #'et/dashboard-task-deadline)
+    (define-key map (kbd "P") #'et/dashboard-task-priority)
+    (define-key map (kbd "T") #'et/dashboard-task-tags)
+    (define-key map (kbd "E") #'et/dashboard-task-effort)
+    (define-key map (kbd "e") #'et/dashboard-task-edit)
     (define-key map (kbd "n") #'et/dashboard-news)
     (define-key map (kbd "S") #'et/news-summarize-at-point)
     (define-key map (kbd "TAB") #'et/dashboard-toggle-news-feed)
@@ -48,10 +57,136 @@
     map)
   "Keymap for the Etmacs dashboard.")
 
+(defvar et/dashboard-leader-map
+  (let ((map (copy-keymap et/dashboard-mode-map)))
+    (set-keymap-parent map nil)
+    (define-key map (kbd "q") #'quit-window)
+    map)
+  "Dashboard commands under SPC m, without overriding Evil's normal keys.")
+(et/register-package-leader 'et/dashboard-mode et/dashboard-leader-map)
+
+(with-eval-after-load 'evil
+  (evil-set-initial-state 'et/dashboard-mode 'normal))
+
 (define-derived-mode et/dashboard-mode special-mode "Etmacs Dashboard"
   "Major mode for the Etmacs dashboard."
   (setq-local revert-buffer-function #'et/dashboard-refresh)
-  (setq-local truncate-lines t))
+  (setq-local truncate-lines t)
+  (add-hook 'kill-buffer-hook #'et/dashboard-release-task-markers nil t))
+
+(defun et/dashboard-release-task-markers ()
+  "Release source markers owned by this dashboard."
+  (mapc (lambda (marker) (set-marker marker nil)) et/dashboard-task-markers)
+  (setq et/dashboard-task-markers nil))
+
+(defun et/dashboard-task-at-point ()
+  "Return the source marker for the task row at point, or signal a user error."
+  (unless (derived-mode-p 'et/dashboard-mode)
+    (user-error "Not in the dashboard"))
+  (let* ((position (line-beginning-position))
+         (marker (get-text-property position 'et-dashboard-task))
+         (heading (get-text-property position 'et-dashboard-task-heading)))
+    (unless (and (markerp marker) (marker-buffer marker))
+      (user-error "Move to a dashboard task row"))
+    (org-with-point-at marker
+      (unless (and (org-at-heading-p) (equal heading (org-get-heading t t t t)))
+        (user-error "Task changed or was removed; refresh with SPC m g")))
+    marker))
+
+(defun et/dashboard-task-refresh-after-edit (source dashboard)
+  "Save SOURCE and refresh DASHBOARD if they still exist."
+  (when (buffer-live-p source)
+    (with-current-buffer source
+      (when (buffer-modified-p) (save-buffer))))
+  (when (buffer-live-p dashboard)
+    (with-current-buffer dashboard (et/dashboard-refresh))))
+
+(defun et/dashboard-task-finish-note (finish source dashboard)
+  "Finish an Org log note with FINISH, then save SOURCE and refresh DASHBOARD."
+  (funcall finish)
+  (et/dashboard-task-refresh-after-edit source dashboard))
+
+(defun et/dashboard-task-command (command &optional prefix)
+  "Run Org COMMAND on the task row at point, forwarding PREFIX."
+  (let* ((marker (et/dashboard-task-at-point))
+         (source (marker-buffer marker))
+         (dashboard (current-buffer))
+         (identity (copy-marker marker))
+         note
+         (current-prefix-arg prefix))
+    (unwind-protect
+        (progn
+          (org-with-point-at marker
+            (call-interactively command)
+            ;; Complete time-only logs immediately; display text note prompts
+            ;; before returning so they keep their original task and command.
+            (when org-log-setup
+              (org-add-log-note)
+              (when (and (equal (buffer-name) "*Org Note*")
+                         (local-variable-p 'org-finish-function))
+                (setq note (current-buffer)))))
+          (when note
+            (with-current-buffer note
+              (setq-local org-finish-function
+                          (apply-partially #'et/dashboard-task-finish-note
+                                           org-finish-function source dashboard))))
+          (et/dashboard-task-refresh-after-edit source dashboard)
+          (with-current-buffer dashboard
+            (when-let* ((position
+                         (seq-some
+                          (lambda (candidate)
+                            (when (and (eq (marker-buffer candidate) (marker-buffer identity))
+                                       (equal (marker-position candidate) (marker-position identity)))
+                              (text-property-any (point-min) (point-max)
+                                                 'et-dashboard-task candidate)))
+                          et/dashboard-task-markers)))
+              (goto-char position))))
+      (set-marker identity nil))))
+
+(defun et/dashboard-task-todo ()
+  "Change the TODO state of the dashboard task at point."
+  (interactive)
+  (et/dashboard-task-command #'org-todo current-prefix-arg))
+
+(defun et/dashboard-task-schedule ()
+  "Schedule the task at point; with a prefix, remove its schedule."
+  (interactive)
+  (et/dashboard-task-command #'org-schedule current-prefix-arg))
+
+(defun et/dashboard-task-deadline ()
+  "Set the task's deadline; with a prefix, remove it."
+  (interactive)
+  (et/dashboard-task-command #'org-deadline current-prefix-arg))
+
+(defun et/dashboard-task-priority ()
+  "Set the priority of the dashboard task at point."
+  (interactive)
+  (et/dashboard-task-command #'org-priority current-prefix-arg))
+
+(defun et/dashboard-task-tags ()
+  "Edit tags on the dashboard task at point."
+  (interactive)
+  (et/dashboard-task-command #'org-set-tags-command current-prefix-arg))
+
+(defun et/dashboard-task-effort ()
+  "Set the effort estimate of the dashboard task at point."
+  (interactive)
+  (et/dashboard-task-command #'org-set-effort current-prefix-arg))
+
+(defun et/dashboard-task-edit ()
+  "Choose an edit action for the dashboard task at point."
+  (interactive)
+  (et/dashboard-task-at-point)
+  (let* ((actions '(("Status" org-todo nil)
+                    ("Scheduled time" org-schedule nil)
+                    ("Deadline" org-deadline nil)
+                    ("Remove scheduled time" org-schedule (4))
+                    ("Remove deadline" org-deadline (4))
+                    ("Priority" org-priority nil)
+                    ("Tags" org-set-tags-command nil)
+                    ("Effort" org-set-effort nil)))
+         (action (assoc (completing-read "Edit task: " actions nil t) actions)))
+    (et/dashboard-task-command (nth 1 action) (nth 2 action))))
 
 (define-button-type 'et/dashboard-button
   'action #'ignore
@@ -139,6 +274,7 @@ is sorted by importance and date, then limited to
 Keep point at its previous position, clamped to the new contents."
   (let ((inhibit-read-only t)
         (position (point)))
+    (et/dashboard-release-task-markers)
     (erase-buffer)
     (insert (propertize "Etmacs\n" 'face '(:height 1.4 :weight bold)))
     (insert (format-time-string "%A, %Y-%m-%d %H:%M\n\n"))
@@ -178,16 +314,21 @@ Keep point at its previous position, clamped to the new contents."
             (insert (propertize (format "  %s\n" (capitalize domain))
                                 'face 'bold))
             (dolist (task tasks)
-              (let ((task task))
+              (let* ((start (point))
+                     (marker (with-current-buffer (find-file-noselect (plist-get task :file))
+                               (copy-marker (plist-get task :position) t))))
+                (push marker et/dashboard-task-markers)
                 (insert "    ")
                 (let ((state (plist-get task :state)))
                   (insert (propertize (format "%-12s " state)
                                       'face (et/org-state-face state))))
                 (et/dashboard-insert-button
-                 (plist-get task :heading)
-                 (lambda (_button)
-                   (et/dashboard-open-agenda-item (plist-get task :file)
-                                                  (plist-get task :position)))
+                  (plist-get task :heading)
+                  (lambda (_button)
+                    (unless (marker-buffer marker)
+                      (user-error "Task buffer is gone; refresh with SPC m g"))
+                    (et/dashboard-open-agenda-item (buffer-file-name (marker-buffer marker))
+                                                   marker))
                  (plist-get task :heading))
                 (when-let* ((due (et/org-task-due-label task)))
                   (insert (propertize (format "  %s" due)
@@ -195,7 +336,10 @@ Keep point at its previous position, clamped to the new contents."
                                                   ((string-match-p "today\\|tomorrow" due)
                                                    'warning)
                                                   (t 'shadow)))))
-                (insert "\n")))
+                (insert "\n")
+                (add-text-properties start (point)
+                                     (list 'et-dashboard-task marker
+                                           'et-dashboard-task-heading (plist-get task :heading)))))
             (when (> total (length tasks))
               (insert (propertize
                        (format "    +%d more\n" (- total (length tasks)))
@@ -260,7 +404,7 @@ Keep point at its previous position, clamped to the new contents."
                                (list 'et-dashboard-news-site site-id)))))
     (insert "\n")
     (insert (propertize
-             "g refresh · q quit · TAB feed · RET open · d journal · a agenda\n"
+              "SPC m: g refresh · q quit · TAB feed · RET open · d journal · a agenda\nTasks (SPC m): t status · s schedule · D deadline · P priority · T tags · E effort · e edit\n"
              'face 'shadow))
     (goto-char (min position (point-max)))))
 
