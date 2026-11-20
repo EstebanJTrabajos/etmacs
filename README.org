@@ -504,8 +504,9 @@ cleanup. Runtime metadata reduces friction, but is not a privacy boundary.
 Default layout (created only as captures need it):
 #+begin_example
 ~/org/
-  personal/{inbox,tasks}.org
-  work/{inbox,tasks}.org
+  personal/{inbox,tasks,ideas}.org
+  work/{inbox,tasks,ideas}.org
+  general/{inbox,tasks,ideas}.org
   roam/
     personal/{topics,ideas,projects,references,vocabulary,daily,reviews}/
     work/{topics,ideas,projects,references,vocabulary,daily,reviews}/
@@ -519,8 +520,20 @@ existing notes/IDs. Unknown-layout legacy nodes are accessible with all-domain
 lookup. Ordinary task files stay outside roam. Project tasks live inside their
 project notes, not duplicated into daily files. TODOs written in =daily/= notes
 are agenda files too, so a dated task can be captured where it is discussed.
-Add existing other task files to =et/org-extra-agenda-files=; these appear in the
-all-domain agenda. Emacs lock files (=.#*=) and autosave files (=#*#=) are ignored.
+Agenda and TODO views automatically include Org files under the active profile's
+note directory and =general/=, including subdirectories. Work and Personal
+never include each other's note directories. General on its own shows only
+shared files. Lock and autosave files are ignored.
+
+Use =SPC n A= to register the current Org file, the current Dired directory,
+or another path. Directories are scanned recursively. External paths default
+to the current profile; choose =general= to share them across profiles. A file
+already in a profile's note directory stays in that domain. To share an
+individual task from a private file, refile just that heading into an existing
+General file rather than registering the whole file. Registrations are saved
+across restarts; remove one with =M-x et/org-agenda-remove-source=. For legacy
+=et/org-extra-agenda-files= outside known note domains, register the paths
+explicitly to choose their owner.
 
 Roam completion shows file nodes by title and heading nodes by their full path:
 =Document title -> Heading -> Subheading=. Ancestors need not have IDs. This
@@ -551,6 +564,8 @@ SQLite files. Each machine rebuilds its own index with =SPC n r u=.
 | SPC n c / C-c c       | Task/inbox capture menu                                            |
 | SPC n C               | Create and persist a new capture template                          |
 | SPC n a / C-c a       | Choose agenda domain and open daily dashboard                      |
+| SPC n A               | Add an Org file or directory to agenda/TODO sources               |
+| SPC n t               | Show all open TODOs and ideas in the selected agenda scope        |
 | SPC n D               | Set workspace default domain                                       |
 | SPC n d               | Browse the existing Org root                                       |
 | SPC n r c             | Choose domain, title, then a roam note template                    |
@@ -561,10 +576,33 @@ SQLite files. Each machine rebuilds its own index with =SPC n r u=.
 | SPC n r b / a / t     | Backlinks / add alias / add subject tag                            |
 | SPC n r g / u         | Explicit graph / rebuild local index                               |
 [[id:52099960-9eef-4163-bb0b-0b25fb0d3a3b][org-mode and org-roam hotkeys]]
-Task capture keys: =pi= personal inbox, =pt= personal TODO, =ph= daily personal
-habit, =wi= work inbox, =wt= work TODO, =gi= general inbox, =gt= general TODO,
-=gI= general idea, and =j= task in an existing project note. Only templates for
-the active profile's visible domains are offered. Choose/create a project note
+
+*** Agenda directory shortcuts
+
+| Add a directory                                 | This directory only | Include subdirectories |
+|-------------------------------------------------+---------------------+------------------------|
+| Current file's directory, no picker             | =SPC n s d=         | =SPC n s D=            |
+| Consult picker starting at the file's directory | =SPC n s s=         | =SPC n s S=            |
+| Consult picker starting at home                 | =SPC n s h=         | =SPC n s H=            |
+
+In Dired, the current Dired directory stands in for the file's directory.
+Direct shortcuts keep the existing owner or default to the current profile
+for external directories; pickers let you choose General for shared sources.
+
+=SPC n s e= opens the directory editor for explicit registrations, with Evil
+active. Use =SPC m m= and =SPC m u= to mark and unmark rows, then =SPC m e=
+to enable, =SPC m x= to disable, or =SPC m d=
+to remove the marked registrations (or the row at point). Use =SPC m a= or =SPC m A= to
+add a directory from home, or =SPC m g= to refresh. Removing a registration never
+deletes its files.
+
+*** Capture templates
+
+Task capture uses =p= for Personal, =w= for Work, and =g= for General, followed
+by =i= (inbox), =t= (TODO), =I= (idea), or =h= (daily habit). For example,
+=gt= captures a shared TODO and =gI= captures a shared idea. Use =j= for a task
+in an existing project note. Only templates for the active profile's visible
+domains are offered. Choose/create a project note
 first via roam template =p=. Project capture asks for an existing project in
 the current/shared domain. Captures are tagged with their domain; project tasks
 use the active profile tag. Plain TODOs have no invented deadline/schedule;
@@ -582,11 +620,8 @@ Org's clock link; they do not create duplicate clock records. Clock/pomodoro
 the real task. Vocabulary notes contain a drill-tagged question and Answer
 heading; Arabic editing/bidi is preserved. Multilingual spelling is a later stage.
 
-Agenda views include general projects plus the profile's default domain, or the
-profile's domains; the interactive prompt defaults to the active profile. The
-scanned set is
-=inbox.org=, =tasks.org=, =projects/= and =daily/=
-for the selected domains; lock and autosave files are ignored. The default =d=
+The agenda prompt defaults to the active profile. Choose =general= for shared
+items only; =all= means all domains visible to that profile. The default =d=
 agenda collects open tasks with a deadline or schedule in the next two weeks,
 plus undated actionable states, and groups them into Overdue, Today, Next two
 weeks, Showstoppers, Blocked, In progress, Validation, Next actions, and Waiting

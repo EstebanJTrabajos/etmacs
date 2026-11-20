@@ -13,6 +13,9 @@
 (declare-function et/org-task-due-label "et-org" (task))
 (declare-function et/org-task-sort-predicate "et-org" (a b))
 (declare-function et/news-summarize-at-point "et-news" ())
+(defvar et/org-agenda-scope)
+(defvar et/org-agenda-file-domains)
+(defvar org-agenda-files)
 
 (defvar et/dashboard-buffer-name "*etmacs-dashboard*")
 (defvar et/dashboard-on-startup t
@@ -266,14 +269,15 @@ Keep point at its previous position, clamped to the new contents."
   (interactive)
   (unless (derived-mode-p 'et/dashboard-mode)
     (user-error "Not in the Etmacs dashboard"))
-  (et/dashboard-render))
+  (let ((et/org-agenda-scope et/org-agenda-scope)
+        (et/org-agenda-file-domains nil)
+        (org-agenda-files org-agenda-files))
+    (when (fboundp 'et/org-refresh-agenda)
+      (et/org-refresh-agenda "all"))
+    (et/dashboard-render)))
 
 (defun et/dashboard-buffer ()
   "Return the refreshed dashboard buffer without switching to it."
-  (when (fboundp 'et/org-refresh-agenda)
-    (condition-case nil
-        (et/org-refresh-agenda "all")
-      (error nil)))
   (let ((buffer (get-buffer-create et/dashboard-buffer-name)))
     (with-current-buffer buffer
       (unless (derived-mode-p 'et/dashboard-mode)

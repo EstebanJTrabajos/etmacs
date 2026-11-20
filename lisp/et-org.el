@@ -8,8 +8,10 @@
 (require 'org-clock)
 (require 'org-element)
 (require 'oc)
+(require 'json)
 (require 'seq)
 (require 'subr-x)
+(require 'tabulated-list)
 
 ;; Extend Org's tag character set for company ($) and MITRE (!) tags.
 (setq org-tag--valid-char-set "[:alnum:]_@#%$!"
@@ -27,7 +29,12 @@
 (defvar et/org-domains '("personal" "work" "general"))
 (defvar et/org-agenda-scope et/profile)
 (defvar et/org-extra-agenda-files nil
-  "Existing task files outside the convention; included in all-domain agendas.")
+  "Legacy task files that belong to a known note domain.
+Register unclassified paths with `et/org-agenda-add-source' instead.")
+(defvar et/org-agenda-sources-file (expand-file-name "agenda-sources.json" et/state-directory)
+  "JSON mapping explicitly registered agenda paths to their profile owners.")
+(defvar et/org-agenda-file-domains nil
+  "Mapping from current agenda files to their domains for dashboard grouping.")
 (defvar et/bibliography-files nil "Local BibTeX files; set in .local/settings.el.")
 (defvar et/org-map (make-sparse-keymap "Org"))
 (defvar et/org-export-map (make-sparse-keymap "export"))
@@ -68,9 +75,10 @@
     (make-directory (file-name-directory file) t)
     file))
 
-(defun et/habit-template ()
-  "Return an editable daily recurring habit starting today."
-  (format "* TODO %%? :personal:\nSCHEDULED: <%s .+1d>\n:PROPERTIES:\n:STYLE: habit\n:END:\n"
+(defun et/habit-template (&optional domain)
+  "Return an editable daily recurring habit in DOMAIN, defaulting to personal."
+  (format "* TODO %%? :%s:\nSCHEDULED: <%s .+1d>\n:PROPERTIES:\n:STYLE: habit\n:END:\n"
+          (or domain "personal")
           (format-time-string "%Y-%m-%d %a")))
 
 (defun et/project-task-template ()
@@ -138,11 +146,17 @@
          (not (string-prefix-p "#" name))
          (file-regular-p file))))
 
-(defun et/org-directory-org-files (directory)
-  "Return real Org files below DIRECTORY."
-  (when (file-directory-p directory)
+(defun et/org-directory-org-files (directory &optional recursive)
+  "Return real Org files in DIRECTORY, descending if RECURSIVE."
+  (when (and (file-directory-p directory) (file-readable-p directory))
     (seq-filter #'et/org-agenda-file-p
-                (directory-files-recursively directory "\\.org\\'"))))
+                (if recursive
+                    (directory-files-recursively
+                     directory "\\.org\\'" nil
+                     (lambda (dir)
+                       (and (file-readable-p dir)
+                            (not (string-prefix-p "." (file-name-nondirectory dir))))))
+                  (directory-files directory t "\\.org\\'")))))
 
 (defun et/org-entry-priority ()
   "Return the current entry's explicit priority letter, or nil."
@@ -176,8 +190,10 @@ Each plist has :heading, :state, :priority, :scheduled, :deadline,
                                    :scheduled scheduled
                                    :deadline deadline
                                    :due (or deadline scheduled)
-                                   :domain (or (et/file-domain (buffer-file-name))
-                                               "general")
+                                    :domain (or (alist-get file et/org-agenda-file-domains
+                                                           nil nil #'equal)
+                                                (et/file-domain (buffer-file-name))
+                                                "general")
                                    :file (buffer-file-name)
                                    :position (point))
                              tasks)))))
@@ -293,6 +309,9 @@ Undated actionable states in `et/org-agenda-undated-states' are kept."
     ("pt" "TODO" entry
      (file+headline (lambda () (et/org-target-file "personal/tasks.org")) "Tasks")
      "* TODO %? :personal:\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n" :empty-lines 1)
+    ("pI" "Idea" entry
+     (file+headline (lambda () (et/org-target-file "personal/ideas.org")) "Ideas")
+     "* IDEA %? :personal:idea:\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n" :empty-lines 1)
     ("ph" "Daily habit" entry
      (file+headline (lambda () (et/org-target-file "personal/tasks.org")) "Habits")
      (function et/habit-template) :empty-lines 1)
@@ -303,6 +322,12 @@ Undated actionable states in `et/org-agenda-undated-states' are kept."
     ("wt" "TODO" entry
      (file+headline (lambda () (et/org-target-file "work/tasks.org")) "Tasks")
      "* TODO %? :work:\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n" :empty-lines 1)
+    ("wI" "Idea" entry
+     (file+headline (lambda () (et/org-target-file "work/ideas.org")) "Ideas")
+     "* IDEA %? :work:idea:\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n" :empty-lines 1)
+    ("wh" "Daily habit" entry
+     (file+headline (lambda () (et/org-target-file "work/tasks.org")) "Habits")
+     (function (lambda () (et/habit-template "work"))) :empty-lines 1)
     ("g" "General")
     ("gi" "Inbox" entry
      (file+headline (lambda () (et/org-target-file "general/inbox.org")) "Inbox")
@@ -313,6 +338,9 @@ Undated actionable states in `et/org-agenda-undated-states' are kept."
     ("gI" "Idea" entry
      (file+headline (lambda () (et/org-target-file "general/ideas.org")) "Ideas")
      "* IDEA %? :general:idea:\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n" :empty-lines 1)
+    ("gh" "Daily habit" entry
+     (file+headline (lambda () (et/org-target-file "general/tasks.org")) "Habits")
+     (function (lambda () (et/habit-template "general"))) :empty-lines 1)
     ("j" "Project task" entry (function et/project-task-target)
      (function et/project-task-template) :empty-lines 1))
   "Built-in capture templates; interactive templates are prepended.")
@@ -405,43 +433,440 @@ are prompted for interactively.  TARGET-TYPE is either
   (interactive)
   (org-capture nil key))
 
+(defun et/org-agenda-visible-domains ()
+  "Return the active profile's agenda domains."
+  (delete-dups (cons et/profile (copy-sequence et/profile-domains))))
+
+(defun et/org-agenda-note-roots (&optional lexical)
+  "Return profile note roots, resolving symlinks unless LEXICAL is non-nil."
+  (let ((roots
+         (cl-loop for domain in (et/profile-names)
+                  append (cl-loop for base in (list et/notes-directory et/roam-directory)
+                                  for root = (expand-file-name domain base)
+                                  unless (file-remote-p root)
+                                  collect (cons (file-name-as-directory root) domain)))))
+    (if lexical roots
+      (mapcar (lambda (entry)
+                (let* ((true (directory-file-name (file-truename (car entry))))
+                       (domain (or (et/org-agenda-note-domain true roots) (cdr entry))))
+                  (cons (file-name-as-directory true) domain)))
+              roots))))
+
+(defun et/org-agenda-note-domain (path roots)
+  "Return the domain containing PATH in ROOTS."
+  (cdr (seq-find (lambda (entry)
+                   (or (equal path (directory-file-name (car entry)))
+                       (string-prefix-p (car entry) path)))
+                 roots)))
+
+(defun et/org-agenda-source-domain (path true)
+  "Find the note domain of PATH and its resolved path TRUE."
+  (let ((domain (et/org-agenda-note-domain true (et/org-agenda-note-roots)))
+        (lexical (et/org-agenda-note-domain (directory-file-name (expand-file-name path))
+                                           (et/org-agenda-note-roots t))))
+    (when (and lexical (not (equal lexical domain)))
+      (user-error "Agenda source points outside its note domain"))
+    domain))
+
+(defun et/org-agenda-read-sources ()
+  "Read registered paths and their settings, accepting old owner-only entries."
+  (let ((sources (make-hash-table :test #'equal)))
+    (when (file-exists-p et/org-agenda-sources-file)
+      (with-temp-buffer
+        (insert-file-contents et/org-agenda-sources-file)
+        (let ((data (json-parse-buffer :object-type 'hash-table)))
+          (unless (hash-table-p data)
+            (error "Invalid agenda sources in %s" et/org-agenda-sources-file))
+          (maphash
+           (lambda (path entry)
+             (when (and (file-name-absolute-p path) (not (file-remote-p path)))
+               (cond
+                ((stringp entry)
+                 (let ((directory (file-directory-p path)))
+                   (puthash path (list :owner entry :directory directory
+                                       :recursive directory :enabled t) sources)))
+                ((and (hash-table-p entry) (stringp (gethash "owner" entry)))
+                 (puthash path (list :owner (gethash "owner" entry)
+                                     :directory (eq t (gethash "directory" entry))
+                                     :recursive (eq t (gethash "recursive" entry))
+                                     :enabled (eq t (gethash "enabled" entry)))
+                          sources)))))
+           data))))
+    sources))
+
+(defun et/org-agenda-write-sources (sources)
+  "Save SOURCES atomically without changing note contents."
+  (let ((directory (file-name-directory et/org-agenda-sources-file))
+        (data (make-hash-table :test #'equal)))
+    (maphash (lambda (path entry)
+               (puthash path `((owner . ,(plist-get entry :owner))
+                               (directory . ,(or (plist-get entry :directory) :false))
+                               (recursive . ,(or (plist-get entry :recursive) :false))
+                               (enabled . ,(or (plist-get entry :enabled) :false)))
+                        data))
+             sources)
+    (make-directory directory t)
+    (let ((temp (make-temp-file (expand-file-name ".agenda-sources-" directory))))
+      (unwind-protect
+          (progn
+            (with-temp-file temp (insert (json-serialize data) "\n"))
+            (rename-file temp et/org-agenda-sources-file t))
+        (when (file-exists-p temp) (delete-file temp))))))
+
+(defun et/org-agenda-source-owner (path &optional prompt)
+  "Return PATH's owner, prompting for external paths if PROMPT is non-nil."
+  (when (file-remote-p path) (user-error "Choose a local Org file or directory"))
+  (let* ((true (directory-file-name (file-truename path)))
+         (saved (plist-get (gethash true (et/org-agenda-read-sources)) :owner)))
+    (or (et/org-agenda-source-domain path true)
+        (if prompt
+            (completing-read "Agenda owner (general shares with both profiles): "
+                             (delete-dups (list et/profile "general"))
+                             nil t nil nil (or saved et/profile))
+          (or saved et/profile)))))
+
+(defun et/org-agenda-add-source (path &optional owner depth)
+  "Register PATH for OWNER, which defaults to its domain or current profile.
+Directories include subdirectories unless DEPTH is `shallow'."
+  (interactive
+   (let* ((current (or buffer-file-name default-directory))
+          (path (read-file-name "Agenda file or directory: " nil current t)))
+     (list path (et/org-agenda-source-owner path t))))
+  (when (file-remote-p path) (user-error "Choose a local Org file or directory"))
+  (let* ((true (directory-file-name (file-truename path)))
+         (domain (et/org-agenda-source-domain path true))
+         (path true)
+         (directory (file-directory-p path))
+         (owner (or owner domain et/profile)))
+    (unless (or directory (et/org-agenda-file-p path))
+      (user-error "Not an existing Org file or directory: %s" path))
+    (when (and domain (not (equal domain owner)))
+      (user-error "%s is in the %s note domain; choose a path outside it to share" path domain))
+    (unless (member owner (delete-dups (list et/profile "general")))
+      (user-error "Cannot register a path for %s from the %s profile" owner et/profile))
+    (let* ((sources (et/org-agenda-read-sources))
+           (previous (plist-get (gethash path sources) :owner))
+           (inherited (plist-get (cdr (et/org-agenda-matching-source path sources)) :owner)))
+      (when (and inherited (not (member inherited (list et/profile "general"))))
+        (user-error "Agenda source belongs to another profile"))
+      (when (and previous (not (equal previous owner))
+                 (not (and (member previous (list et/profile "general"))
+                           (yes-or-no-p (format "Change agenda owner from %s to %s? "
+                                               previous owner)))))
+        (user-error "Agenda owner left unchanged"))
+      (puthash path (list :owner owner :directory directory :enabled t
+                          :recursive (and directory (not (eq depth 'shallow))))
+               sources)
+      (et/org-agenda-write-sources sources))
+    (et/org-refresh-agenda)
+    (message "Added agenda source for %s: %s" owner (abbreviate-file-name path))))
+
+(defun et/org-agenda-source-editable-p (entry)
+  "Return non-nil when the current profile can edit ENTRY."
+  (member (plist-get entry :owner) (list et/profile "general")))
+
+(defun et/org-agenda-remove-source (path)
+  "Remove PATH's registration for the current profile or General."
+  (interactive
+   (let (paths)
+     (maphash (lambda (path entry)
+                (when (et/org-agenda-source-editable-p entry) (push path paths)))
+              (et/org-agenda-read-sources))
+     (unless paths (user-error "No registered agenda sources"))
+     (list (completing-read "Remove agenda source: " paths nil t))))
+  (when (file-remote-p path) (user-error "Choose a local agenda source"))
+  (let* ((sources (et/org-agenda-read-sources))
+         (path (directory-file-name (file-truename path))))
+    (unless (et/org-agenda-source-editable-p (gethash path sources))
+      (user-error "Not an agenda source for this profile: %s" path))
+    (remhash path sources)
+    (et/org-agenda-write-sources sources)
+    (et/org-refresh-agenda)
+    (message "Removed agenda registration: %s" (abbreviate-file-name path))))
+
+(defun et/org-agenda-matching-source (file sources)
+  "Return FILE's most specific (PATH . ENTRY) in SOURCES."
+  (let ((best-length -1) match)
+    (maphash (lambda (path candidate)
+               (when (and (> (length path) best-length)
+                          (or (equal path file)
+                              (and (plist-get candidate :directory)
+                                   (string-prefix-p (file-name-as-directory path) file))))
+                 (setq best-length (length path)
+                       match (cons path candidate))))
+             sources)
+    match))
+
+(defun et/org-agenda-source-covers-p (source file)
+  "Return non-nil when SOURCE's configured depth covers FILE."
+  (and source
+       (or (equal (car source) file)
+           (plist-get (cdr source) :recursive)
+           (equal (file-name-directory file) (file-name-as-directory (car source))))))
+
 (defun et/org-refresh-agenda (&optional scope)
-  "Refresh agenda files for SCOPE, without creating or modifying notes."
+  "Refresh agenda and TODO sources for SCOPE without changing notes."
   (let* ((scope (or scope et/org-agenda-scope))
+         (visible (et/org-agenda-visible-domains))
          (domains (cond
-                   ((equal scope "all") et/profile-domains)
-                   ((member scope et/profile-domains)
-                    (delete-dups (list scope "general")))
-                   (t (user-error "Domain %s is not available in the %s profile"
-                                  scope et/profile))))
+                   ((equal scope "all") visible)
+                   ((member scope visible) (delete-dups (list scope "general")))
+                   (t (user-error "Domain %s is not available in the %s profile" scope et/profile))))
+         (sources (condition-case err
+                      (et/org-agenda-read-sources)
+                    (error
+                     (display-warning 'etmacs (error-message-string err))
+                     (make-hash-table :test #'equal))))
+         (roots (et/org-agenda-note-roots))
+         (lexical-roots (et/org-agenda-note-roots t))
+         (seen (make-hash-table :test #'equal))
          files)
-    (dolist (domain domains)
-      (dolist (name '("inbox.org" "tasks.org"))
-        (let ((file (expand-file-name (concat domain "/" name) et/notes-directory)))
-          (when (and (file-exists-p file) (et/org-agenda-file-p file))
-            (push file files))))
-      (dolist (kind '("projects/" "daily/"))
-        (setq files
-              (append (et/org-directory-org-files
-                       (expand-file-name (concat domain "/" kind) et/roam-directory))
-                      files))))
-    (when (equal scope "all")
-      (setq files (append (seq-filter (lambda (file)
-                                        (and (file-exists-p file)
-                                             (et/org-agenda-file-p file)))
-                                      et/org-extra-agenda-files)
-                          files)))
+    (cl-labels ((collect-file (file)
+                  (when (and (not (file-remote-p file)) (et/org-agenda-file-p file))
+                    (let* ((true (file-truename file))
+                           (lexical (et/org-agenda-note-domain file lexical-roots))
+                           (source (et/org-agenda-matching-source true sources))
+                           (covered (et/org-agenda-source-covers-p source true))
+                           (note-domain (et/org-agenda-note-domain true roots))
+                           (domain (or note-domain
+                                       (and covered (plist-get (cdr source) :owner)))))
+                      ;; Do not follow note symlinks out of a private tree.
+                      (when (and (member domain domains)
+                                 (or (not covered) (plist-get (cdr source) :enabled))
+                                 (or (not lexical) (equal lexical domain))
+                                 (not (gethash true seen))
+                                 (not (file-symlink-p file)))
+                        (puthash true domain seen)
+                        (push (cons true domain) files)))))
+                (collect-source (path recursive)
+                  (unless (file-remote-p path)
+                    (if (file-directory-p path)
+                        (mapc #'collect-file (et/org-directory-org-files path recursive))
+                      (collect-file path)))))
+      (dolist (domain domains)
+        (collect-source (expand-file-name domain et/notes-directory) t)
+        (dolist (kind '("projects" "daily"))
+          (collect-source (expand-file-name (concat domain "/" kind) et/roam-directory) t)))
+      (maphash (lambda (path entry)
+                 (when (and (plist-get entry :enabled) (member (plist-get entry :owner) domains))
+                   (collect-source path (plist-get entry :recursive))))
+               sources)
+      (mapc (lambda (file) (collect-source (expand-file-name file et/notes-directory) t))
+            et/org-extra-agenda-files))
     (setq et/org-agenda-scope scope
-          org-agenda-files (delete-dups files))))
+          et/org-agenda-file-domains (sort files (lambda (a b) (string< (car a) (car b))))
+          org-agenda-files (mapcar #'car et/org-agenda-file-domains))))
+
+(defun et/org-agenda-refresh-sources (&rest _)
+  "Keep built-in Org agenda and TODO commands up to date."
+  (et/org-refresh-agenda))
+
+(defvar consult-find-args)
+(declare-function consult--find "consult" (prompt builder initial))
+(declare-function consult--find-make-builder "consult" (paths))
+
+(defun et/org-agenda-current-directory ()
+  "Return the visited file's directory, or the buffer's default directory."
+  (if buffer-file-name (file-name-directory buffer-file-name) default-directory))
+
+(defun et/org-agenda-select-directory (root)
+  "Select a local directory starting at ROOT, using Consult when available."
+  (when (file-remote-p root) (user-error "Choose a local directory"))
+  (let ((default-directory (file-name-as-directory (expand-file-name root))))
+    (expand-file-name
+     (if (and (executable-find "find") (require 'consult nil t))
+         (let ((consult-find-args '("find" "." "-not" "(" "-path" "*/.*" "-prune" ")" "-type" "d")))
+           (consult--find (format "Agenda directory in %s: " (abbreviate-file-name default-directory))
+                          (consult--find-make-builder '(".")) nil))
+       (read-directory-name "Agenda directory: " default-directory nil t)))))
+
+(defun et/org-agenda-add-directory (start recursive &optional select)
+  "Register START, or a directory selected there if SELECT.
+With RECURSIVE, include subdirectories. Direct additions do not prompt."
+  (let ((path (if select (et/org-agenda-select-directory start) start)))
+    (unless (and (not (file-remote-p path)) (file-directory-p path))
+      (user-error "Not an existing local directory: %s" path))
+    (et/org-agenda-add-source path (et/org-agenda-source-owner path select)
+                              (unless recursive 'shallow))))
+
+(defun et/org-agenda-add-current-directory ()
+  "Add the current file's directory without selecting a path."
+  (interactive)
+  (et/org-agenda-add-directory (et/org-agenda-current-directory) nil))
+
+(defun et/org-agenda-add-current-directory-recursive ()
+  "Add the current file's directory and its subdirectories."
+  (interactive)
+  (et/org-agenda-add-directory (et/org-agenda-current-directory) t))
+
+(defun et/org-agenda-select-current-directory ()
+  "Select a directory starting at the current file's directory."
+  (interactive)
+  (et/org-agenda-add-directory (et/org-agenda-current-directory) nil t))
+
+(defun et/org-agenda-select-current-directory-recursive ()
+  "Select a directory relative to the current file and include subdirectories."
+  (interactive)
+  (et/org-agenda-add-directory (et/org-agenda-current-directory) t t))
+
+(defun et/org-agenda-select-home-directory ()
+  "Select an agenda directory starting at home."
+  (interactive)
+  (et/org-agenda-add-directory "~/" nil t))
+
+(defun et/org-agenda-select-home-directory-recursive ()
+  "Select an agenda directory starting at home and include subdirectories."
+  (interactive)
+  (et/org-agenda-add-directory "~/" t t))
+
+(defvar et/org-agenda-source-map (make-sparse-keymap "Agenda directories"))
+(dolist (binding '(("d" . et/org-agenda-add-current-directory)
+                   ("D" . et/org-agenda-add-current-directory-recursive)
+                   ("s" . et/org-agenda-select-current-directory)
+                   ("S" . et/org-agenda-select-current-directory-recursive)
+                   ("h" . et/org-agenda-select-home-directory)
+                   ("H" . et/org-agenda-select-home-directory-recursive)
+                   ("e" . et/org-agenda-edit-directories)))
+  (define-key et/org-agenda-source-map (kbd (car binding)) (cdr binding)))
+
+(defconst et/org-agenda-directories-buffer "*Etmacs Agenda Directories*")
+(defvar-local et/org-agenda-directory-marks nil)
+
+(defun et/org-agenda-directories-entries ()
+  "Load this profile's editable directory registrations for the table."
+  (setq tabulated-list-entries nil
+        et/org-agenda-directory-marks nil)
+  (maphash (lambda (path entry)
+             (when (and (plist-get entry :directory) (et/org-agenda-source-editable-p entry))
+               (push (list path (vector (plist-get entry :owner)
+                                        (if (plist-get entry :enabled) "Enabled" "Disabled")
+                                        (if (plist-get entry :recursive) "Recursive" "Shallow")
+                                        (abbreviate-file-name path)))
+                     tabulated-list-entries)))
+           (et/org-agenda-read-sources)))
+
+(defun et/org-agenda-directories-print-row (path columns)
+  "Print the row for PATH with its COLUMNS and restore its mark."
+  (let ((start (point)))
+    (tabulated-list-print-entry path columns)
+    (when (member path et/org-agenda-directory-marks)
+      (save-excursion
+        (goto-char start)
+        (tabulated-list-put-tag "*")))))
+
+(defun et/org-agenda-directory-mark ()
+  "Mark the directory on this row and move to the next row."
+  (interactive)
+  (when-let* ((path (tabulated-list-get-id)))
+    (cl-pushnew path et/org-agenda-directory-marks :test #'equal)
+    (tabulated-list-put-tag "*" t)))
+
+(defun et/org-agenda-directory-unmark ()
+  "Unmark the directory on this row and move to the next row."
+  (interactive)
+  (when-let* ((path (tabulated-list-get-id)))
+    (setq et/org-agenda-directory-marks (delete path et/org-agenda-directory-marks))
+    (tabulated-list-put-tag " " t)))
+
+(defun et/org-agenda-directories-update (action)
+  "Apply ACTION to marked directories, or to the directory at point."
+  (let* ((paths (or et/org-agenda-directory-marks
+                    (when-let* ((path (tabulated-list-get-id))) (list path))))
+         (sources (et/org-agenda-read-sources)))
+    (unless paths (user-error "No agenda directory selected"))
+    (when (or (not (eq action 'remove))
+              (yes-or-no-p (format "Remove %d agenda directory registration(s)? " (length paths))))
+      (dolist (path paths)
+        (let ((entry (gethash path sources)))
+          (unless (and (plist-get entry :directory) (et/org-agenda-source-editable-p entry))
+            (user-error "Agenda source changed; refresh the list"))
+          (if (eq action 'remove)
+              (remhash path sources)
+            (puthash path (plist-put entry :enabled (eq action 'enable)) sources))))
+      (et/org-agenda-write-sources sources)
+      (et/org-refresh-agenda)
+      (tabulated-list-revert))))
+
+(defun et/org-agenda-directories-enable ()
+  "Enable marked directory registrations."
+  (interactive)
+  (et/org-agenda-directories-update 'enable))
+
+(defun et/org-agenda-directories-disable ()
+  "Disable marked directory registrations."
+  (interactive)
+  (et/org-agenda-directories-update 'disable))
+
+(defun et/org-agenda-directories-remove ()
+  "Remove marked directory registrations, without deleting files."
+  (interactive)
+  (et/org-agenda-directories-update 'remove))
+
+(defun et/org-agenda-directories-add ()
+  "Add a directory starting at home, without including subdirectories."
+  (interactive)
+  (et/org-agenda-select-home-directory)
+  (tabulated-list-revert))
+
+(defun et/org-agenda-directories-add-recursive ()
+  "Add a directory starting at home, including subdirectories."
+  (interactive)
+  (et/org-agenda-select-home-directory-recursive)
+  (tabulated-list-revert))
+
+(defvar et/org-agenda-directories-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "m") #'et/org-agenda-directory-mark)
+    (define-key map (kbd "u") #'et/org-agenda-directory-unmark)
+    (define-key map (kbd "e") #'et/org-agenda-directories-enable)
+    (define-key map (kbd "x") #'et/org-agenda-directories-disable)
+    (define-key map (kbd "d") #'et/org-agenda-directories-remove)
+    (define-key map (kbd "a") #'et/org-agenda-directories-add)
+    (define-key map (kbd "A") #'et/org-agenda-directories-add-recursive)
+    map))
+
+(define-derived-mode et/org-agenda-directories-mode tabulated-list-mode "Agenda Directories"
+  "Manage explicit agenda directory registrations."
+  (setq tabulated-list-format [("Owner" 12 t) ("Status" 10 t)
+                               ("Depth" 10 t) ("Directory" 0 t)]
+        tabulated-list-padding 2
+        tabulated-list-printer #'et/org-agenda-directories-print-row
+        tabulated-list-sort-key '("Directory" . nil))
+  (add-hook 'tabulated-list-revert-hook #'et/org-agenda-directories-entries nil t)
+  (tabulated-list-init-header)
+  (setq mode-line-process
+        "  SPC m: m mark · u unmark · e enable · x disable · d remove · a/A add · g refresh"))
+
+(defvar et/org-agenda-directories-leader-map
+  (let ((map (copy-keymap et/org-agenda-directories-mode-map)))
+    (set-keymap-parent map nil)
+    (define-key map (kbd "g") #'revert-buffer)
+    (define-key map (kbd "q") #'quit-window)
+    map)
+  "Agenda directory management commands under SPC m.")
+(et/register-package-leader 'et/org-agenda-directories-mode
+                            et/org-agenda-directories-leader-map)
+(with-eval-after-load 'evil
+  (evil-set-initial-state 'et/org-agenda-directories-mode 'normal))
+
+(defun et/org-agenda-edit-directories ()
+  "Show the editable agenda directory registrations."
+  (interactive)
+  (pop-to-buffer (get-buffer-create et/org-agenda-directories-buffer))
+  (unless (derived-mode-p 'et/org-agenda-directories-mode)
+    (et/org-agenda-directories-mode))
+  (tabulated-list-revert))
 
 (defun et/org-agenda (scope)
   "Open the daily dashboard for SCOPE."
   (interactive (list (completing-read "Agenda domain: "
-                                     (cons "all" et/profile-domains)
+                                     (cons "all" (et/org-agenda-visible-domains))
                                      nil t nil nil et/profile)))
   (et/org-refresh-agenda scope)
   (org-agenda nil "d"))
+(advice-add 'org-agenda-prepare :before #'et/org-agenda-refresh-sources)
 (add-hook 'org-capture-after-finalize-hook #'et/org-refresh-agenda)
+(et/org-refresh-agenda)
 
 (defun et/org-promote-heading ()
   "Promote the current heading, or shift the line left outside headings."
@@ -768,6 +1193,9 @@ The source buffer is never modified. Tables and code use fenced blocks."
 (add-hook 'org-mode-hook #'et/org-mode-defaults)
 (define-key et/notes-map (kbd "c") #'et/capture)
 (define-key et/notes-map (kbd "a") #'et/org-agenda)
+(define-key et/notes-map (kbd "A") #'et/org-agenda-add-source)
+(define-key et/notes-map (kbd "s") (cons "agenda directories" et/org-agenda-source-map))
+(define-key et/notes-map (kbd "t") #'org-todo-list)
 (define-key et/notes-map (kbd "D") #'et/set-domain)
 (define-key et/notes-map (kbd "C") #'et/capture-template-add)
 (global-set-key (kbd "C-c c") #'et/capture)
