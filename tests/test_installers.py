@@ -106,12 +106,39 @@ class InstallerTests(unittest.TestCase):
         settings = json.loads((self.installer.root / ".local/dependencies.json").read_text())
         self.assertEqual(settings["prefix"], str(self.installer.prefix))
 
+    def fake_opencode(self):
+        """Simulate service configuration without starting a real service."""
+        fake = self.path / "opencode"
+        fake.write_text('''#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import sys
+
+args = sys.argv[1:]
+if args == ["--version"]:
+    print("2.2.3")
+    sys.exit()
+directory = Path(os.environ["XDG_CONFIG_HOME"]) / "opencode"
+with (directory / "calls.jsonl").open("a") as log:
+    log.write(json.dumps(args) + "\\n")
+file = directory / "service.json"
+config = json.loads(file.read_text()) if file.exists() else {}
+if args == ["service", "get", "port"]:
+    print(config.get("port", ""))
+elif args[:3] == ["service", "set", "port"]:
+    config["port"] = int(args[3])
+    file.write_text(json.dumps(config))
+else:
+    print(os.environ["XDG_STATE_HOME"])
+    print(os.environ.get("OPENCODE_CONFIG_CONTENT", "unset"))
+''')
+        fake.chmod(0o755)
+        return fake
+
     def test_work_wrapper_isolated_policy_without_ai_requests(self):
         root = self.path / "work"
-        fake = self.path / "opencode"
-        fake.write_text("#!/bin/sh\nif [ \"$1\" = --version ]; then echo 2.2.3; exit; fi\n"
-                        "printf '%s\\n' \"$XDG_STATE_HOME\" \"${OPENCODE_CONFIG_CONTENT-unset}\"\n")
-        fake.chmod(0o755)
+        fake = self.fake_opencode()
         env = dict(os.environ, ETMACS_WORK_ROOT=str(root), ETMACS_OPENCODE=str(fake),
                    OPENCODE_CONFIG_CONTENT='{"model":"deepseek/deepseek-chat"}')
         result = subprocess.run([str(ROOT / "scripts/opencode-work"), "models"],
@@ -127,6 +154,38 @@ class InstallerTests(unittest.TestCase):
             self.assertEqual(decision, "deny")
         self.assertEqual(policy[1]["resource"], "openai")
         self.assertEqual(policy[1]["effect"], "allow")
+
+    def test_work_wrapper_initializes_separate_port_only_once(self):
+        root = self.path / "work"
+        fake = self.fake_opencode()
+        env = dict(os.environ, ETMACS_WORK_ROOT=str(root), ETMACS_OPENCODE=str(fake))
+        for _ in range(2):
+            subprocess.run([str(ROOT / "scripts/opencode-work"), "service", "start"],
+                           env=env, check=True, text=True, capture_output=True)
+        directory = root / "config/opencode"
+        self.assertEqual(json.loads((directory / "service.json").read_text())["port"],
+                         49375)
+        calls = [json.loads(line) for line in (directory / "calls.jsonl").read_text().splitlines()]
+        self.assertEqual(calls, [["service", "get", "port"],
+                                 ["service", "set", "port", "49375"],
+                                 ["service", "start"],
+                                 ["service", "get", "port"],
+                                 ["service", "start"]])
+
+    def test_work_wrapper_preserves_custom_service_configuration(self):
+        root = self.path / "work"
+        directory = root / "config/opencode"
+        directory.mkdir(parents=True)
+        config = {"port": 50400, "hostname": "127.0.0.1"}
+        (directory / "service.json").write_text(json.dumps(config))
+        fake = self.fake_opencode()
+        subprocess.run([str(ROOT / "scripts/opencode-work"), "models"],
+                       env=dict(os.environ, ETMACS_WORK_ROOT=str(root),
+                                ETMACS_OPENCODE=str(fake)),
+                       check=True, text=True, capture_output=True)
+        self.assertEqual(json.loads((directory / "service.json").read_text()), config)
+        calls = [json.loads(line) for line in (directory / "calls.jsonl").read_text().splitlines()]
+        self.assertEqual(calls, [["service", "get", "port"], ["models"]])
 
     def test_work_wrapper_refuses_legacy_opencode(self):
         fake = self.path / "opencode"

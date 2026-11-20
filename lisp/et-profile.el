@@ -198,9 +198,12 @@
                                          "opencode")
           et/profile-hidden-providers (plist-get spec :hidden-providers)
           et/org-domain (plist-get spec :domain)
-          et/org-agenda-scope (plist-get spec :domain)
-          et/dashboard-agenda-domains (copy-sequence (plist-get spec :domains)))
-    (make-directory et/profile-state-directory t)
+           et/org-agenda-scope et/profile
+           et/dashboard-agenda-domains
+           (delete-dups (cons et/profile (copy-sequence et/profile-domains))))
+     (make-directory et/profile-state-directory t)
+     (when (fboundp 'et/org-refresh-agenda)
+       (et/org-refresh-agenda))
     (unless noninteractive
       (message "Etmacs profile: %s" (plist-get spec :label)))
     et/profile))

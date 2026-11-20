@@ -666,9 +666,12 @@ neutral default. News summaries remain on =gpt-6-luna= until changed with
                                          "opencode")
           et/profile-hidden-providers (plist-get spec :hidden-providers)
           et/org-domain (plist-get spec :domain)
-          et/org-agenda-scope (plist-get spec :domain)
-          et/dashboard-agenda-domains (copy-sequence (plist-get spec :domains)))
-    (make-directory et/profile-state-directory t)
+           et/org-agenda-scope et/profile
+           et/dashboard-agenda-domains
+           (delete-dups (cons et/profile (copy-sequence et/profile-domains))))
+     (make-directory et/profile-state-directory t)
+     (when (fboundp 'et/org-refresh-agenda)
+       (et/org-refresh-agenda))
     (unless noninteractive
       (message "Etmacs profile: %s" (plist-get spec :label)))
     et/profile))
@@ -730,8 +733,8 @@ neutral default. News summaries remain on =gpt-6-luna= until changed with
 
 * Editing, paths, and leader maps
 
-Use built-in history, saved cursor positions, Which Key, and window layout undo.
-Do not persist the kill ring. All histories may contain private paths/input; delete =.local/= state
+Use built-in history, saved cursor positions, Which Key, and window layout undo.  Do not
+persist the kill ring. All histories may contain private paths/input; delete =.local/= state
 selectively when needed. Never sync this directory with notes.
 
 =C--= and =C-+= (also =C-==) change the global font size in every buffer and
@@ -1737,16 +1740,24 @@ and five Work Org tasks, and Elfeed's cached articles without contacting the
 network. Tasks are grouped by domain and sorted by state, explicit priority,
 then deadline or schedule; overflow is shown as =+N more=. Buttons use Emacs's
 built-in =button= library; article and task buttons open the browser or the
-original Org heading. Refresh with =g=, quit with =q=, and use =RET= to activate a
-button. =TAB= collapses or expands the news article list for the feed at point;
+original Org heading. Refresh with =SPC m g=, quit with =SPC m q=, and use
+=SPC m RET= to activate a button. =SPC m TAB= toggles the feed at point;
 feed actions remain available. =SPC d= opens the dashboard; set
 =et/dashboard-on-startup= to nil to start on scratch instead.
+
+The dashboard keeps Evil in Normal state. Its commands are available under =SPC m=, leaving
+Evil's movement and editing keys alone.  On a task row, =SPC m t= changes status, =SPC m s=
+schedules, =SPC m D= sets a deadline, =SPC m P= sets priority, =SPC m T= edits tags, and =SPC m
+E= sets effort. =SPC m e= opens a menu with the same actions and options to remove dates. These
+use Org's normal prompts, save the source file, and refresh the dashboard. Status changes that
+require a log note keep Org's note prompt (=C-c C-c= to finish).
 
 #+begin_src emacs-lisp :tangle lisp/et-dashboard.el
 ;;; et-dashboard.el --- Generated from config.org -*- lexical-binding: t; -*-
 (require 'button)
 (require 'seq)
 (require 'subr-x)
+(require 'org)
 
 (declare-function et/capture "et-org" (&optional key))
 (declare-function et/current-domain "et-org" (&optional buffer))
@@ -1758,6 +1769,9 @@ feed actions remain available. =SPC d= opens the dashboard; set
 (declare-function et/org-task-due-label "et-org" (task))
 (declare-function et/org-task-sort-predicate "et-org" (a b))
 (declare-function et/news-summarize-at-point "et-news" ())
+(defvar et/org-agenda-scope)
+(defvar et/org-agenda-file-domains)
+(defvar org-agenda-files)
 
 (defvar et/dashboard-buffer-name "*etmacs-dashboard*")
 (defvar et/dashboard-on-startup t
@@ -1770,6 +1784,7 @@ feed actions remain available. =SPC d= opens the dashboard; set
   "Maximum number of tasks shown per domain on the dashboard.")
 (defvar et/dashboard-agenda-domains (copy-sequence et/profile-domains)
   "Domains shown as separate agenda groups on the dashboard.")
+(defvar-local et/dashboard-task-markers nil)
 
 (defvar et/dashboard-mode-map
   (let ((map (make-sparse-keymap)))
@@ -1779,6 +1794,13 @@ feed actions remain available. =SPC d= opens the dashboard; set
     (define-key map (kbd "a") #'et/dashboard-agenda)
     (define-key map (kbd "p") #'et/dashboard-switch-project)
     (define-key map (kbd "c") #'et/capture)
+    (define-key map (kbd "t") #'et/dashboard-task-todo)
+    (define-key map (kbd "s") #'et/dashboard-task-schedule)
+    (define-key map (kbd "D") #'et/dashboard-task-deadline)
+    (define-key map (kbd "P") #'et/dashboard-task-priority)
+    (define-key map (kbd "T") #'et/dashboard-task-tags)
+    (define-key map (kbd "E") #'et/dashboard-task-effort)
+    (define-key map (kbd "e") #'et/dashboard-task-edit)
     (define-key map (kbd "n") #'et/dashboard-news)
     (define-key map (kbd "S") #'et/news-summarize-at-point)
     (define-key map (kbd "TAB") #'et/dashboard-toggle-news-feed)
@@ -1790,10 +1812,136 @@ feed actions remain available. =SPC d= opens the dashboard; set
     map)
   "Keymap for the Etmacs dashboard.")
 
+(defvar et/dashboard-leader-map
+  (let ((map (copy-keymap et/dashboard-mode-map)))
+    (set-keymap-parent map nil)
+    (define-key map (kbd "q") #'quit-window)
+    map)
+  "Dashboard commands under SPC m, without overriding Evil's normal keys.")
+(et/register-package-leader 'et/dashboard-mode et/dashboard-leader-map)
+
+(with-eval-after-load 'evil
+  (evil-set-initial-state 'et/dashboard-mode 'normal))
+
 (define-derived-mode et/dashboard-mode special-mode "Etmacs Dashboard"
   "Major mode for the Etmacs dashboard."
   (setq-local revert-buffer-function #'et/dashboard-refresh)
-  (setq-local truncate-lines t))
+  (setq-local truncate-lines t)
+  (add-hook 'kill-buffer-hook #'et/dashboard-release-task-markers nil t))
+
+(defun et/dashboard-release-task-markers ()
+  "Release source markers owned by this dashboard."
+  (mapc (lambda (marker) (set-marker marker nil)) et/dashboard-task-markers)
+  (setq et/dashboard-task-markers nil))
+
+(defun et/dashboard-task-at-point ()
+  "Return the source marker for the task row at point, or signal a user error."
+  (unless (derived-mode-p 'et/dashboard-mode)
+    (user-error "Not in the dashboard"))
+  (let* ((position (line-beginning-position))
+         (marker (get-text-property position 'et-dashboard-task))
+         (heading (get-text-property position 'et-dashboard-task-heading)))
+    (unless (and (markerp marker) (marker-buffer marker))
+      (user-error "Move to a dashboard task row"))
+    (org-with-point-at marker
+      (unless (and (org-at-heading-p) (equal heading (org-get-heading t t t t)))
+        (user-error "Task changed or was removed; refresh with SPC m g")))
+    marker))
+
+(defun et/dashboard-task-refresh-after-edit (source dashboard)
+  "Save SOURCE and refresh DASHBOARD if they still exist."
+  (when (buffer-live-p source)
+    (with-current-buffer source
+      (when (buffer-modified-p) (save-buffer))))
+  (when (buffer-live-p dashboard)
+    (with-current-buffer dashboard (et/dashboard-refresh))))
+
+(defun et/dashboard-task-finish-note (finish source dashboard)
+  "Finish an Org log note with FINISH, then save SOURCE and refresh DASHBOARD."
+  (funcall finish)
+  (et/dashboard-task-refresh-after-edit source dashboard))
+
+(defun et/dashboard-task-command (command &optional prefix)
+  "Run Org COMMAND on the task row at point, forwarding PREFIX."
+  (let* ((marker (et/dashboard-task-at-point))
+         (source (marker-buffer marker))
+         (dashboard (current-buffer))
+         (identity (copy-marker marker))
+         note
+         (current-prefix-arg prefix))
+    (unwind-protect
+        (progn
+          (org-with-point-at marker
+            (call-interactively command)
+            ;; Complete time-only logs immediately; display text note prompts
+            ;; before returning so they keep their original task and command.
+            (when org-log-setup
+              (org-add-log-note)
+              (when (and (equal (buffer-name) "*Org Note*")
+                         (local-variable-p 'org-finish-function))
+                (setq note (current-buffer)))))
+          (when note
+            (with-current-buffer note
+              (setq-local org-finish-function
+                          (apply-partially #'et/dashboard-task-finish-note
+                                           org-finish-function source dashboard))))
+          (et/dashboard-task-refresh-after-edit source dashboard)
+          (with-current-buffer dashboard
+            (when-let* ((position
+                         (seq-some
+                          (lambda (candidate)
+                            (when (and (eq (marker-buffer candidate) (marker-buffer identity))
+                                       (equal (marker-position candidate) (marker-position identity)))
+                              (text-property-any (point-min) (point-max)
+                                                 'et-dashboard-task candidate)))
+                          et/dashboard-task-markers)))
+              (goto-char position))))
+      (set-marker identity nil))))
+
+(defun et/dashboard-task-todo ()
+  "Change the TODO state of the dashboard task at point."
+  (interactive)
+  (et/dashboard-task-command #'org-todo current-prefix-arg))
+
+(defun et/dashboard-task-schedule ()
+  "Schedule the task at point; with a prefix, remove its schedule."
+  (interactive)
+  (et/dashboard-task-command #'org-schedule current-prefix-arg))
+
+(defun et/dashboard-task-deadline ()
+  "Set the task's deadline; with a prefix, remove it."
+  (interactive)
+  (et/dashboard-task-command #'org-deadline current-prefix-arg))
+
+(defun et/dashboard-task-priority ()
+  "Set the priority of the dashboard task at point."
+  (interactive)
+  (et/dashboard-task-command #'org-priority current-prefix-arg))
+
+(defun et/dashboard-task-tags ()
+  "Edit tags on the dashboard task at point."
+  (interactive)
+  (et/dashboard-task-command #'org-set-tags-command current-prefix-arg))
+
+(defun et/dashboard-task-effort ()
+  "Set the effort estimate of the dashboard task at point."
+  (interactive)
+  (et/dashboard-task-command #'org-set-effort current-prefix-arg))
+
+(defun et/dashboard-task-edit ()
+  "Choose an edit action for the dashboard task at point."
+  (interactive)
+  (et/dashboard-task-at-point)
+  (let* ((actions '(("Status" org-todo nil)
+                    ("Scheduled time" org-schedule nil)
+                    ("Deadline" org-deadline nil)
+                    ("Remove scheduled time" org-schedule (4))
+                    ("Remove deadline" org-deadline (4))
+                    ("Priority" org-priority nil)
+                    ("Tags" org-set-tags-command nil)
+                    ("Effort" org-set-effort nil)))
+         (action (assoc (completing-read "Edit task: " actions nil t) actions)))
+    (et/dashboard-task-command (nth 1 action) (nth 2 action))))
 
 (define-button-type 'et/dashboard-button
   'action #'ignore
@@ -1881,6 +2029,7 @@ is sorted by importance and date, then limited to
 Keep point at its previous position, clamped to the new contents."
   (let ((inhibit-read-only t)
         (position (point)))
+    (et/dashboard-release-task-markers)
     (erase-buffer)
     (insert (propertize "Etmacs\n" 'face '(:height 1.4 :weight bold)))
     (insert (format-time-string "%A, %Y-%m-%d %H:%M\n\n"))
@@ -1920,16 +2069,21 @@ Keep point at its previous position, clamped to the new contents."
             (insert (propertize (format "  %s\n" (capitalize domain))
                                 'face 'bold))
             (dolist (task tasks)
-              (let ((task task))
+              (let* ((start (point))
+                     (marker (with-current-buffer (find-file-noselect (plist-get task :file))
+                               (copy-marker (plist-get task :position) t))))
+                (push marker et/dashboard-task-markers)
                 (insert "    ")
                 (let ((state (plist-get task :state)))
                   (insert (propertize (format "%-12s " state)
                                       'face (et/org-state-face state))))
                 (et/dashboard-insert-button
-                 (plist-get task :heading)
-                 (lambda (_button)
-                   (et/dashboard-open-agenda-item (plist-get task :file)
-                                                  (plist-get task :position)))
+                  (plist-get task :heading)
+                  (lambda (_button)
+                    (unless (marker-buffer marker)
+                      (user-error "Task buffer is gone; refresh with SPC m g"))
+                    (et/dashboard-open-agenda-item (buffer-file-name (marker-buffer marker))
+                                                   marker))
                  (plist-get task :heading))
                 (when-let* ((due (et/org-task-due-label task)))
                   (insert (propertize (format "  %s" due)
@@ -1937,7 +2091,10 @@ Keep point at its previous position, clamped to the new contents."
                                                   ((string-match-p "today\\|tomorrow" due)
                                                    'warning)
                                                   (t 'shadow)))))
-                (insert "\n")))
+                (insert "\n")
+                (add-text-properties start (point)
+                                     (list 'et-dashboard-task marker
+                                           'et-dashboard-task-heading (plist-get task :heading)))))
             (when (> total (length tasks))
               (insert (propertize
                        (format "    +%d more\n" (- total (length tasks)))
@@ -2002,7 +2159,7 @@ Keep point at its previous position, clamped to the new contents."
                                (list 'et-dashboard-news-site site-id)))))
     (insert "\n")
     (insert (propertize
-             "g refresh · q quit · TAB feed · RET open · d journal · a agenda\n"
+              "SPC m: g refresh · q quit · TAB feed · RET open · d journal · a agenda\nTasks (SPC m): t status · s schedule · D deadline · P priority · T tags · E effort · e edit\n"
              'face 'shadow))
     (goto-char (min position (point-max)))))
 
@@ -2011,14 +2168,15 @@ Keep point at its previous position, clamped to the new contents."
   (interactive)
   (unless (derived-mode-p 'et/dashboard-mode)
     (user-error "Not in the Etmacs dashboard"))
-  (et/dashboard-render))
+  (let ((et/org-agenda-scope et/org-agenda-scope)
+        (et/org-agenda-file-domains nil)
+        (org-agenda-files org-agenda-files))
+    (when (fboundp 'et/org-refresh-agenda)
+      (et/org-refresh-agenda "all"))
+    (et/dashboard-render)))
 
 (defun et/dashboard-buffer ()
   "Return the refreshed dashboard buffer without switching to it."
-  (when (fboundp 'et/org-refresh-agenda)
-    (condition-case nil
-        (et/org-refresh-agenda "all")
-      (error nil)))
   (let ((buffer (get-buffer-create et/dashboard-buffer-name)))
     (with-current-buffer buffer
       (unless (derived-mode-p 'et/dashboard-mode)
@@ -2081,32 +2239,27 @@ Keep point at its previous position, clamped to the new contents."
 
 * News and feeds
 
-=elfeed= reads RSS. Scientific American has one public syndication feed; the
-New York Times exposes separate topic feeds; Decipher, ArsTechnica Security,
-TechNet/Microsoft Security, SecurityWeek, and BleepingComputer supply the
-cybersecurity feeds. The Emacs site combines r/emacs, Planet Emacslife, Sacha
-Chua's Emacs News, Mastering Emacs, System Crafters, and Emacs Stack Exchange;
-toggle individual sources with =et/news-select-feeds=. All feeds are
-downloaded, while =et/news-select-feeds= controls which topics contribute to the
-dashboard's five newest articles per site. The dashboard reads only Elfeed's local cache, so startup never fetches the
-network; =SPC N u= updates feeds. Each site's "Open full feed" button opens the
-Elfeed search buffer filtered to that site. In an Elfeed search buffer,
-=SPC N /= searches by keyword, =SPC N f= narrows to a feed, =SPC N d= narrows to a
-date range, =SPC N m=/=M= mark read/unread, and =SPC N r= creates an Org-roam
-reference note with an AI-summary placeholder (extension hook:
-=et/news-roam-ai-hook=). =S= in the dashboard or =SPC N r= / =SPC N R= /
-=SPC N S= in Elfeed downloads the article and opens an unsaved AI summary
-draft. In the draft, =C-c= accepts and saves, =C-k= cancels, =C-r=
-regenerates with the current model, and =C-m= chooses another gptel model.
-Summaries default to =gpt-6-luna=; =SPC C n= or
-=M-x et/change-news-summary-model= changes the summary model for the current
-session without persisting it.
-The prompt first classifies the article: cybersecurity articles get the full
-=* Security details= structure, while other articles contain only metadata and
-=* Summary=, with no security section or forced security tag. Summary tags use
-=_= as the only separator and carry category prefixes: =#= topics, =@=
-people/groups/foundations, =$= companies, and =!= MITRE techniques. Org's tag
-syntax is extended locally to allow =$= and =!=.
+=elfeed= reads RSS. Scientific American has one public syndication feed; the New York Times
+exposes separate topic feeds; Decipher, ArsTechnica Security, TechNet/Microsoft Security,
+SecurityWeek, and BleepingComputer supply the cybersecurity feeds. The Emacs site combines
+r/emacs, Planet Emacslife, Sacha Chua's Emacs News, Mastering Emacs, System Crafters, and Emacs
+Stack Exchange; toggle individual sources with =et/news-select-feeds=. All feeds are
+downloaded, while =et/news-select-feeds= controls which topics contribute to the dashboard's
+five newest articles per site. The dashboard reads only Elfeed's local cache, so startup never
+fetches the network; =SPC N u= updates feeds. Each site's "Open full feed" button opens the
+Elfeed search buffer filtered to that site. In an Elfeed search buffer, =SPC N /= searches by
+keyword, =SPC N f= narrows to a feed, =SPC N d= narrows to a date range, =SPC N m=/=M= mark
+read/unread, and =SPC N r= creates an Org-roam reference note with an AI-summary placeholder
+(extension hook: =et/news-roam-ai-hook=). =S= in the dashboard or =SPC N r= / =SPC N R= / =SPC
+N S= in Elfeed downloads the article and opens an unsaved AI summary draft. In the draft, =C-c=
+accepts and saves, =C-k= cancels, =C-r= regenerates with the current model, and =C-m= chooses
+another gptel model.  Summaries default to =gpt-6-luna=; =SPC C n= or =M-x
+et/change-news-summary-model= changes the summary model for the current session without
+persisting it.  The prompt first classifies the article: cybersecurity articles get the full =*
+Security details= structure, while other articles contain only metadata and =* Summary=, with
+no security section or forced security tag. Summary tags use =_= as the only separator and
+carry category prefixes: =#= topics, =@= people/groups/foundations, =$= companies, and =!=
+MITRE techniques. Org's tag syntax is extended locally to allow =$= and =!=.
 
 #+begin_src emacs-lisp :tangle lisp/et-news.el
 ;;; et-news.el --- Generated from config.org -*- lexical-binding: t; -*-
@@ -4711,14 +4864,20 @@ Call ON-CREATED with the new session, as `opencode--create-session' does."
 ;;; et-ai.el ends here
 #+end_src
 
-** TODO Explore other models for news summaries
+** IN-PROGRESS [0%] Explore other models for news summaries
+*** TODO Check costs for different models
+*** TODO Check quality for different models
 
+*** Description
 The news summary default is deliberately =gpt-6-luna=. Use =SPC C n= or
 =M-x et/change-news-summary-model= to try another gptel model for the current
 session. When exploring, compare cost, latency, instruction-following, and
 whether the model reliably returns Org syntax for the cybersecurity and general
 summary templates. Do not persist a work-profile override that would make
 DeepSeek models available on the work machine.
+
+*** Notes
+=gpt-6.2-terra= might do a better job without much cost difference.
 
 * Terminal: vterm
 
@@ -4882,9 +5041,9 @@ With prefix ARG, use `default-directory' instead."
 
 * Prelude-inspired editing and navigation
 
-This layer adopts capabilities from [[https://github.com/bbatsov/prelude][Emacs Prelude]], not its startup framework or
-global keymap. Existing Evil/leader keys, package installation policy, workspace
-boundaries, Corfu/Vertico, and the theme remain ours. No Prelude dependency.
+This layer adopts capabilities from [[https://github.com/bbatsov/prelude][Emacs Prelude]], not
+its startup framework or global keymap. Existing Evil/leader keys, package installation policy,
+workspace boundaries, Corfu/Vertico, and the theme remain ours. No Prelude dependency.
 
 ** Built-in defaults first
 
@@ -5250,17 +5409,30 @@ region.  A long indivisible URL or table row can exceed the prose width."
 * Org planning and capture
 
 Built-in Org owns tasks, capture, refile, habits, clocks, Babel, IDs, and export.
-Task files are =~/org/{personal,work}/{inbox,tasks}.org=. Project tasks live in
-the =Tasks= heading of a selected project note under =roam/DOMAIN/projects/=.
-Existing files outside this convention can be included with
-=et/org-extra-agenda-files=; nothing is moved or scanned across the whole vault.
+Agenda and TODO views scan the active profile's Org directory recursively,
+plus =~/org/general/=, and include project and daily notes in those domains
+under the roam root. The General profile sees only General. The vault root is
+not scanned. Capture creates only its selected destination's parents.
 
-Capture creates only its selected destination's parents. Starting Emacs does
-not create notes, index the vault, or connect to a graph server. Agenda sources
-are refreshed explicitly on agenda invocation and after capture, scanning only
-the designated project-note directories, not every topic/research/daily note.
-Each profile's agenda includes its own domain plus general; general alone shows
-only general.
+=SPC n A= (=et/org-agenda-add-source=) registers the current Org file or
+directory (or another local path). It registers directories recursively.
+The =SPC n s= directory menu has separate shallow (lowercase) and recursive
+(uppercase) shortcuts: =d/D= adds the current file's directory directly,
+=s/S= opens Consult there, and =h/H= opens Consult at home. In Dired or
+another buffer without a file, the current directory is used instead.
+=SPC n s e= opens the directory editor, with Evil active. Mark rows with
+=SPC m m=, unmark with =SPC m u=, then =SPC m e= enables, =SPC m x= disables,
+and =SPC m d= removes. Use =SPC m a/A= there to add
+shallow or recursive sources. Removing a registration never deletes files.
+
+Outside the standard note directories, the default is private to
+the current profile; choose =general= explicitly to share with both profiles.
+Paths within a note domain keep that domain and cannot be shared by
+registration. More-specific external registrations take precedence over
+parent directories. Nothing is moved or edited. To undo a registration use
+=M-x et/org-agenda-remove-source=. Legacy =et/org-extra-agenda-files= entries
+are included only when they belong to a visible note domain; register external
+entries with =SPC n A= to choose which profile can see them.
 
 Domain defaults are workspace-local when Perspective is active and can be set
 with =SPC n D=, limited to the active profile's visible domains. A
@@ -5268,9 +5440,12 @@ domain-specific note overrides the workspace default. General notes are shared
 organizationally, not by a privacy/security boundary.
 
 Capture keys: =SPC X= opens the general menu; =pi= personal inbox, =pt= personal
-TODO, =ph= daily personal habit, =wi= work inbox, =wt= work TODO, =gi= general
-inbox, =gt= general TODO, =gI= general idea, =j= project task. Templates are
-filtered to the active profile, and captures carry their domain tag. Only the
+TODO, =pI= personal idea, =ph= personal habit, =wi= work inbox, =wt= work TODO,
+=wI= work idea, =wh= work habit, =gi= general inbox, =gt= general TODO,
+=gI= general idea, =gh= general habit, =j= project task. Use a General
+template to share an item from the start, or use Org refile to move an existing
+heading to a General file. Templates are filtered to the active profile, and
+captures carry their domain tag. Only the
 habit template introduces a schedule/repeater; normal TODOs have no invented
 dates/deadlines. The initial daily habit schedule is editable before finalizing.
 
@@ -5293,8 +5468,10 @@ email.
 (require 'org-clock)
 (require 'org-element)
 (require 'oc)
+(require 'json)
 (require 'seq)
 (require 'subr-x)
+(require 'tabulated-list)
 
 ;; Extend Org's tag character set for company ($) and MITRE (!) tags.
 (setq org-tag--valid-char-set "[:alnum:]_@#%$!"
@@ -5312,7 +5489,12 @@ email.
 (defvar et/org-domains '("personal" "work" "general"))
 (defvar et/org-agenda-scope et/profile)
 (defvar et/org-extra-agenda-files nil
-  "Existing task files outside the convention; included in all-domain agendas.")
+  "Legacy task files that belong to a known note domain.
+Register unclassified paths with `et/org-agenda-add-source' instead.")
+(defvar et/org-agenda-sources-file (expand-file-name "agenda-sources.json" et/state-directory)
+  "JSON mapping explicitly registered agenda paths to their profile owners.")
+(defvar et/org-agenda-file-domains nil
+  "Mapping from current agenda files to their domains for dashboard grouping.")
 (defvar et/bibliography-files nil "Local BibTeX files; set in .local/settings.el.")
 (defvar et/org-map (make-sparse-keymap "Org"))
 (defvar et/org-export-map (make-sparse-keymap "export"))
@@ -5353,9 +5535,10 @@ email.
     (make-directory (file-name-directory file) t)
     file))
 
-(defun et/habit-template ()
-  "Return an editable daily recurring habit starting today."
-  (format "* TODO %%? :personal:\nSCHEDULED: <%s .+1d>\n:PROPERTIES:\n:STYLE: habit\n:END:\n"
+(defun et/habit-template (&optional domain)
+  "Return an editable daily recurring habit in DOMAIN, defaulting to personal."
+  (format "* TODO %%? :%s:\nSCHEDULED: <%s .+1d>\n:PROPERTIES:\n:STYLE: habit\n:END:\n"
+          (or domain "personal")
           (format-time-string "%Y-%m-%d %a")))
 
 (defun et/project-task-template ()
@@ -5423,11 +5606,17 @@ email.
          (not (string-prefix-p "#" name))
          (file-regular-p file))))
 
-(defun et/org-directory-org-files (directory)
-  "Return real Org files below DIRECTORY."
-  (when (file-directory-p directory)
+(defun et/org-directory-org-files (directory &optional recursive)
+  "Return real Org files in DIRECTORY, descending if RECURSIVE."
+  (when (and (file-directory-p directory) (file-readable-p directory))
     (seq-filter #'et/org-agenda-file-p
-                (directory-files-recursively directory "\\.org\\'"))))
+                (if recursive
+                    (directory-files-recursively
+                     directory "\\.org\\'" nil
+                     (lambda (dir)
+                       (and (file-readable-p dir)
+                            (not (string-prefix-p "." (file-name-nondirectory dir))))))
+                  (directory-files directory t "\\.org\\'")))))
 
 (defun et/org-entry-priority ()
   "Return the current entry's explicit priority letter, or nil."
@@ -5461,8 +5650,10 @@ Each plist has :heading, :state, :priority, :scheduled, :deadline,
                                    :scheduled scheduled
                                    :deadline deadline
                                    :due (or deadline scheduled)
-                                   :domain (or (et/file-domain (buffer-file-name))
-                                               "general")
+                                    :domain (or (alist-get file et/org-agenda-file-domains
+                                                           nil nil #'equal)
+                                                (et/file-domain (buffer-file-name))
+                                                "general")
                                    :file (buffer-file-name)
                                    :position (point))
                              tasks)))))
@@ -5578,6 +5769,9 @@ Undated actionable states in `et/org-agenda-undated-states' are kept."
     ("pt" "TODO" entry
      (file+headline (lambda () (et/org-target-file "personal/tasks.org")) "Tasks")
      "* TODO %? :personal:\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n" :empty-lines 1)
+    ("pI" "Idea" entry
+     (file+headline (lambda () (et/org-target-file "personal/ideas.org")) "Ideas")
+     "* IDEA %? :personal:idea:\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n" :empty-lines 1)
     ("ph" "Daily habit" entry
      (file+headline (lambda () (et/org-target-file "personal/tasks.org")) "Habits")
      (function et/habit-template) :empty-lines 1)
@@ -5588,6 +5782,12 @@ Undated actionable states in `et/org-agenda-undated-states' are kept."
     ("wt" "TODO" entry
      (file+headline (lambda () (et/org-target-file "work/tasks.org")) "Tasks")
      "* TODO %? :work:\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n" :empty-lines 1)
+    ("wI" "Idea" entry
+     (file+headline (lambda () (et/org-target-file "work/ideas.org")) "Ideas")
+     "* IDEA %? :work:idea:\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n" :empty-lines 1)
+    ("wh" "Daily habit" entry
+     (file+headline (lambda () (et/org-target-file "work/tasks.org")) "Habits")
+     (function (lambda () (et/habit-template "work"))) :empty-lines 1)
     ("g" "General")
     ("gi" "Inbox" entry
      (file+headline (lambda () (et/org-target-file "general/inbox.org")) "Inbox")
@@ -5598,6 +5798,9 @@ Undated actionable states in `et/org-agenda-undated-states' are kept."
     ("gI" "Idea" entry
      (file+headline (lambda () (et/org-target-file "general/ideas.org")) "Ideas")
      "* IDEA %? :general:idea:\n:PROPERTIES:\n:CREATED: %U\n:END:\n%a\n" :empty-lines 1)
+    ("gh" "Daily habit" entry
+     (file+headline (lambda () (et/org-target-file "general/tasks.org")) "Habits")
+     (function (lambda () (et/habit-template "general"))) :empty-lines 1)
     ("j" "Project task" entry (function et/project-task-target)
      (function et/project-task-template) :empty-lines 1))
   "Built-in capture templates; interactive templates are prepended.")
@@ -5690,43 +5893,440 @@ are prompted for interactively.  TARGET-TYPE is either
   (interactive)
   (org-capture nil key))
 
+(defun et/org-agenda-visible-domains ()
+  "Return the active profile's agenda domains."
+  (delete-dups (cons et/profile (copy-sequence et/profile-domains))))
+
+(defun et/org-agenda-note-roots (&optional lexical)
+  "Return profile note roots, resolving symlinks unless LEXICAL is non-nil."
+  (let ((roots
+         (cl-loop for domain in (et/profile-names)
+                  append (cl-loop for base in (list et/notes-directory et/roam-directory)
+                                  for root = (expand-file-name domain base)
+                                  unless (file-remote-p root)
+                                  collect (cons (file-name-as-directory root) domain)))))
+    (if lexical roots
+      (mapcar (lambda (entry)
+                (let* ((true (directory-file-name (file-truename (car entry))))
+                       (domain (or (et/org-agenda-note-domain true roots) (cdr entry))))
+                  (cons (file-name-as-directory true) domain)))
+              roots))))
+
+(defun et/org-agenda-note-domain (path roots)
+  "Return the domain containing PATH in ROOTS."
+  (cdr (seq-find (lambda (entry)
+                   (or (equal path (directory-file-name (car entry)))
+                       (string-prefix-p (car entry) path)))
+                 roots)))
+
+(defun et/org-agenda-source-domain (path true)
+  "Find the note domain of PATH and its resolved path TRUE."
+  (let ((domain (et/org-agenda-note-domain true (et/org-agenda-note-roots)))
+        (lexical (et/org-agenda-note-domain (directory-file-name (expand-file-name path))
+                                           (et/org-agenda-note-roots t))))
+    (when (and lexical (not (equal lexical domain)))
+      (user-error "Agenda source points outside its note domain"))
+    domain))
+
+(defun et/org-agenda-read-sources ()
+  "Read registered paths and their settings, accepting old owner-only entries."
+  (let ((sources (make-hash-table :test #'equal)))
+    (when (file-exists-p et/org-agenda-sources-file)
+      (with-temp-buffer
+        (insert-file-contents et/org-agenda-sources-file)
+        (let ((data (json-parse-buffer :object-type 'hash-table)))
+          (unless (hash-table-p data)
+            (error "Invalid agenda sources in %s" et/org-agenda-sources-file))
+          (maphash
+           (lambda (path entry)
+             (when (and (file-name-absolute-p path) (not (file-remote-p path)))
+               (cond
+                ((stringp entry)
+                 (let ((directory (file-directory-p path)))
+                   (puthash path (list :owner entry :directory directory
+                                       :recursive directory :enabled t) sources)))
+                ((and (hash-table-p entry) (stringp (gethash "owner" entry)))
+                 (puthash path (list :owner (gethash "owner" entry)
+                                     :directory (eq t (gethash "directory" entry))
+                                     :recursive (eq t (gethash "recursive" entry))
+                                     :enabled (eq t (gethash "enabled" entry)))
+                          sources)))))
+           data))))
+    sources))
+
+(defun et/org-agenda-write-sources (sources)
+  "Save SOURCES atomically without changing note contents."
+  (let ((directory (file-name-directory et/org-agenda-sources-file))
+        (data (make-hash-table :test #'equal)))
+    (maphash (lambda (path entry)
+               (puthash path `((owner . ,(plist-get entry :owner))
+                               (directory . ,(or (plist-get entry :directory) :false))
+                               (recursive . ,(or (plist-get entry :recursive) :false))
+                               (enabled . ,(or (plist-get entry :enabled) :false)))
+                        data))
+             sources)
+    (make-directory directory t)
+    (let ((temp (make-temp-file (expand-file-name ".agenda-sources-" directory))))
+      (unwind-protect
+          (progn
+            (with-temp-file temp (insert (json-serialize data) "\n"))
+            (rename-file temp et/org-agenda-sources-file t))
+        (when (file-exists-p temp) (delete-file temp))))))
+
+(defun et/org-agenda-source-owner (path &optional prompt)
+  "Return PATH's owner, prompting for external paths if PROMPT is non-nil."
+  (when (file-remote-p path) (user-error "Choose a local Org file or directory"))
+  (let* ((true (directory-file-name (file-truename path)))
+         (saved (plist-get (gethash true (et/org-agenda-read-sources)) :owner)))
+    (or (et/org-agenda-source-domain path true)
+        (if prompt
+            (completing-read "Agenda owner (general shares with both profiles): "
+                             (delete-dups (list et/profile "general"))
+                             nil t nil nil (or saved et/profile))
+          (or saved et/profile)))))
+
+(defun et/org-agenda-add-source (path &optional owner depth)
+  "Register PATH for OWNER, which defaults to its domain or current profile.
+Directories include subdirectories unless DEPTH is `shallow'."
+  (interactive
+   (let* ((current (or buffer-file-name default-directory))
+          (path (read-file-name "Agenda file or directory: " nil current t)))
+     (list path (et/org-agenda-source-owner path t))))
+  (when (file-remote-p path) (user-error "Choose a local Org file or directory"))
+  (let* ((true (directory-file-name (file-truename path)))
+         (domain (et/org-agenda-source-domain path true))
+         (path true)
+         (directory (file-directory-p path))
+         (owner (or owner domain et/profile)))
+    (unless (or directory (et/org-agenda-file-p path))
+      (user-error "Not an existing Org file or directory: %s" path))
+    (when (and domain (not (equal domain owner)))
+      (user-error "%s is in the %s note domain; choose a path outside it to share" path domain))
+    (unless (member owner (delete-dups (list et/profile "general")))
+      (user-error "Cannot register a path for %s from the %s profile" owner et/profile))
+    (let* ((sources (et/org-agenda-read-sources))
+           (previous (plist-get (gethash path sources) :owner))
+           (inherited (plist-get (cdr (et/org-agenda-matching-source path sources)) :owner)))
+      (when (and inherited (not (member inherited (list et/profile "general"))))
+        (user-error "Agenda source belongs to another profile"))
+      (when (and previous (not (equal previous owner))
+                 (not (and (member previous (list et/profile "general"))
+                           (yes-or-no-p (format "Change agenda owner from %s to %s? "
+                                               previous owner)))))
+        (user-error "Agenda owner left unchanged"))
+      (puthash path (list :owner owner :directory directory :enabled t
+                          :recursive (and directory (not (eq depth 'shallow))))
+               sources)
+      (et/org-agenda-write-sources sources))
+    (et/org-refresh-agenda)
+    (message "Added agenda source for %s: %s" owner (abbreviate-file-name path))))
+
+(defun et/org-agenda-source-editable-p (entry)
+  "Return non-nil when the current profile can edit ENTRY."
+  (member (plist-get entry :owner) (list et/profile "general")))
+
+(defun et/org-agenda-remove-source (path)
+  "Remove PATH's registration for the current profile or General."
+  (interactive
+   (let (paths)
+     (maphash (lambda (path entry)
+                (when (et/org-agenda-source-editable-p entry) (push path paths)))
+              (et/org-agenda-read-sources))
+     (unless paths (user-error "No registered agenda sources"))
+     (list (completing-read "Remove agenda source: " paths nil t))))
+  (when (file-remote-p path) (user-error "Choose a local agenda source"))
+  (let* ((sources (et/org-agenda-read-sources))
+         (path (directory-file-name (file-truename path))))
+    (unless (et/org-agenda-source-editable-p (gethash path sources))
+      (user-error "Not an agenda source for this profile: %s" path))
+    (remhash path sources)
+    (et/org-agenda-write-sources sources)
+    (et/org-refresh-agenda)
+    (message "Removed agenda registration: %s" (abbreviate-file-name path))))
+
+(defun et/org-agenda-matching-source (file sources)
+  "Return FILE's most specific (PATH . ENTRY) in SOURCES."
+  (let ((best-length -1) match)
+    (maphash (lambda (path candidate)
+               (when (and (> (length path) best-length)
+                          (or (equal path file)
+                              (and (plist-get candidate :directory)
+                                   (string-prefix-p (file-name-as-directory path) file))))
+                 (setq best-length (length path)
+                       match (cons path candidate))))
+             sources)
+    match))
+
+(defun et/org-agenda-source-covers-p (source file)
+  "Return non-nil when SOURCE's configured depth covers FILE."
+  (and source
+       (or (equal (car source) file)
+           (plist-get (cdr source) :recursive)
+           (equal (file-name-directory file) (file-name-as-directory (car source))))))
+
 (defun et/org-refresh-agenda (&optional scope)
-  "Refresh agenda files for SCOPE, without creating or modifying notes."
+  "Refresh agenda and TODO sources for SCOPE without changing notes."
   (let* ((scope (or scope et/org-agenda-scope))
+         (visible (et/org-agenda-visible-domains))
          (domains (cond
-                   ((equal scope "all") et/profile-domains)
-                   ((member scope et/profile-domains)
-                    (delete-dups (list scope "general")))
-                   (t (user-error "Domain %s is not available in the %s profile"
-                                  scope et/profile))))
+                   ((equal scope "all") visible)
+                   ((member scope visible) (delete-dups (list scope "general")))
+                   (t (user-error "Domain %s is not available in the %s profile" scope et/profile))))
+         (sources (condition-case err
+                      (et/org-agenda-read-sources)
+                    (error
+                     (display-warning 'etmacs (error-message-string err))
+                     (make-hash-table :test #'equal))))
+         (roots (et/org-agenda-note-roots))
+         (lexical-roots (et/org-agenda-note-roots t))
+         (seen (make-hash-table :test #'equal))
          files)
-    (dolist (domain domains)
-      (dolist (name '("inbox.org" "tasks.org"))
-        (let ((file (expand-file-name (concat domain "/" name) et/notes-directory)))
-          (when (and (file-exists-p file) (et/org-agenda-file-p file))
-            (push file files))))
-      (dolist (kind '("projects/" "daily/"))
-        (setq files
-              (append (et/org-directory-org-files
-                       (expand-file-name (concat domain "/" kind) et/roam-directory))
-                      files))))
-    (when (equal scope "all")
-      (setq files (append (seq-filter (lambda (file)
-                                        (and (file-exists-p file)
-                                             (et/org-agenda-file-p file)))
-                                      et/org-extra-agenda-files)
-                          files)))
+    (cl-labels ((collect-file (file)
+                  (when (and (not (file-remote-p file)) (et/org-agenda-file-p file))
+                    (let* ((true (file-truename file))
+                           (lexical (et/org-agenda-note-domain file lexical-roots))
+                           (source (et/org-agenda-matching-source true sources))
+                           (covered (et/org-agenda-source-covers-p source true))
+                           (note-domain (et/org-agenda-note-domain true roots))
+                           (domain (or note-domain
+                                       (and covered (plist-get (cdr source) :owner)))))
+                      ;; Do not follow note symlinks out of a private tree.
+                      (when (and (member domain domains)
+                                 (or (not covered) (plist-get (cdr source) :enabled))
+                                 (or (not lexical) (equal lexical domain))
+                                 (not (gethash true seen))
+                                 (not (file-symlink-p file)))
+                        (puthash true domain seen)
+                        (push (cons true domain) files)))))
+                (collect-source (path recursive)
+                  (unless (file-remote-p path)
+                    (if (file-directory-p path)
+                        (mapc #'collect-file (et/org-directory-org-files path recursive))
+                      (collect-file path)))))
+      (dolist (domain domains)
+        (collect-source (expand-file-name domain et/notes-directory) t)
+        (dolist (kind '("projects" "daily"))
+          (collect-source (expand-file-name (concat domain "/" kind) et/roam-directory) t)))
+      (maphash (lambda (path entry)
+                 (when (and (plist-get entry :enabled) (member (plist-get entry :owner) domains))
+                   (collect-source path (plist-get entry :recursive))))
+               sources)
+      (mapc (lambda (file) (collect-source (expand-file-name file et/notes-directory) t))
+            et/org-extra-agenda-files))
     (setq et/org-agenda-scope scope
-          org-agenda-files (delete-dups files))))
+          et/org-agenda-file-domains (sort files (lambda (a b) (string< (car a) (car b))))
+          org-agenda-files (mapcar #'car et/org-agenda-file-domains))))
+
+(defun et/org-agenda-refresh-sources (&rest _)
+  "Keep built-in Org agenda and TODO commands up to date."
+  (et/org-refresh-agenda))
+
+(defvar consult-find-args)
+(declare-function consult--find "consult" (prompt builder initial))
+(declare-function consult--find-make-builder "consult" (paths))
+
+(defun et/org-agenda-current-directory ()
+  "Return the visited file's directory, or the buffer's default directory."
+  (if buffer-file-name (file-name-directory buffer-file-name) default-directory))
+
+(defun et/org-agenda-select-directory (root)
+  "Select a local directory starting at ROOT, using Consult when available."
+  (when (file-remote-p root) (user-error "Choose a local directory"))
+  (let ((default-directory (file-name-as-directory (expand-file-name root))))
+    (expand-file-name
+     (if (and (executable-find "find") (require 'consult nil t))
+         (let ((consult-find-args '("find" "." "-not" "(" "-path" "*/.*" "-prune" ")" "-type" "d")))
+           (consult--find (format "Agenda directory in %s: " (abbreviate-file-name default-directory))
+                          (consult--find-make-builder '(".")) nil))
+       (read-directory-name "Agenda directory: " default-directory nil t)))))
+
+(defun et/org-agenda-add-directory (start recursive &optional select)
+  "Register START, or a directory selected there if SELECT.
+With RECURSIVE, include subdirectories. Direct additions do not prompt."
+  (let ((path (if select (et/org-agenda-select-directory start) start)))
+    (unless (and (not (file-remote-p path)) (file-directory-p path))
+      (user-error "Not an existing local directory: %s" path))
+    (et/org-agenda-add-source path (et/org-agenda-source-owner path select)
+                              (unless recursive 'shallow))))
+
+(defun et/org-agenda-add-current-directory ()
+  "Add the current file's directory without selecting a path."
+  (interactive)
+  (et/org-agenda-add-directory (et/org-agenda-current-directory) nil))
+
+(defun et/org-agenda-add-current-directory-recursive ()
+  "Add the current file's directory and its subdirectories."
+  (interactive)
+  (et/org-agenda-add-directory (et/org-agenda-current-directory) t))
+
+(defun et/org-agenda-select-current-directory ()
+  "Select a directory starting at the current file's directory."
+  (interactive)
+  (et/org-agenda-add-directory (et/org-agenda-current-directory) nil t))
+
+(defun et/org-agenda-select-current-directory-recursive ()
+  "Select a directory relative to the current file and include subdirectories."
+  (interactive)
+  (et/org-agenda-add-directory (et/org-agenda-current-directory) t t))
+
+(defun et/org-agenda-select-home-directory ()
+  "Select an agenda directory starting at home."
+  (interactive)
+  (et/org-agenda-add-directory "~/" nil t))
+
+(defun et/org-agenda-select-home-directory-recursive ()
+  "Select an agenda directory starting at home and include subdirectories."
+  (interactive)
+  (et/org-agenda-add-directory "~/" t t))
+
+(defvar et/org-agenda-source-map (make-sparse-keymap "Agenda directories"))
+(dolist (binding '(("d" . et/org-agenda-add-current-directory)
+                   ("D" . et/org-agenda-add-current-directory-recursive)
+                   ("s" . et/org-agenda-select-current-directory)
+                   ("S" . et/org-agenda-select-current-directory-recursive)
+                   ("h" . et/org-agenda-select-home-directory)
+                   ("H" . et/org-agenda-select-home-directory-recursive)
+                   ("e" . et/org-agenda-edit-directories)))
+  (define-key et/org-agenda-source-map (kbd (car binding)) (cdr binding)))
+
+(defconst et/org-agenda-directories-buffer "*Etmacs Agenda Directories*")
+(defvar-local et/org-agenda-directory-marks nil)
+
+(defun et/org-agenda-directories-entries ()
+  "Load this profile's editable directory registrations for the table."
+  (setq tabulated-list-entries nil
+        et/org-agenda-directory-marks nil)
+  (maphash (lambda (path entry)
+             (when (and (plist-get entry :directory) (et/org-agenda-source-editable-p entry))
+               (push (list path (vector (plist-get entry :owner)
+                                        (if (plist-get entry :enabled) "Enabled" "Disabled")
+                                        (if (plist-get entry :recursive) "Recursive" "Shallow")
+                                        (abbreviate-file-name path)))
+                     tabulated-list-entries)))
+           (et/org-agenda-read-sources)))
+
+(defun et/org-agenda-directories-print-row (path columns)
+  "Print the row for PATH with its COLUMNS and restore its mark."
+  (let ((start (point)))
+    (tabulated-list-print-entry path columns)
+    (when (member path et/org-agenda-directory-marks)
+      (save-excursion
+        (goto-char start)
+        (tabulated-list-put-tag "*")))))
+
+(defun et/org-agenda-directory-mark ()
+  "Mark the directory on this row and move to the next row."
+  (interactive)
+  (when-let* ((path (tabulated-list-get-id)))
+    (cl-pushnew path et/org-agenda-directory-marks :test #'equal)
+    (tabulated-list-put-tag "*" t)))
+
+(defun et/org-agenda-directory-unmark ()
+  "Unmark the directory on this row and move to the next row."
+  (interactive)
+  (when-let* ((path (tabulated-list-get-id)))
+    (setq et/org-agenda-directory-marks (delete path et/org-agenda-directory-marks))
+    (tabulated-list-put-tag " " t)))
+
+(defun et/org-agenda-directories-update (action)
+  "Apply ACTION to marked directories, or to the directory at point."
+  (let* ((paths (or et/org-agenda-directory-marks
+                    (when-let* ((path (tabulated-list-get-id))) (list path))))
+         (sources (et/org-agenda-read-sources)))
+    (unless paths (user-error "No agenda directory selected"))
+    (when (or (not (eq action 'remove))
+              (yes-or-no-p (format "Remove %d agenda directory registration(s)? " (length paths))))
+      (dolist (path paths)
+        (let ((entry (gethash path sources)))
+          (unless (and (plist-get entry :directory) (et/org-agenda-source-editable-p entry))
+            (user-error "Agenda source changed; refresh the list"))
+          (if (eq action 'remove)
+              (remhash path sources)
+            (puthash path (plist-put entry :enabled (eq action 'enable)) sources))))
+      (et/org-agenda-write-sources sources)
+      (et/org-refresh-agenda)
+      (tabulated-list-revert))))
+
+(defun et/org-agenda-directories-enable ()
+  "Enable marked directory registrations."
+  (interactive)
+  (et/org-agenda-directories-update 'enable))
+
+(defun et/org-agenda-directories-disable ()
+  "Disable marked directory registrations."
+  (interactive)
+  (et/org-agenda-directories-update 'disable))
+
+(defun et/org-agenda-directories-remove ()
+  "Remove marked directory registrations, without deleting files."
+  (interactive)
+  (et/org-agenda-directories-update 'remove))
+
+(defun et/org-agenda-directories-add ()
+  "Add a directory starting at home, without including subdirectories."
+  (interactive)
+  (et/org-agenda-select-home-directory)
+  (tabulated-list-revert))
+
+(defun et/org-agenda-directories-add-recursive ()
+  "Add a directory starting at home, including subdirectories."
+  (interactive)
+  (et/org-agenda-select-home-directory-recursive)
+  (tabulated-list-revert))
+
+(defvar et/org-agenda-directories-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "m") #'et/org-agenda-directory-mark)
+    (define-key map (kbd "u") #'et/org-agenda-directory-unmark)
+    (define-key map (kbd "e") #'et/org-agenda-directories-enable)
+    (define-key map (kbd "x") #'et/org-agenda-directories-disable)
+    (define-key map (kbd "d") #'et/org-agenda-directories-remove)
+    (define-key map (kbd "a") #'et/org-agenda-directories-add)
+    (define-key map (kbd "A") #'et/org-agenda-directories-add-recursive)
+    map))
+
+(define-derived-mode et/org-agenda-directories-mode tabulated-list-mode "Agenda Directories"
+  "Manage explicit agenda directory registrations."
+  (setq tabulated-list-format [("Owner" 12 t) ("Status" 10 t)
+                               ("Depth" 10 t) ("Directory" 0 t)]
+        tabulated-list-padding 2
+        tabulated-list-printer #'et/org-agenda-directories-print-row
+        tabulated-list-sort-key '("Directory" . nil))
+  (add-hook 'tabulated-list-revert-hook #'et/org-agenda-directories-entries nil t)
+  (tabulated-list-init-header)
+  (setq mode-line-process
+        "  SPC m: m mark · u unmark · e enable · x disable · d remove · a/A add · g refresh"))
+
+(defvar et/org-agenda-directories-leader-map
+  (let ((map (copy-keymap et/org-agenda-directories-mode-map)))
+    (set-keymap-parent map nil)
+    (define-key map (kbd "g") #'revert-buffer)
+    (define-key map (kbd "q") #'quit-window)
+    map)
+  "Agenda directory management commands under SPC m.")
+(et/register-package-leader 'et/org-agenda-directories-mode
+                            et/org-agenda-directories-leader-map)
+(with-eval-after-load 'evil
+  (evil-set-initial-state 'et/org-agenda-directories-mode 'normal))
+
+(defun et/org-agenda-edit-directories ()
+  "Show the editable agenda directory registrations."
+  (interactive)
+  (pop-to-buffer (get-buffer-create et/org-agenda-directories-buffer))
+  (unless (derived-mode-p 'et/org-agenda-directories-mode)
+    (et/org-agenda-directories-mode))
+  (tabulated-list-revert))
 
 (defun et/org-agenda (scope)
   "Open the daily dashboard for SCOPE."
   (interactive (list (completing-read "Agenda domain: "
-                                     (cons "all" et/profile-domains)
+                                     (cons "all" (et/org-agenda-visible-domains))
                                      nil t nil nil et/profile)))
   (et/org-refresh-agenda scope)
   (org-agenda nil "d"))
+(advice-add 'org-agenda-prepare :before #'et/org-agenda-refresh-sources)
 (add-hook 'org-capture-after-finalize-hook #'et/org-refresh-agenda)
+(et/org-refresh-agenda)
 
 (defun et/org-promote-heading ()
   "Promote the current heading, or shift the line left outside headings."
@@ -6053,6 +6653,9 @@ The source buffer is never modified. Tables and code use fenced blocks."
 (add-hook 'org-mode-hook #'et/org-mode-defaults)
 (define-key et/notes-map (kbd "c") #'et/capture)
 (define-key et/notes-map (kbd "a") #'et/org-agenda)
+(define-key et/notes-map (kbd "A") #'et/org-agenda-add-source)
+(define-key et/notes-map (kbd "s") (cons "agenda directories" et/org-agenda-source-map))
+(define-key et/notes-map (kbd "t") #'org-todo-list)
 (define-key et/notes-map (kbd "D") #'et/set-domain)
 (define-key et/notes-map (kbd "C") #'et/capture-template-add)
 (global-set-key (kbd "C-c c") #'et/capture)
@@ -6149,8 +6752,16 @@ The source buffer is never modified. Tables and code use fenced blocks."
 
 * Pomodoro and habits
 
-=org-pomodoro= remains available at =SPC m p= and is not modified. The new
-=et/pomodoro-start= helper at =SPC m P= is an independent, inspectable cycle:
+=org-pomodoro= is available at =SPC m p= and globally at =SPC n p p=.
+After a work timer expires, is finished early, or is stopped, a reflection
+buffer asks what was accomplished. It does not interrupt the break timer or
+steal focus. Use =C-c C-c= to save into the original task's log drawer or
+=C-c C-k= to skip. =SPC n p n= brings a pending reflection into focus.
+The global menu also offers =f= to finish early and count the session,
+=s= for status, =b= to skip a break, and =r= to restart the four-session
+count without interrupting a running timer.
+
+The separate =et/pomodoro-start= helper at =SPC m P= is an independent cycle:
 four 25-minute work segments, 5-minute breaks between them, then a 30-minute
 break. Every segment is recorded as a TODO in =DOMAIN/pomodoro.org=; work
 segments prompt for "Planned work" at the start and "What was achieved?" at the
@@ -6163,7 +6774,30 @@ When the objective is reached the habit is archived under
 count. =et/pomodoro-trial-habit= creates five weekly weekday habits (Mon–Fri)
 for one month so both pomodoro helpers can be compared.
 
-** TODO Select preferred pomodoro
+** DONE Select preferred pomodoro
+CLOSED: [2026-11-19 Thu 18:19]
+:LOGBOOK:
+- State "DONE"       from "TODO"       [2026-11-19 Thu 18:19]
+- Pomodoro [2026-11-19 Thu 17:38]
+  Selected default pomodoro settings, added hotkeys for various features
+  including:
+
+  Added a global Pomodoro menu at SPC n p. The existing SPC m p still
+  works in Org buffers.
+
+  Key       Action
+  ===========================================================
+  SPC n p p Start or stop org-pomodoro
+  SPC n p f Finish early, count the session, and start the
+            break
+  SPC n p b Skip the current break
+  SPC n p s Show time remaining and progress toward the
+            long break
+  SPC n p r Reset the four-session count without interrupting
+            the timer (et/restart-pomodoro)
+  SPC n p n Focus a pending reflection
+CLOCK: [2026-11-19 Thu 17:38]--[2026-11-19 Thu 17:38] => 0:00
+:END:
 Compare =org-pomodoro= (=SPC m p=) with =et/pomodoro-start= (=SPC m P=), then
 keep one primary binding and document the choice here.
 
@@ -6177,6 +6811,164 @@ keep one primary binding and document the choice here.
 (declare-function et/current-domain "et-org" (&optional buffer))
 (declare-function et/file-domain "et-org" (file))
 (declare-function et/org-target-file "et-org" (relative))
+(declare-function org-pomodoro-finished "org-pomodoro" ())
+(declare-function org-pomodoro-remaining-seconds "org-pomodoro" ())
+(declare-function org-pomodoro-short-break-finished "org-pomodoro" ())
+(declare-function org-pomodoro-long-break-finished "org-pomodoro" ())
+(defvar org-pomodoro-state)
+(defvar org-pomodoro-count)
+(defvar org-pomodoro-long-break-frequency)
+(defvar org-pomodoro-last-clock-in)
+
+(defvar et/org-pomodoro-task nil
+  "Marker at the Org heading where the active work timer started.")
+(defvar-local et/pomodoro-reflection-task nil)
+(defvar-local et/pomodoro-reflection-time nil)
+
+(defvar et/pomodoro-reflection-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-c") #'et/pomodoro-reflection-save)
+    (define-key map (kbd "C-c C-k") #'et/pomodoro-reflection-skip)
+    map))
+
+(define-derived-mode et/pomodoro-reflection-mode text-mode "Pomodoro Reflection"
+  "Write a reflection for a completed work timer."
+  (add-hook 'kill-buffer-hook #'et/pomodoro-reflection-cleanup nil t))
+
+(defun et/pomodoro-reflection-cleanup ()
+  "Release the marker owned by this reflection buffer."
+  (when et/pomodoro-reflection-task
+    (set-marker et/pomodoro-reflection-task nil)))
+
+(defun et/pomodoro-reflection-skip ()
+  "Discard this reflection without changing the Org task."
+  (interactive nil et/pomodoro-reflection-mode)
+  (when (or (not (buffer-modified-p)) (yes-or-no-p "Discard this reflection? "))
+    (set-buffer-modified-p nil)
+    (quit-window t)))
+
+(defun et/pomodoro-reflection-save ()
+  "Save this reflection in the log drawer of the original Org task."
+  (interactive nil et/pomodoro-reflection-mode)
+  (let ((text (string-trim (buffer-substring-no-properties (point-min) (point-max))))
+        (target et/pomodoro-reflection-task)
+        (timestamp (format-time-string "[%Y-%m-%d %a %H:%M]" et/pomodoro-reflection-time)))
+    (when (string-empty-p text) (user-error "Write a reflection, or use C-c C-k to skip"))
+    (unless (and target (marker-buffer target))
+      (user-error "Original task buffer is gone; copy the reflection to a note"))
+    (org-with-point-at target
+      (unless (org-at-heading-p)
+        (user-error "Original task heading is gone; copy the reflection to a note"))
+      (let ((org-log-into-drawer (or org-log-into-drawer "LOGBOOK")))
+        (atomic-change-group
+          (goto-char (org-log-beginning t))
+          (unless (bolp) (insert "\n"))
+          (insert "- Pomodoro " timestamp "\n")
+          (dolist (line (split-string text "\n"))
+            ;; Escape text that would open a heading/block or close the drawer.
+            (insert "  " (if (string-match-p "\\`[ \t]*\\(?:[:*]\\|#\\+\\)" line) "," "")
+                    line "\n"))
+          (when buffer-file-name (save-buffer)))))
+    (set-buffer-modified-p nil)
+    (quit-window t)
+    (message "Pomodoro reflection saved")))
+
+(defun et/org-pomodoro-remember-task ()
+  "Remember the clocked heading, even after org-pomodoro clocks out."
+  (when et/org-pomodoro-task
+    (set-marker et/org-pomodoro-task nil))
+  (setq et/org-pomodoro-task
+        (when (marker-buffer org-clock-hd-marker) (copy-marker org-clock-hd-marker))))
+
+(defun et/org-pomodoro-reflect ()
+  "Display a nonblocking reflection buffer for the finished work timer."
+  (let ((task et/org-pomodoro-task))
+    ;; Overtime, manual completion and cancellation must not prompt twice.
+    (setq et/org-pomodoro-task nil)
+    (when (and task (marker-buffer task))
+      (let* ((title (org-with-point-at task (org-get-heading t t t t)))
+             (buffer (generate-new-buffer (format "*Pomodoro: %s*" title))))
+        (with-current-buffer buffer
+          (et/pomodoro-reflection-mode)
+          (setq et/pomodoro-reflection-task task
+                et/pomodoro-reflection-time (current-time)
+                header-line-format
+                "What did you accomplish?   C-c C-c save · C-c C-k skip"))
+        (display-buffer buffer)
+        (message "Pomodoro ended: use SPC n p n to write your reflection")))))
+
+(with-eval-after-load 'org-pomodoro
+  (add-hook 'org-pomodoro-started-hook #'et/org-pomodoro-remember-task)
+  (add-hook 'org-pomodoro-finished-hook #'et/org-pomodoro-reflect)
+  (add-hook 'org-pomodoro-killed-hook #'et/org-pomodoro-reflect)
+  (add-hook 'org-pomodoro-overtime-hook #'et/org-pomodoro-reflect))
+
+(defun et/pomodoro-reflection-open ()
+  "Focus a pending Pomodoro reflection."
+  (interactive)
+  (let ((pending (seq-filter (lambda (buffer)
+                              (with-current-buffer buffer
+                                (derived-mode-p 'et/pomodoro-reflection-mode)))
+                            (buffer-list))))
+    (unless pending (user-error "No pending Pomodoro reflection"))
+    (pop-to-buffer (if (cdr pending)
+                       (completing-read "Pomodoro reflection: " (mapcar #'buffer-name pending)
+                                        nil t nil nil (buffer-name (car pending)))
+                     (car pending)))))
+
+(defun et/require-org-pomodoro ()
+  "Load org-pomodoro or explain how to install it."
+  (unless (require 'org-pomodoro nil t) (user-error "Install org-pomodoro with M-x et/install-packages")))
+
+(defun et/org-pomodoro-finish ()
+  "Finish active work early, counting it and starting the appropriate break."
+  (interactive)
+  (et/require-org-pomodoro)
+  (unless (memq org-pomodoro-state '(:pomodoro :overtime))
+    (user-error "No Pomodoro work timer is running"))
+  (org-pomodoro-finished))
+
+(defun et/org-pomodoro-skip-break ()
+  "End the current break without starting another work timer."
+  (interactive)
+  (et/require-org-pomodoro)
+  (pcase org-pomodoro-state
+    (:short-break (org-pomodoro-short-break-finished))
+    (:long-break (org-pomodoro-long-break-finished))
+    (_ (user-error "No Pomodoro break is running"))))
+
+(defun et/org-pomodoro-status ()
+  "Show the current phase, time remaining, and progress toward a long break."
+  (interactive)
+  (et/require-org-pomodoro)
+  (let ((count (mod org-pomodoro-count org-pomodoro-long-break-frequency)))
+    (message "%s · %d/%d toward next long break"
+             (if (eq org-pomodoro-state :none)
+                 "No Pomodoro timer running"
+               (format "%s %s %s"
+                       (capitalize (replace-regexp-in-string
+                                    "-" " " (substring (symbol-name org-pomodoro-state) 1)))
+                       (format-seconds "%m:%02s" (abs (truncate (org-pomodoro-remaining-seconds))))
+                       (if (eq org-pomodoro-state :overtime) "elapsed" "left")))
+             count org-pomodoro-long-break-frequency)))
+
+(defun et/restart-pomodoro ()
+  "Reset the long-break count; keep any running work timer or break."
+  (interactive)
+  (et/require-org-pomodoro)
+  (setq org-pomodoro-count 0 org-pomodoro-last-clock-in nil)
+  (message "Pomodoro count reset; the next completed work timer is 1 of %d"
+           org-pomodoro-long-break-frequency))
+
+(defvar et/pomodoro-map (make-sparse-keymap "Pomodoro"))
+(dolist (binding '(("p" . org-pomodoro)
+                   ("f" . et/org-pomodoro-finish)
+                   ("s" . et/org-pomodoro-status)
+                   ("b" . et/org-pomodoro-skip-break)
+                   ("r" . et/restart-pomodoro)
+                   ("n" . et/pomodoro-reflection-open)))
+  (define-key et/pomodoro-map (kbd (car binding)) (cdr binding)))
+(define-key et/notes-map (kbd "p") (cons "pomodoro" et/pomodoro-map))
 
 (defvar et/pomodoro-plan
   '((work . 25) (break . 5)
@@ -6847,16 +7639,16 @@ dedicated YAML-derived mode so its commands and filename detection remain useful
 C and C++ use clangd through Eglot's built-in mappings; =compile_flags.txt= or
 =compile_commands.json= lets clangd resolve the project's build flags.
 
-| Language | External server (included by the distribution installers) |
-|----------+--------------------------------------|
-| Python | basedpyright-langserver (preferred); pyright/pylsp fall back automatically |
-| JavaScript/TypeScript/TSX | typescript-language-server --stdio, plus TypeScript |
-| C/C++ | clangd, using =compile_flags.txt= or =compile_commands.json= |
-| YAML/Compose | yaml-language-server --stdio (Compose is YAML; schema setup is separate) |
-| Java | jdtls (requires a compatible JDK), or Eglot's java-language-server alternative |
-| SQL | sqls; configure dialect/connections deliberately, no stored credentials here |
-| Dockerfile | docker-langserver --stdio |
-| YARA | yls, explicitly configured (YARA Language Server) |
+| Language                  | External server (included by the distribution installers)                      |
+|---------------------------+--------------------------------------------------------------------------------|
+| Python                    | basedpyright-langserver (preferred); pyright/pylsp fall back automatically     |
+| JavaScript/TypeScript/TSX | typescript-language-server --stdio, plus TypeScript                            |
+| C/C++                     | clangd, using =compile_flags.txt= or =compile_commands.json=                   |
+| YAML/Compose              | yaml-language-server --stdio (Compose is YAML; schema setup is separate)       |
+| Java                      | jdtls (requires a compatible JDK), or Eglot's java-language-server alternative |
+| SQL                       | sqls; configure dialect/connections deliberately, no stored credentials here   |
+| Dockerfile                | docker-langserver --stdio                                                      |
+| YARA                      | yls, explicitly configured (YARA Language Server)                              |
 
 Eglot's built-in server mappings are retained except for adding our mode variants
 and SQL/YARA. SQL evaluation/REPL uses built-in sql.el, only when explicitly invoked.

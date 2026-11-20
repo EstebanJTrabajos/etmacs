@@ -7,6 +7,164 @@
 (declare-function et/current-domain "et-org" (&optional buffer))
 (declare-function et/file-domain "et-org" (file))
 (declare-function et/org-target-file "et-org" (relative))
+(declare-function org-pomodoro-finished "org-pomodoro" ())
+(declare-function org-pomodoro-remaining-seconds "org-pomodoro" ())
+(declare-function org-pomodoro-short-break-finished "org-pomodoro" ())
+(declare-function org-pomodoro-long-break-finished "org-pomodoro" ())
+(defvar org-pomodoro-state)
+(defvar org-pomodoro-count)
+(defvar org-pomodoro-long-break-frequency)
+(defvar org-pomodoro-last-clock-in)
+
+(defvar et/org-pomodoro-task nil
+  "Marker at the Org heading where the active work timer started.")
+(defvar-local et/pomodoro-reflection-task nil)
+(defvar-local et/pomodoro-reflection-time nil)
+
+(defvar et/pomodoro-reflection-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-c") #'et/pomodoro-reflection-save)
+    (define-key map (kbd "C-c C-k") #'et/pomodoro-reflection-skip)
+    map))
+
+(define-derived-mode et/pomodoro-reflection-mode text-mode "Pomodoro Reflection"
+  "Write a reflection for a completed work timer."
+  (add-hook 'kill-buffer-hook #'et/pomodoro-reflection-cleanup nil t))
+
+(defun et/pomodoro-reflection-cleanup ()
+  "Release the marker owned by this reflection buffer."
+  (when et/pomodoro-reflection-task
+    (set-marker et/pomodoro-reflection-task nil)))
+
+(defun et/pomodoro-reflection-skip ()
+  "Discard this reflection without changing the Org task."
+  (interactive nil et/pomodoro-reflection-mode)
+  (when (or (not (buffer-modified-p)) (yes-or-no-p "Discard this reflection? "))
+    (set-buffer-modified-p nil)
+    (quit-window t)))
+
+(defun et/pomodoro-reflection-save ()
+  "Save this reflection in the log drawer of the original Org task."
+  (interactive nil et/pomodoro-reflection-mode)
+  (let ((text (string-trim (buffer-substring-no-properties (point-min) (point-max))))
+        (target et/pomodoro-reflection-task)
+        (timestamp (format-time-string "[%Y-%m-%d %a %H:%M]" et/pomodoro-reflection-time)))
+    (when (string-empty-p text) (user-error "Write a reflection, or use C-c C-k to skip"))
+    (unless (and target (marker-buffer target))
+      (user-error "Original task buffer is gone; copy the reflection to a note"))
+    (org-with-point-at target
+      (unless (org-at-heading-p)
+        (user-error "Original task heading is gone; copy the reflection to a note"))
+      (let ((org-log-into-drawer (or org-log-into-drawer "LOGBOOK")))
+        (atomic-change-group
+          (goto-char (org-log-beginning t))
+          (unless (bolp) (insert "\n"))
+          (insert "- Pomodoro " timestamp "\n")
+          (dolist (line (split-string text "\n"))
+            ;; Escape text that would open a heading/block or close the drawer.
+            (insert "  " (if (string-match-p "\\`[ \t]*\\(?:[:*]\\|#\\+\\)" line) "," "")
+                    line "\n"))
+          (when buffer-file-name (save-buffer)))))
+    (set-buffer-modified-p nil)
+    (quit-window t)
+    (message "Pomodoro reflection saved")))
+
+(defun et/org-pomodoro-remember-task ()
+  "Remember the clocked heading, even after org-pomodoro clocks out."
+  (when et/org-pomodoro-task
+    (set-marker et/org-pomodoro-task nil))
+  (setq et/org-pomodoro-task
+        (when (marker-buffer org-clock-hd-marker) (copy-marker org-clock-hd-marker))))
+
+(defun et/org-pomodoro-reflect ()
+  "Display a nonblocking reflection buffer for the finished work timer."
+  (let ((task et/org-pomodoro-task))
+    ;; Overtime, manual completion and cancellation must not prompt twice.
+    (setq et/org-pomodoro-task nil)
+    (when (and task (marker-buffer task))
+      (let* ((title (org-with-point-at task (org-get-heading t t t t)))
+             (buffer (generate-new-buffer (format "*Pomodoro: %s*" title))))
+        (with-current-buffer buffer
+          (et/pomodoro-reflection-mode)
+          (setq et/pomodoro-reflection-task task
+                et/pomodoro-reflection-time (current-time)
+                header-line-format
+                "What did you accomplish?   C-c C-c save · C-c C-k skip"))
+        (display-buffer buffer)
+        (message "Pomodoro ended: use SPC n p n to write your reflection")))))
+
+(with-eval-after-load 'org-pomodoro
+  (add-hook 'org-pomodoro-started-hook #'et/org-pomodoro-remember-task)
+  (add-hook 'org-pomodoro-finished-hook #'et/org-pomodoro-reflect)
+  (add-hook 'org-pomodoro-killed-hook #'et/org-pomodoro-reflect)
+  (add-hook 'org-pomodoro-overtime-hook #'et/org-pomodoro-reflect))
+
+(defun et/pomodoro-reflection-open ()
+  "Focus a pending Pomodoro reflection."
+  (interactive)
+  (let ((pending (seq-filter (lambda (buffer)
+                              (with-current-buffer buffer
+                                (derived-mode-p 'et/pomodoro-reflection-mode)))
+                            (buffer-list))))
+    (unless pending (user-error "No pending Pomodoro reflection"))
+    (pop-to-buffer (if (cdr pending)
+                       (completing-read "Pomodoro reflection: " (mapcar #'buffer-name pending)
+                                        nil t nil nil (buffer-name (car pending)))
+                     (car pending)))))
+
+(defun et/require-org-pomodoro ()
+  "Load org-pomodoro or explain how to install it."
+  (unless (require 'org-pomodoro nil t) (user-error "Install org-pomodoro with M-x et/install-packages")))
+
+(defun et/org-pomodoro-finish ()
+  "Finish active work early, counting it and starting the appropriate break."
+  (interactive)
+  (et/require-org-pomodoro)
+  (unless (memq org-pomodoro-state '(:pomodoro :overtime))
+    (user-error "No Pomodoro work timer is running"))
+  (org-pomodoro-finished))
+
+(defun et/org-pomodoro-skip-break ()
+  "End the current break without starting another work timer."
+  (interactive)
+  (et/require-org-pomodoro)
+  (pcase org-pomodoro-state
+    (:short-break (org-pomodoro-short-break-finished))
+    (:long-break (org-pomodoro-long-break-finished))
+    (_ (user-error "No Pomodoro break is running"))))
+
+(defun et/org-pomodoro-status ()
+  "Show the current phase, time remaining, and progress toward a long break."
+  (interactive)
+  (et/require-org-pomodoro)
+  (let ((count (mod org-pomodoro-count org-pomodoro-long-break-frequency)))
+    (message "%s · %d/%d toward next long break"
+             (if (eq org-pomodoro-state :none)
+                 "No Pomodoro timer running"
+               (format "%s %s %s"
+                       (capitalize (replace-regexp-in-string
+                                    "-" " " (substring (symbol-name org-pomodoro-state) 1)))
+                       (format-seconds "%m:%02s" (abs (truncate (org-pomodoro-remaining-seconds))))
+                       (if (eq org-pomodoro-state :overtime) "elapsed" "left")))
+             count org-pomodoro-long-break-frequency)))
+
+(defun et/restart-pomodoro ()
+  "Reset the long-break count; keep any running work timer or break."
+  (interactive)
+  (et/require-org-pomodoro)
+  (setq org-pomodoro-count 0 org-pomodoro-last-clock-in nil)
+  (message "Pomodoro count reset; the next completed work timer is 1 of %d"
+           org-pomodoro-long-break-frequency))
+
+(defvar et/pomodoro-map (make-sparse-keymap "Pomodoro"))
+(dolist (binding '(("p" . org-pomodoro)
+                   ("f" . et/org-pomodoro-finish)
+                   ("s" . et/org-pomodoro-status)
+                   ("b" . et/org-pomodoro-skip-break)
+                   ("r" . et/restart-pomodoro)
+                   ("n" . et/pomodoro-reflection-open)))
+  (define-key et/pomodoro-map (kbd (car binding)) (cdr binding)))
+(define-key et/notes-map (kbd "p") (cons "pomodoro" et/pomodoro-map))
 
 (defvar et/pomodoro-plan
   '((work . 25) (break . 5)
