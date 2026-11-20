@@ -681,8 +681,26 @@ Org, habits, agenda, capture, clocks, Babel and exporters are built in.
 =org-roam= adds the linked-note index; =org-roam-ui= adds the browser graph.
 =org-super-agenda= groups the agenda and =org-modern= provides the modern
 TODO/tag/date styling; run =M-x et/install-packages= and restart after adding
-them to a new machine. =org-pomodoro= remains at =SPC m p= and =org-drill= adds
-spaced repetition.
+them to a new machine. =org-drill= adds spaced repetition.
+
+*** Org Pomodoro
+
+Use =SPC m p= on an Org heading or open the global menu with =SPC n p=:
+
+| Keys        | Action                                                |
+|-------------+-------------------------------------------------------|
+| SPC n p p   | Run =org-pomodoro= (start, or stop a running timer)    |
+| SPC n p f   | Finish work early, count it, and start the break       |
+| SPC n p b   | Skip the current break                                 |
+| SPC n p s   | Show phase, time remaining, and progress to long break|
+| SPC n p r   | Reset the four-session count without stopping the timer|
+| SPC n p n   | Focus a pending reflection                            |
+
+When a work timer expires, is finished early, or is stopped, the reflection
+buffer asks what you accomplished. The break timer doesn't wait for you to
+write. =C-c C-c= saves the note to the original task's log drawer; =C-c C-k=
+skips it.
+
 The separate =et/pomodoro-start= helper at =SPC m P= records each work segment as
 a TODO in =DOMAIN/pomodoro.org=, prompts for "Planned work" and "What was
 achieved?", follows 25/5 × 4 then 30, and logs a date range with Org's date
