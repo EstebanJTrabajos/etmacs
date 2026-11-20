@@ -227,6 +227,10 @@ store and server-side provider policy, so server-selected subagents cannot
 fall back to forbidden providers. Authenticate work separately with
 =ETMACS_WORK_ROOT="$PWD/.local/profiles/work/opencode" scripts/opencode-work=.
 =opencode2= is installed as a convenience launcher for this checkout's work store.
+The work service defaults to port =49375= so it can run alongside the ordinary
+OpenCode service. An existing custom work port is preserved. If that port is
+occupied, choose another with
+=ETMACS_WORK_ROOT="$PWD/.local/profiles/work/opencode" scripts/opencode-work service set port <port>=.
 These are application restrictions, not a sandbox against arbitrary user Lisp
 or system-admin policy changes.
 

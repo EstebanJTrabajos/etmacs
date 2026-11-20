@@ -733,8 +733,8 @@ neutral default. News summaries remain on =gpt-6-luna= until changed with
 
 * Editing, paths, and leader maps
 
-Use built-in history, saved cursor positions, Which Key, and window layout undo.
-Do not persist the kill ring. All histories may contain private paths/input; delete =.local/= state
+Use built-in history, saved cursor positions, Which Key, and window layout undo.  Do not
+persist the kill ring. All histories may contain private paths/input; delete =.local/= state
 selectively when needed. Never sync this directory with notes.
 
 =C--= and =C-+= (also =C-==) change the global font size in every buffer and
@@ -2239,32 +2239,27 @@ Keep point at its previous position, clamped to the new contents."
 
 * News and feeds
 
-=elfeed= reads RSS. Scientific American has one public syndication feed; the
-New York Times exposes separate topic feeds; Decipher, ArsTechnica Security,
-TechNet/Microsoft Security, SecurityWeek, and BleepingComputer supply the
-cybersecurity feeds. The Emacs site combines r/emacs, Planet Emacslife, Sacha
-Chua's Emacs News, Mastering Emacs, System Crafters, and Emacs Stack Exchange;
-toggle individual sources with =et/news-select-feeds=. All feeds are
-downloaded, while =et/news-select-feeds= controls which topics contribute to the
-dashboard's five newest articles per site. The dashboard reads only Elfeed's local cache, so startup never fetches the
-network; =SPC N u= updates feeds. Each site's "Open full feed" button opens the
-Elfeed search buffer filtered to that site. In an Elfeed search buffer,
-=SPC N /= searches by keyword, =SPC N f= narrows to a feed, =SPC N d= narrows to a
-date range, =SPC N m=/=M= mark read/unread, and =SPC N r= creates an Org-roam
-reference note with an AI-summary placeholder (extension hook:
-=et/news-roam-ai-hook=). =S= in the dashboard or =SPC N r= / =SPC N R= /
-=SPC N S= in Elfeed downloads the article and opens an unsaved AI summary
-draft. In the draft, =C-c= accepts and saves, =C-k= cancels, =C-r=
-regenerates with the current model, and =C-m= chooses another gptel model.
-Summaries default to =gpt-6-luna=; =SPC C n= or
-=M-x et/change-news-summary-model= changes the summary model for the current
-session without persisting it.
-The prompt first classifies the article: cybersecurity articles get the full
-=* Security details= structure, while other articles contain only metadata and
-=* Summary=, with no security section or forced security tag. Summary tags use
-=_= as the only separator and carry category prefixes: =#= topics, =@=
-people/groups/foundations, =$= companies, and =!= MITRE techniques. Org's tag
-syntax is extended locally to allow =$= and =!=.
+=elfeed= reads RSS. Scientific American has one public syndication feed; the New York Times
+exposes separate topic feeds; Decipher, ArsTechnica Security, TechNet/Microsoft Security,
+SecurityWeek, and BleepingComputer supply the cybersecurity feeds. The Emacs site combines
+r/emacs, Planet Emacslife, Sacha Chua's Emacs News, Mastering Emacs, System Crafters, and Emacs
+Stack Exchange; toggle individual sources with =et/news-select-feeds=. All feeds are
+downloaded, while =et/news-select-feeds= controls which topics contribute to the dashboard's
+five newest articles per site. The dashboard reads only Elfeed's local cache, so startup never
+fetches the network; =SPC N u= updates feeds. Each site's "Open full feed" button opens the
+Elfeed search buffer filtered to that site. In an Elfeed search buffer, =SPC N /= searches by
+keyword, =SPC N f= narrows to a feed, =SPC N d= narrows to a date range, =SPC N m=/=M= mark
+read/unread, and =SPC N r= creates an Org-roam reference note with an AI-summary placeholder
+(extension hook: =et/news-roam-ai-hook=). =S= in the dashboard or =SPC N r= / =SPC N R= / =SPC
+N S= in Elfeed downloads the article and opens an unsaved AI summary draft. In the draft, =C-c=
+accepts and saves, =C-k= cancels, =C-r= regenerates with the current model, and =C-m= chooses
+another gptel model.  Summaries default to =gpt-6-luna=; =SPC C n= or =M-x
+et/change-news-summary-model= changes the summary model for the current session without
+persisting it.  The prompt first classifies the article: cybersecurity articles get the full =*
+Security details= structure, while other articles contain only metadata and =* Summary=, with
+no security section or forced security tag. Summary tags use =_= as the only separator and
+carry category prefixes: =#= topics, =@= people/groups/foundations, =$= companies, and =!=
+MITRE techniques. Org's tag syntax is extended locally to allow =$= and =!=.
 
 #+begin_src emacs-lisp :tangle lisp/et-news.el
 ;;; et-news.el --- Generated from config.org -*- lexical-binding: t; -*-
@@ -4869,14 +4864,20 @@ Call ON-CREATED with the new session, as `opencode--create-session' does."
 ;;; et-ai.el ends here
 #+end_src
 
-** TODO Explore other models for news summaries
+** IN-PROGRESS [0%] Explore other models for news summaries
+*** TODO Check costs for different models
+*** TODO Check quality for different models
 
+*** Description
 The news summary default is deliberately =gpt-6-luna=. Use =SPC C n= or
 =M-x et/change-news-summary-model= to try another gptel model for the current
 session. When exploring, compare cost, latency, instruction-following, and
 whether the model reliably returns Org syntax for the cybersecurity and general
 summary templates. Do not persist a work-profile override that would make
 DeepSeek models available on the work machine.
+
+*** Notes
+=gpt-6.2-terra= might do a better job without much cost difference.
 
 * Terminal: vterm
 
@@ -5040,9 +5041,9 @@ With prefix ARG, use `default-directory' instead."
 
 * Prelude-inspired editing and navigation
 
-This layer adopts capabilities from [[https://github.com/bbatsov/prelude][Emacs Prelude]], not its startup framework or
-global keymap. Existing Evil/leader keys, package installation policy, workspace
-boundaries, Corfu/Vertico, and the theme remain ours. No Prelude dependency.
+This layer adopts capabilities from [[https://github.com/bbatsov/prelude][Emacs Prelude]], not
+its startup framework or global keymap. Existing Evil/leader keys, package installation policy,
+workspace boundaries, Corfu/Vertico, and the theme remain ours. No Prelude dependency.
 
 ** Built-in defaults first
 
@@ -7638,16 +7639,16 @@ dedicated YAML-derived mode so its commands and filename detection remain useful
 C and C++ use clangd through Eglot's built-in mappings; =compile_flags.txt= or
 =compile_commands.json= lets clangd resolve the project's build flags.
 
-| Language | External server (included by the distribution installers) |
-|----------+--------------------------------------|
-| Python | basedpyright-langserver (preferred); pyright/pylsp fall back automatically |
-| JavaScript/TypeScript/TSX | typescript-language-server --stdio, plus TypeScript |
-| C/C++ | clangd, using =compile_flags.txt= or =compile_commands.json= |
-| YAML/Compose | yaml-language-server --stdio (Compose is YAML; schema setup is separate) |
-| Java | jdtls (requires a compatible JDK), or Eglot's java-language-server alternative |
-| SQL | sqls; configure dialect/connections deliberately, no stored credentials here |
-| Dockerfile | docker-langserver --stdio |
-| YARA | yls, explicitly configured (YARA Language Server) |
+| Language                  | External server (included by the distribution installers)                      |
+|---------------------------+--------------------------------------------------------------------------------|
+| Python                    | basedpyright-langserver (preferred); pyright/pylsp fall back automatically     |
+| JavaScript/TypeScript/TSX | typescript-language-server --stdio, plus TypeScript                            |
+| C/C++                     | clangd, using =compile_flags.txt= or =compile_commands.json=                   |
+| YAML/Compose              | yaml-language-server --stdio (Compose is YAML; schema setup is separate)       |
+| Java                      | jdtls (requires a compatible JDK), or Eglot's java-language-server alternative |
+| SQL                       | sqls; configure dialect/connections deliberately, no stored credentials here   |
+| Dockerfile                | docker-langserver --stdio                                                      |
+| YARA                      | yls, explicitly configured (YARA Language Server)                              |
 
 Eglot's built-in server mappings are retained except for adding our mode variants
 and SQL/YARA. SQL evaluation/REPL uses built-in sql.el, only when explicitly invoked.

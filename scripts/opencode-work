@@ -41,4 +41,11 @@ fi
 unset OPENCODE_CONFIG OPENCODE_CONFIG_CONTENT OPENCODE_CONFIG_DIR
 unset OPENCODE_SERVER_URL OPENCODE_SERVER_PASSWORD
 unset ANTHROPIC_API_KEY DEEPSEEK_API_KEY
+
+# XDG isolation separates service state, but not OpenCode's default port.
+# Persist a work-only default once; keep any explicitly configured port.
+port="$("$binary" service get port)"
+if [[ -z "$port" ]]; then
+  "$binary" service set port 49375 >/dev/null
+fi
 exec "$binary" "$@"
