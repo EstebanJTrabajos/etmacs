@@ -7,6 +7,10 @@
   (should-not gptel-include-reasoning)
   (should (commandp 'et/gptel-toggle-reasoning)))
 
+(ert-deftest et/ai-responses-use-org-mode ()
+  (skip-unless (boundp 'gptel-default-mode))
+  (should (eq gptel-default-mode #'org-mode)))
+
 (ert-deftest et/ai-auth-source-uses-host-and-emacs-user-without-prompting ()
   (let (host user prompts)
     (cl-letf (((symbol-function 'read-string)

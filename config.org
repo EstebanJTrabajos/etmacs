@@ -3503,7 +3503,9 @@ active region with a model selected from gptel's provider/model completion;
 choose either a one-off model or set it as the persistent default. The default
 is saved in =.local/profiles/<profile>/gptel.el= and reloaded at startup.
 Reasoning text is hidden by default because providers bill reasoning tokens as
-output; =SPC a r= toggles it deliberately for one session. Article summaries use
+output; =SPC a r= toggles it deliberately for one session. Responses and rewrite
+buffers use =org-mode= globally (=gptel-default-mode=), so generated text can go
+straight into the Org workflow. Article summaries use
 =gpt-6-luna= by default; =SPC C n= or =M-x et/change-news-summary-model= changes
 the model for the current session only. That summary model is independent of
 project defaults and the project-level =opencode.json=.
@@ -4515,7 +4517,9 @@ With prefix ARG, set the selected model as the persistent default."
   :if (locate-library "gptel")
   :commands (gptel gptel-send gptel-menu)
   :init
-  (setq gptel-include-reasoning nil)
+  (setq gptel-include-reasoning nil
+        ;; Keep responses and rewrite buffers in Org, like the rest of etmacs.
+        gptel-default-mode #'org-mode)
   :config
   (setq gptel-include-reasoning nil)
   (et/gptel-configure)
