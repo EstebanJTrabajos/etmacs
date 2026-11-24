@@ -78,10 +78,13 @@ at =~/.config/emacs= puts everything under the requested prefix.
 
 The scripts do not configure credentials, mail accounts, database connections,
 project virtualenvs, or project npm dependencies. They do not start Docker or
-language servers. For local Docker, configure/start the daemon explicitly;
-rootless Docker or remote Docker also needs your chosen connection setup.
-Selecting a project Python virtualenv still requires =pytest=/=debugpy= in
-that environment. No installer modifies an existing project's dependencies.
+language servers. Emacs can create a project virtualenv and install basedpyright
+into it only after you accept its prompts, and it starts Compose services only
+after you accept its prompt; the Docker daemon must already be configured and
+running. For local Docker, configure/start the daemon explicitly; rootless Docker
+or remote Docker also needs your chosen connection setup. Selecting a project
+Python virtualenv still requires =pytest=/=debugpy= in that environment. No
+installer modifies an existing project's dependencies.
 
 Runtime packages and state live in ignored =.local/=. Native caches and editor
 locks are not source. Packages are not version-locked; this is not a claim of
@@ -758,14 +761,21 @@ generated from the development section of =config.org=.
 
 The built-in Eglot/Flymake/Xref/Eldoc stack supplies LSP, diagnostics, navigation
 and documentation. Corfu displays completion; Vertico still handles prompts.
-Servers are *explicitly started*, not launched by opening or saving files.
-No server binaries, grammars, formatter tools or test runners are auto-installed.
+Eglot connects automatically in local development buffers when the language
+server is installed. A missing server prompts once per project to install one;
+=SPC m L= opens the installer picker, Python packages (basedpyright by default)
+go into the project virtualenv, and npm-based servers are installed globally.
+Nothing is installed silently, and =et/lsp-auto-start= / =et/lsp-auto-install=
+disable automatic connection and offers. Remote and batch buffers keep the
+explicit =SPC m l= command.
 
 Tree-sitter is built in. Missing grammars fall back to the classic mode, and
 =SPC T i= builds the configured grammars (Python, JavaScript, TypeScript, TSX,
 Java, C, C++, YAML, Dockerfile, Bash, JSON) into =.local/tree-sitter/=; =SPC T s=
-reports what is ready. The installer needs Git and a C/C++ toolchain and never
-runs on startup.
+reports what is ready. The first buffer for a language offers once per session to
+build its missing grammar; set =et/treesit-auto-install= to nil to disable that
+offer. The installer needs Git and a C/C++ toolchain and installs nothing on
+startup.
 
 | Language   | Mode choice                                                       | External server                                                  |
 |------------+-------------------------------------------------------------------+------------------------------------------------------------------|
@@ -793,7 +803,7 @@ Dockerfile variants such as =Dockerfile.dev= and =*.dockerfile= are recognized.
 In these buffers, =SPC m= supplies:
 | Key   | Action                                                          |
 |-------+-----------------------------------------------------------------|
-| l / q | Start Eglot / shut down the current project's server            |
+| l / q | Reconnect Eglot / shut down the current project's server        |
 | d / R | Definition / references                                         |
 | r / a | Rename symbol / code actions                                    |
 | h     | Eldoc documentation buffer                                      |
@@ -805,6 +815,8 @@ In these buffers, =SPC m= supplies:
 | t / T | Test project / file                                             |
 | u     | Test the test at point                                          |
 | v     | Choose Python virtualenv directory (Python buffers only)        |
+| x     | Create <project>/.venv and offer requirements.txt (Python only) |
+| L     | Choose and install a language server                            |
 | V     | Validate saved local Compose file (Compose buffers only)        |
 | I     | Install tree-sitter grammars                                    |
 | D s   | Start Dape                                                      |
@@ -812,6 +824,10 @@ In these buffers, =SPC m= supplies:
 | D c/n | Continue / step over                                            |
 | D i/o | Step into / step out                                            |
 | D r/q | Open the Dape REPL / quit debugging                             |
+
+=SPC p d= holds project Docker controls: =u= starts Compose services, =d= stops
+them, =s= lists them, =l= follows logs, =b= builds the project Dockerfile, and
+=D= opens the =docker= package interface (=SPC p D= also opens it directly).
 
 No format-on-save or test-on-save. =SPC m f= formats through the connected LSP
 server if it advertises the capability. =SPC m F= runs a standalone formatter:
@@ -978,31 +994,38 @@ project =node_modules/.bin=), not just a shell.
 Python buffers automatically use the first usable virtualenv found in this
 order: =.venv= beside the current file, then =.venv=, =venv=, =env=,
 =.virtualenv=, or =virtualenv= at the project root, then =VIRTUAL_ENV=. If none
-is found, Emacs asks once per project whether to choose one; =SPC m v= remains
-available for an explicit selection. The choice updates PATH, =exec-path=,
-=VIRTUAL_ENV=, =python-shell-interpreter=, and
-=python-shell-virtualenv-root= *for the buffer*. The REPL uses the venv's
-=ipython3= with =--simple-prompt= when present, otherwise the venv's =python=.
-New Python buffers in the same project reuse an explicitly chosen environment;
-already-open buffers keep their local state. The selected environment is
-propagated to the Eglot server process through =VIRTUAL_ENV=, so basedpyright
-analyses against that venv. Restart already-running Eglot/REPL processes after
-changing it. Invoking =SPC m l=, a test command, or =SPC m F= in a local JS/TS
-project opts into that project's =node_modules/.bin=, so only use it in trusted
-projects. Repeated selection replaces rather than stacks paths.
+is found, Emacs asks once per project and offers to create =<project>/.venv=
+(the default), choose an existing directory, or skip; =SPC m x= creates one on
+demand and =SPC m v= selects an existing one. Creation runs =python -m venv= and
+then offers to install the project's =requirements.txt= with the new
+environment's pip. The choice updates PATH, =exec-path=, =VIRTUAL_ENV=,
+=python-shell-interpreter=, and =python-shell-virtualenv-root= *for the buffer*.
+The REPL uses the venv's =ipython3= with =--simple-prompt= when present,
+otherwise the venv's =python=. New Python buffers in the same project reuse an
+explicitly chosen environment; already-open buffers keep their local state. The
+selected environment is propagated to the Eglot server process through
+=VIRTUAL_ENV=, so basedpyright analyses against that venv. Restart
+already-running Eglot/REPL processes after changing it. Invoking =SPC m l=, a
+test command, or =SPC m F= in a local JS/TS project opts into that project's
+=node_modules/.bin=, so only use it in trusted projects. Repeated selection
+replaces rather than stacks paths.
 
 ** Docker and Compose
 
-=SPC p D= opens Docker management. Docker CLI, daemon access and the Compose
-plugin are external requirements; opening a Dockerfile/Compose file does not
-contact the daemon. =SPC m V= runs only:
+=SPC p D= opens Docker management and =SPC p d= holds project Compose controls
+(up, down, ps, logs, build). Docker CLI, daemon access and the Compose plugin are
+external requirements. The first local development buffer of a project with a
+Compose file performs one =docker compose ps= query; when nothing is running,
+Emacs offers to start the services with =up -d=. Set =et/docker-auto-prompt= to
+nil to disable the query and prompt. Opening a Dockerfile/Compose file otherwise
+does not contact the daemon. =SPC m V= runs only:
 #+begin_src sh
 docker compose -f /path/to/compose.yml config --quiet
 #+end_src
 It asks to save dirty buffers, quotes the filename, refuses remote file paths,
-does not deploy/build/prune, and avoids printing expanded secrets. Compose may
-still read environment files. Docker management operations are explicitly user
-initiated and can be destructive; inspect commands before running them.
+does not prune, and avoids printing expanded secrets. Compose may still read
+environment files. Docker management operations are explicitly user initiated
+and can be destructive; inspect commands before running them.
 
 Docker CLI contexts or =DOCKER_HOST= can select an SSH endpoint; this config
 does not change contexts. Remote file editing, remote Docker control and

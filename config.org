@@ -7618,9 +7618,15 @@ Zotero is optional, not a prerequisite.
 
 Built-in =Eglot=, =Flymake=, =Xref= and =Eldoc= provide language-server integration,
 diagnostics, navigation and documentation. Corfu displays their standard CAPFs.
-There is no lsp-mode/Flycheck overlap, server auto-installation, or format-on-save.
-Servers start explicitly with =SPC m l=. Opening code, including remote files,
-does not start a server, run tests, query a database, or contact Docker.
+There is no lsp-mode/Flycheck overlap or format-on-save. Eglot connects
+automatically when the buffer's server is already installed, and a missing
+server prompts once per project to install one (=SPC m L= opens the picker);
+Python installs go into the project virtualenv, with basedpyright as the
+default. Servers only start for local, interactive file buffers; remote and
+batch sessions keep the explicit =SPC m l= command. Prompting never installs
+anything silently, and =et/lsp-auto-start= / =et/lsp-auto-install= can turn
+automatic connection and offers off. Opening code still never runs tests,
+queries a database, or deploys containers.
 
 ** Modes and servers
 
@@ -7634,8 +7640,10 @@ Docker management commands, not an automatic daemon connection.
 
 Installed tree-sitter grammars enable built-in Python/JS/TS/TSX/Java/C/C++/
 YAML/Dockerfile modes per buffer; absent grammars fall back without downloads.
-No grammar is installed or compiled on ordinary startup. Compose remains in its
-dedicated YAML-derived mode so its commands and filename detection remain useful.
+Ordinary startup installs nothing, but the first buffer for a language offers
+once per session to build its missing grammar (=SPC T i= still installs all of
+them, and =SPC T s= reports status). Compose remains in its dedicated
+YAML-derived mode so its commands and filename detection remain useful.
 C and C++ use clangd through Eglot's built-in mappings; =compile_flags.txt= or
 =compile_commands.json= lets clangd resolve the project's build flags.
 
@@ -7659,10 +7667,13 @@ matching/validation command runs on opening or saving a rule.
 
 Python buffers discover a virtualenv automatically: =.venv= beside the current
 file, then =.venv=, =venv=, =env=, =.virtualenv=, or =virtualenv= at the project
-root, then =VIRTUAL_ENV=. If none is usable, Emacs asks once per project whether
-to choose one; =SPC m v= remains an explicit override. Selection updates PATH,
-=exec-path=, =VIRTUAL_ENV=, =python-shell-interpreter=, and
-=python-shell-virtualenv-root= in the buffer. The REPL prefers the venv's
+root, then =VIRTUAL_ENV=. If none is usable, Emacs asks once per project and
+offers to create =<project>/.venv= (the default), choose an existing directory,
+or skip; =SPC m x= creates one on demand and =SPC m v= remains an explicit
+override. Creation runs =python -m venv= and then offers to install the project's
+=requirements.txt= into the new environment; =SPC m v= selects an existing venv.
+Selection updates PATH, =exec-path=, =VIRTUAL_ENV=, =python-shell-interpreter=,
+and =python-shell-virtualenv-root= in the buffer. The REPL prefers the venv's
 =ipython3= (with =--simple-prompt=), falling back to its plain =python= when
 IPython is absent. New Python buffers in the same project reuse an explicit
 choice; already-open buffers keep their local state. Nothing assumes
@@ -7681,14 +7692,22 @@ on save. Formatting is =SPC m f= (LSP server, if it supports it) or =SPC m F=
 (standalone: Ruff for Python, Prettier for JS/TS, clang-format for C/C++).
 Standalone formatters and test runners are never installed or selected silently.
 
-Docker management is =SPC p D=. =SPC m V= validates a Compose file through
+Docker management is =SPC p D= for the =docker= interface and =SPC p d= for
+project Compose controls: =u= runs =up -d=, =d= runs =down=, =s= shows =ps=,
+=l= follows logs, =b= builds the project Dockerfile, and =D= opens the =docker=
+package. The first local development buffer of a project with a Compose file
+performs one =docker compose -f FILE ps --status running --quiet= query; when no
+containers are running, Emacs offers to start the services with
+=docker compose -f FILE up -d=. Set =et/docker-auto-prompt= to nil to skip the
+query and prompt. =SPC m V= validates a Compose file through
 =docker compose -f FILE config --quiet= after asking to save changes. It refuses
 unsaved/remote files: Docker contexts, SSH file paths and remote-container LSP
 are distinct workflows still to be configured/tested against your topology.
 Use explicit =docker context use NAME= or =DOCKER_HOST= settings for remote CLI
-management; this configuration does not switch contexts or deploy containers.
-Compose validation can read .env files but uses --quiet to avoid dumping resolved
-secrets into the compilation buffer. No automatic up/build/prune actions.
+management; this configuration does not switch contexts or deploy containers on
+its own. Compose validation can read .env files but uses --quiet to avoid dumping
+resolved secrets into the compilation buffer. Nothing is pruned automatically,
+and neither the query nor the prompt runs for remote buffers.
 
 ** Testing and formatting
 
@@ -7850,6 +7869,23 @@ marker so Projectile and Dape use the example directory as the project root.
 (defvar et/python-environment-declined (make-hash-table :test #'equal)
   "Project roots where the user declined to choose a virtualenv.")
 
+(defvar et/lsp-auto-start t
+  "When non-nil, connect Eglot automatically in development buffers.")
+(defvar et/lsp-auto-install t
+  "When non-nil, offer to install a missing language server once per project.")
+(defvar et/treesit-auto-install t
+  "When non-nil, offer to install a missing tree-sitter grammar per language.")
+(defvar et/docker-auto-prompt t
+  "When non-nil, offer to start a Compose project's containers once per session.")
+(defvar et/lsp-install-declined (make-hash-table :test #'equal)
+  "Project/language pairs where the user declined a server installation.")
+(defvar et/treesit-install-declined (make-hash-table :test #'eq)
+  "Tree-sitter grammars the user declined to install in this session.")
+(defvar et/docker-checked (make-hash-table :test #'equal)
+  "Project roots already checked for running Docker containers.")
+(defvar et/docker-controls-enabled nil
+  "Non-nil once a project's Docker containers have been started.")
+
 (defun et/dev-prepend-path (bin previous)
   "Prepend BIN to buffer-local PATH/exec-path, replacing PREVIOUS if non-nil."
   (setq-local exec-path (cons bin (delete bin (remove previous (copy-sequence exec-path)))))
@@ -7859,11 +7895,14 @@ marker so Projectile and Dape use the example directory as the project root.
     (setenv "PATH" (mapconcat #'identity (cons bin paths) path-separator))))
 
 (defun et/dev-mode-defaults ()
-  "Expose language commands without starting external tools."
+  "Expose language commands and start local language tooling."
   (setq-local et/local-leader-map et/dev-map)
   ;; web-mode already owns TSX tag/quote pairing.
   (when (derived-mode-p 'web-mode) (electric-pair-local-mode -1))
-  (eldoc-mode 1))
+  (eldoc-mode 1)
+  (et/treesit-ensure)
+  (et/docker-ensure-project)
+  (et/lsp-ensure))
 (dolist (mode et/dev-modes)
   (add-hook (intern (concat (symbol-name mode) "-hook")) #'et/dev-mode-defaults))
 
@@ -8117,7 +8156,7 @@ marker so Projectile and Dape use the example directory as the project root.
       (message "Buffer Python REPL: %s (restart any existing Eglot/REPL process)" repl))))
 
 (defun et/python-auto-environment ()
-  "Use a discovered Python virtualenv, or offer to choose one.
+  "Use a discovered Python virtualenv, or offer to create or choose one.
 The selected environment updates PATH, VIRTUAL_ENV, and the buffer's REPL."
   (when (and (derived-mode-p 'python-mode 'python-ts-mode)
              (not (file-remote-p default-directory))
@@ -8129,10 +8168,18 @@ The selected environment updates PATH, VIRTUAL_ENV, and the buffer's REPL."
         (unless (or noninteractive
                     (gethash root et/python-environment-declined))
           (condition-case err
-              (if (yes-or-no-p
-                   (format "No Python virtualenv found for %s. Choose one? " root))
-                  (call-interactively #'et/python-environment)
-                (puthash root t et/python-environment-declined))
+              (pcase (completing-read
+                      (format "No Python virtualenv found for %s: " root)
+                      '("Create .venv" "Choose existing" "Skip")
+                      nil t nil nil "Create .venv")
+                ("Create .venv"
+                 (et/python-create-environment
+                  (read-directory-name "Create virtualenv in: "
+                                       (expand-file-name ".venv/" root))))
+                ("Choose existing"
+                 (call-interactively #'et/python-environment))
+                (_
+                 (puthash root t et/python-environment-declined)))
             (quit
              (puthash root t et/python-environment-declined))
             (error
@@ -8141,6 +8188,316 @@ The selected environment updates PATH, VIRTUAL_ENV, and the buffer's REPL."
 
 (dolist (hook '(python-mode-hook python-ts-mode-hook))
   (add-hook hook #'et/python-auto-environment))
+
+(defun et/python-base-interpreter ()
+  "Return a system Python executable for creating virtualenvs."
+  (or (executable-find "python3")
+      (executable-find "python")
+      (user-error "No python3 or python executable found in PATH")))
+
+(defun et/python-requirements-file (&optional root)
+  "Return the readable requirements.txt for ROOT, or nil."
+  (let ((file (expand-file-name "requirements.txt"
+                                (or root (et/dev-project-root)))))
+    (and (file-readable-p file) file)))
+
+(defun et/python-venv-python ()
+  "Return the selected or discovered virtualenv Python, or nil."
+  (or (and (bound-and-true-p et/python-environment-bin)
+           (expand-file-name "python" et/python-environment-bin))
+      (when-let* ((root (ignore-errors (et/python-environment-find))))
+        (et/python-environment-python root))))
+
+(defun et/python-install-requirements (&optional python file)
+  "Install FILE (requirements.txt) with PYTHON into the selected virtualenv."
+  (interactive)
+  (let* ((python (or python
+                     (et/python-venv-python)
+                     (user-error "Select or create a virtualenv first (SPC m v or SPC m x)")))
+         (file (or file
+                   (et/python-requirements-file)
+                   (user-error "No requirements.txt in this project"))))
+    (et/dev-run (list python "-m" "pip" "install" "-r" file) "*etmacs-pip*")))
+
+(defun et/python-maybe-install-requirements (directory)
+  "Offer to install requirements.txt into the newly created DIRECTORY."
+  (let* ((root (file-name-as-directory (file-name-directory directory)))
+         (file (et/python-requirements-file root))
+         (python (et/python-environment-python directory)))
+    (when (and file python
+               (yes-or-no-p
+                (format "Install %s into %s? "
+                        (file-name-nondirectory file)
+                        (file-name-nondirectory directory))))
+      (et/python-install-requirements python file))))
+
+(defun et/python-create-environment (&optional directory)
+  "Create a Python virtualenv in DIRECTORY and select it.
+DIRECTORY defaults to <project>/.venv.  After creation, offer to install
+the project's requirements.txt when it exists."
+  (interactive)
+  (let* ((root (file-name-as-directory (expand-file-name (et/dev-project-root))))
+         (directory (directory-file-name
+                     (expand-file-name
+                      (or directory
+                          (read-directory-name
+                           "Create virtualenv in: "
+                           (expand-file-name ".venv/" root))))))
+         (python (et/python-environment-python directory)))
+    (when (or (file-remote-p default-directory) (file-remote-p directory))
+      (user-error "Create remote Python environments on the remote host"))
+    (unless python
+      (when (and (file-exists-p directory)
+                 (not (yes-or-no-p
+                       (format "%s exists but is not a virtualenv. Continue? " directory))))
+        (user-error "Virtualenv creation cancelled"))
+      (let ((base (et/python-base-interpreter))
+            (output (generate-new-buffer " *etmacs-venv*")))
+        (unwind-protect
+            (let ((exit (call-process base nil output nil "-m" "venv" directory)))
+              (unless (zerop exit)
+                (user-error "python -m venv failed (exit %s): %s"
+                            exit (with-current-buffer output
+                                   (string-trim (buffer-string))))))
+          (kill-buffer output)))
+      (setq python (et/python-environment-python directory))
+      (unless python
+        (user-error "Virtualenv created but %s has no Python executable" directory)))
+    (when (derived-mode-p 'python-mode 'python-ts-mode)
+      (et/python-environment directory))
+    (message "Python virtualenv ready: %s" directory)
+    (et/python-maybe-install-requirements directory)
+    directory))
+
+;;; Language servers: start automatically and install on request.
+
+(defvar et/lsp-install-specs
+  '((:name "basedpyright" :languages (python)
+     :command "basedpyright-langserver" :installer pip
+     :packages ("basedpyright") :default t
+     :note "BasedPyright, installed into the project virtualenv")
+    (:name "pyright" :languages (python)
+     :command "pyright-langserver" :installer npm
+     :packages ("pyright")
+     :note "Pyright's npm package")
+    (:name "pylsp" :languages (python)
+     :command "pylsp" :installer pip
+     :packages ("python-lsp-server")
+     :note "Python LSP Server, installed into the project virtualenv")
+    (:name "ruff-lsp" :languages (python)
+     :command "ruff-lsp" :installer pip
+     :packages ("ruff-lsp")
+     :note "Ruff's language server")
+    (:name "jedi-language-server" :languages (python)
+     :command "jedi-language-server" :installer pip
+     :packages ("jedi-language-server")
+     :note "Jedi language server")
+    (:name "typescript-language-server" :languages (javascript)
+     :command "typescript-language-server" :installer npm
+     :packages ("typescript" "typescript-language-server")
+     :note "TypeScript language server")
+    (:name "yaml-language-server" :languages (yaml compose)
+     :command "yaml-language-server" :installer npm
+     :packages ("yaml-language-server")
+     :note "YAML language server")
+    (:name "dockerfile-language-server" :languages (dockerfile)
+     :command "docker-langserver" :installer npm
+     :packages ("dockerfile-language-server-nodejs")
+     :note "Dockerfile language server")
+    (:name "clangd" :languages (c c++) :command "clangd"
+     :installer distro :note "Install clangd with the system package manager")
+    (:name "jdtls" :languages (java) :command "jdtls"
+     :installer distro :note "Install Eclipse JDT Language Server")
+    (:name "sqls" :languages (sql) :command "sqls"
+     :installer distro :note "go install github.com/sqls-server/sqls@latest")
+    (:name "yls" :languages (yara) :command "yls"
+     :installer distro :note "Install the YARA Language Server"))
+  "Language servers offered by `et/lsp-install'.")
+
+(defun et/dev-lsp-language ()
+  "Return the current buffer's language keyword for server installation."
+  (cond ((derived-mode-p 'python-mode 'python-ts-mode) 'python)
+        ((derived-mode-p 'js-mode 'js-ts-mode 'typescript-mode
+                         'typescript-ts-mode 'tsx-ts-mode 'web-mode) 'javascript)
+        ((derived-mode-p 'c-mode 'c-ts-mode) 'c)
+        ((derived-mode-p 'c++-mode 'c++-ts-mode) 'c++)
+        ((derived-mode-p 'et/compose-mode) 'compose)
+        ((derived-mode-p 'yaml-mode 'yaml-ts-mode) 'yaml)
+        ((derived-mode-p 'dockerfile-mode 'dockerfile-ts-mode) 'dockerfile)
+        ((derived-mode-p 'java-mode 'java-ts-mode) 'java)
+        ((derived-mode-p 'sql-mode) 'sql)
+        ((derived-mode-p 'yara-mode) 'yara)
+        (t nil)))
+
+(defun et/lsp-command ()
+  "Return the language server executable for this buffer, or nil."
+  (pcase (et/dev-lsp-language)
+    ('python (car (et/python-lsp-contact)))
+    ('javascript "typescript-language-server")
+    ((or 'c 'c++) "clangd")
+    ((or 'yaml 'compose) "yaml-language-server")
+    ('dockerfile "docker-langserver")
+    ('java "jdtls")
+    ('sql "sqls")
+    ('yara "yls")
+    (_ nil)))
+
+(defun et/lsp-server-executable ()
+  "Return the current buffer's server path when it is installed."
+  (when-let* ((command (et/lsp-command)))
+    (executable-find command)))
+
+(defun et/lsp-install-candidates (language)
+  "Return the install specifications that support LANGUAGE."
+  (seq-filter (lambda (spec) (memq language (plist-get spec :languages)))
+              et/lsp-install-specs))
+
+(defun et/lsp-install-argv (spec)
+  "Return the install command for SPEC as an argv list."
+  (pcase (plist-get spec :installer)
+    ('pip
+     (let ((python (et/python-venv-python)))
+       (unless python
+         (user-error "Create or select a Python virtualenv first (SPC m v or SPC m x)"))
+       (append (list python "-m" "pip" "install")
+               (plist-get spec :packages))))
+    ('npm (append (list "npm" "install" "-g") (plist-get spec :packages)))
+    (_ (user-error "%s" (or (plist-get spec :note)
+                            (format "Install %s manually" (plist-get spec :name)))))))
+
+(defun et/lsp-install-spec (spec &optional buffer)
+  "Install the language server described by SPEC for BUFFER.
+Python packages go into the project virtualenv; npm packages are global.
+Compilation output stays visible, and the buffer reconnects Eglot when the
+server becomes available."
+  (let ((buffer (or buffer (current-buffer)))
+        (name (plist-get spec :name)))
+    (if (eq (plist-get spec :installer) 'distro)
+        (message "%s" (plist-get spec :note))
+      (let ((argv (et/lsp-install-argv spec)))
+        (message "Installing %s..." name)
+        (let ((hook (lambda (process-buffer _message)
+                      (when (equal (buffer-name process-buffer)
+                                   "*etmacs-lsp-install*")
+                        (remove-hook 'compilation-finish-functions hook)
+                        (when (buffer-live-p buffer)
+                          (with-current-buffer buffer
+                            (if (et/lsp-server-executable)
+                                (et/lsp-ensure)
+                              (message "%s installed; restart Emacs if it is not on PATH"
+                                       name))))))))
+          (add-hook 'compilation-finish-functions hook)
+          (et/dev-run argv "*etmacs-lsp-install*"))))))
+
+(defun et/lsp-install (&optional language)
+  "Install a language server for LANGUAGE or the current buffer's language."
+  (interactive)
+  (let* ((language (or language (et/dev-lsp-language)
+                       (intern (completing-read
+                                "Language: "
+                                (delete-dups
+                                 (apply #'append
+                                        (mapcar (lambda (spec)
+                                                  (plist-get spec :languages))
+                                                et/lsp-install-specs)))
+                                nil t nil nil "python"))))
+         (specs (et/lsp-install-candidates language)))
+    (unless specs
+      (user-error "No installable language server for %s"
+                  (or language "this buffer")))
+    (let* ((name (completing-read
+                  (format "Language server for %s: " language)
+                  (mapcar (lambda (spec) (plist-get spec :name)) specs)
+                  nil t nil nil
+                  (plist-get (seq-find (lambda (spec) (plist-get spec :default))
+                                       specs)
+                             :name)))
+           (spec (seq-find (lambda (spec) (equal name (plist-get spec :name)))
+                           specs)))
+      (et/lsp-install-spec spec))))
+
+(defun et/lsp-offer-install ()
+  "Offer once per project to install a server for this buffer's language."
+  (let* ((language (et/dev-lsp-language))
+         (root (file-name-as-directory (expand-file-name (et/dev-project-root))))
+         (key (cons root language)))
+    (unless (gethash key et/lsp-install-declined)
+      (condition-case err
+          (if (yes-or-no-p
+               (format "No %s language server found for %s. Install one? "
+                       language root))
+              (progn
+                (puthash key t et/lsp-install-declined)
+                (et/lsp-install language))
+            (puthash key t et/lsp-install-declined))
+        (quit (puthash key t et/lsp-install-declined))
+        (error
+         (message "%s" (error-message-string err))
+         (puthash key t et/lsp-install-declined))))))
+
+(defun et/lsp-ensure ()
+  "Connect Eglot automatically, offering to install a missing server.
+Does nothing in remote, batch, unsupported, or already-managed buffers."
+  (when (and et/lsp-auto-start
+             (et/dev-lsp-language)
+             (not noninteractive)
+             (not (file-remote-p default-directory))
+             (or (ignore-errors (project-current nil))
+                 (ignore-errors
+                   (and (featurep 'projectile) (projectile-project-root))))
+             (not (eglot-managed-p)))
+    (et/dev-node-environment)
+    (when (derived-mode-p 'python-mode 'python-ts-mode)
+      (et/python-auto-environment))
+    (if (et/lsp-server-executable)
+        (condition-case err
+            (eglot-ensure)
+          (error
+           (message "Could not start Eglot: %s" (error-message-string err))))
+      (when et/lsp-auto-install
+        (et/lsp-offer-install)))))
+
+(defconst et/treesit-mode-grammars
+  '((python-mode . python) (python-ts-mode . python)
+    (js-mode . javascript) (js-ts-mode . javascript)
+    (typescript-mode . typescript) (typescript-ts-mode . typescript)
+    (tsx-ts-mode . tsx) (web-mode . tsx)
+    (c-mode . c) (c-ts-mode . c)
+    (c++-mode . cpp) (c++-ts-mode . cpp)
+    (java-mode . java) (java-ts-mode . java)
+    (yaml-mode . yaml) (yaml-ts-mode . yaml)
+    (et/compose-mode . yaml)
+    (dockerfile-mode . dockerfile) (dockerfile-ts-mode . dockerfile)
+    (bash-mode . bash) (bash-ts-mode . bash)
+    (json-mode . json) (json-ts-mode . json))
+  "Major mode to tree-sitter grammar mapping for automatic installation.")
+
+(defun et/treesit-ensure ()
+  "Offer once per language to install the current buffer's grammar."
+  (when (and et/treesit-auto-install
+             (not noninteractive)
+             (not (file-remote-p default-directory))
+             (fboundp 'treesit-available-p)
+             (treesit-available-p))
+    (when-let* ((grammar (cdr (assq major-mode et/treesit-mode-grammars)))
+                ((not (et/tree-sitter-ready-p grammar)))
+                ((not (gethash grammar et/treesit-install-declined))))
+      (condition-case err
+          (if (yes-or-no-p
+               (format "No tree-sitter grammar for %s. Install it? " grammar))
+              (progn
+                (treesit-install-language-grammar
+                 grammar et/treesit-install-directory)
+                (puthash grammar t et/treesit-install-declined)
+                (et/treesit-refresh-remaps)
+                (message "Installed the %s grammar; reopen the buffer to use its tree-sitter mode"
+                         grammar))
+            (puthash grammar t et/treesit-install-declined))
+        (quit (puthash grammar t et/treesit-install-declined))
+        (error
+         (message "Could not install %s: %s"
+                  grammar (error-message-string err))
+         (puthash grammar t et/treesit-install-declined))))))
 
 (defun et/lsp-start ()
   "Explicitly start Eglot using separately installed/configured server tools."
@@ -8322,6 +8679,111 @@ Uses Ruff for Python, Prettier for JS/TS, and clang-format for C/C++."
   (compilation-start (mapconcat #'shell-quote-argument
                                (list "docker" "compose" "-f" buffer-file-name "config" "--quiet")
                                " ")))
+
+;;; Docker Compose project controls
+
+(defvar et/docker-compose-file-names
+  '("compose.yaml" "compose.yml" "docker-compose.yaml" "docker-compose.yml")
+  "Base Compose filenames recognized at a project root.")
+
+(defun et/docker-compose-file (&optional root)
+  "Return ROOT's Compose file, or nil when the project has none."
+  (let ((root (file-name-as-directory
+               (expand-file-name (or root (et/dev-project-root))))))
+    (seq-find #'file-readable-p
+              (mapcar (lambda (name) (expand-file-name name root))
+                      et/docker-compose-file-names))))
+
+(defun et/docker-compose-run (file args)
+  "Run docker compose -f FILE ARGS in a compilation buffer."
+  (let ((default-directory
+         (file-name-as-directory (file-name-directory file))))
+    (compilation-start
+     (mapconcat #'shell-quote-argument
+                (append (list "docker" "compose" "-f" file) args) " ")
+     nil (lambda (_mode) "*etmacs-docker*"))))
+
+(defun et/docker-containers-running-p (file)
+  "Return non-nil when FILE's Compose services have running containers."
+  (when (and (executable-find "docker") (file-readable-p file))
+    (with-temp-buffer
+      (and (zerop (call-process "docker" nil t nil
+                                "compose" "-f" file
+                                "ps" "--status" "running" "--quiet"))
+           (not (string-empty-p (string-trim (buffer-string))))))))
+
+(defun et/docker-start-project (&optional file)
+  "Start FILE's Compose services with docker compose up -d."
+  (interactive)
+  (let ((file (or file (et/docker-compose-file)
+                  (user-error "No Compose file in this project"))))
+    (et/docker-compose-run file '("up" "-d"))
+    (setq et/docker-controls-enabled t)
+    (message "Starting Docker Compose services for %s"
+             (file-name-directory file))))
+
+(defun et/docker-stop-project (&optional file)
+  "Stop FILE's Compose services and remove its containers."
+  (interactive)
+  (let ((file (or file (et/docker-compose-file)
+                  (user-error "No Compose file in this project"))))
+    (et/docker-compose-run file '("down"))))
+
+(defun et/docker-project-status (&optional file)
+  "Show the Compose services declared by FILE."
+  (interactive)
+  (let ((file (or file (et/docker-compose-file)
+                  (user-error "No Compose file in this project"))))
+    (et/docker-compose-run file '("ps"))))
+
+(defun et/docker-logs (&optional file)
+  "Follow the most recent logs for FILE's Compose services."
+  (interactive)
+  (let ((file (or file (et/docker-compose-file)
+                  (user-error "No Compose file in this project"))))
+    (et/docker-compose-run file '("logs" "--tail" "200" "-f"))))
+
+(defun et/docker-build ()
+  "Build the current project's Dockerfile with a project-named tag."
+  (interactive)
+  (let* ((root (file-name-as-directory (expand-file-name (et/dev-project-root))))
+         (dockerfile (expand-file-name "Dockerfile" root)))
+    (unless (file-readable-p dockerfile)
+      (user-error "No Dockerfile in %s" root))
+    (let ((default-directory root))
+      (compilation-start
+       (mapconcat #'shell-quote-argument
+                  (list "docker" "build" "-t"
+                        (file-name-nondirectory (directory-file-name root))
+                        ".")
+                  " ")))))
+
+(defun et/docker-ensure-project ()
+  "Offer once per project to start stopped Compose containers."
+  (when (and et/docker-auto-prompt
+             (not noninteractive)
+             (not (file-remote-p default-directory))
+             (executable-find "docker"))
+    (let* ((root (file-name-as-directory
+                  (expand-file-name (et/dev-project-root))))
+           (file (et/docker-compose-file root)))
+      (when (and file (not (gethash root et/docker-checked)))
+        (puthash root t et/docker-checked)
+        (unless (et/docker-containers-running-p file)
+          (when (yes-or-no-p
+                 (format "Docker containers for %s are not running. Start them? "
+                         (file-name-nondirectory (directory-file-name root))))
+            (et/docker-start-project file)))))))
+
+(defvar et/docker-map (make-sparse-keymap "docker"))
+(dolist (binding '(("u" . et/docker-start-project)
+                   ("d" . et/docker-stop-project)
+                   ("s" . et/docker-project-status)
+                   ("l" . et/docker-logs)
+                   ("b" . et/docker-build)
+                   ("D" . docker)))
+  (define-key et/docker-map (kbd (car binding)) (cdr binding)))
+(define-key et/project-map (kbd "d") (cons "docker" et/docker-map))
 
 (defvar et/dape-js-debug-directory
   (let ((local (expand-file-name "share/js-debug" et/dependency-directory)))
@@ -9038,6 +9500,8 @@ independent of `et/debug-keys-mode'."
                    ("C" . projectile-test-project) ("t" . et/dev-test-project)
                    ("T" . et/dev-test-file) ("u" . et/dev-test-point)
                    ("v" . et/python-environment)
+                   ("x" . et/python-create-environment)
+                   ("L" . et/lsp-install)
                    ("V" . et/compose-validate)
                    ("I" . et/treesit-install-grammars)))
   (define-key et/dev-map (kbd (car binding)) (cdr binding)))
