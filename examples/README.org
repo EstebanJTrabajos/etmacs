@@ -1,0 +1,171 @@
+#+title: Etmacs local development examples
+#+startup: showall
+
+These files are tracked on the =dape-practice= branch so the practice tasks
+are available from a fresh checkout.  They remain disposable fixtures for
+checking modes, tree-sitter, Eglot, compilation, Flymake, and Dape without
+touching a real project.  Generated build output, virtualenvs, and caches are
+ignored by =examples/.gitignore=.
+
+Each subdirectory has its own =.projectile= marker so Projectile, Eglot, and
+Dape treat it as the project root instead of using the Etmacs repository.
+
+* Prerequisites
+
+| Tool                    | Used by                                  |
+|-------------------------+------------------------------------------|
+| =clangd=                 | C and C++ Eglot servers                  |
+| =gdb= 14.1 or newer      | Default C/C++ Dape adapter               |
+| =lldb-dap=               | Alternative C/C++ Dape adapter           |
+| =debugpy=                | Python Dape adapter (=python -m pip install debugpy=) |
+| =js-debug=               | JavaScript/TypeScript Dape adapter       |
+| =typescript-language-server= | TypeScript Eglot server             |
+| =jdtls= plus java-debug  | Java Eglot server and Dape adapter       |
+| =yaml-language-server=   | YAML/Compose Eglot server                |
+| =sqls=                   | SQL Eglot server                         |
+| =yr-ls=                  | YARA Eglot server                        |
+| Docker CLI with Compose  | Dockerfile and Compose checks            |
+
+Nothing here is installed or started automatically.  Use the explicit
+=SPC m l=, =SPC m c=, and =SPC m D s= commands described below.
+
+* Dape workflow
+
+1. Open a source file in one of the debug-capable example directories.
+2. Put point on a line you want to inspect and use =SPC m D b= to toggle a
+   breakpoint.
+3. Use =SPC m D s= to start Dape.  The directory's =.dir-locals.el= supplies
+   the initial =dape-command=.
+4. Use =SPC m D n=, =SPC m D i=, =SPC m D o=, and =SPC m D c= to step and
+   continue.  =SPC m D r= opens the Dape REPL and =SPC m D q= quits.
+5. Inspect variables in Dape's info buffers.  The source line is highlighted
+   by Dape.
+
+The C and C++ examples use Dape's built-in =gdb= configuration and ask Dape to
+run =make= before launching.  If you prefer LLDB, change the local
+=dape-command= to:
+
+#+begin_src emacs-lisp
+(lldb-dap :program "build/main" :args [] :compile "make")
+#+end_src
+
+The Java example uses Dape's =jdtls= configuration.  It requires an active
+Eglot JDT LS connection with Microsoft's java-debug plugin installed.  Adjust
+=:projectName= if your JDT LS workspace uses another project name.
+
+* Dape practice routine
+
+The C, C++, Java, JavaScript, Python, and TypeScript examples contain
+=TODO (repeat 3x this week)= comments.  The same exercises are Org TODO
+headings in =dape-practice.org=, which is on the agenda because the =examples/=
+directory is part of =org-agenda-files=.  Each task uses the =.+3d= repeater:
+do it three times over the next week, for example today, midweek, and at the
+end of the week.  The other example directories are editing/LSP fixtures
+without a DAP adapter here.
+
+Start every session with =SPC m D s= and press =SPC m D ?= for the full key
+table.  The same commands are on =SPC D= from any buffer.  Breakpoint actions
+are session-only; =SPC m D P= and =SPC m D L= persist source breakpoints in a
+project-local =dape-bps= file.
+
+* Language directories
+
+** Python
+- =main.py=: dataclasses, a loop, and mutable account balances.  The TODOs
+  practice function, conditional, log, hit-count, conditional-action, script
+  action, watch, and exception breakpoints.
+- =on_break.py=: a script action target.
+- =test_main.py=: run with =SPC m T= or =SPC m t= after installing pytest.
+- Dape: =debugpy=, program =main.py=.
+
+** JavaScript
+- =main.js=: arrays, objects, and a loop.  The TODOs practice JavaScript
+  code actions, conditional actions, function and hit-count breakpoints,
+  log breakpoints, watches, exception breakpoints, and saved breakpoints.
+- =on_break.js=: a script action target.
+- =dape-bps=: a saved breakpoint file for =SPC m D L=.
+- Dape: =js-debug-node=, program =main.js=.
+- Requires the js-debug adapter unpacked where Dape expects it.
+
+** TypeScript
+- =main.ts=: typed classes and collection processing.  The TODOs repeat the
+  JavaScript features, including code actions, log points, watches, and
+  exception breakpoints.
+- Run =npm install= once, then =npm run build= or let Dape compile through its
+  =.dir-locals.el=.
+- Dape: =js-debug-node=, program =dist/main.js=.
+
+** Java
+- =Main.java=: records, a loop, and static helper methods.  The TODOs practice
+  conditional, hit-count, log, function, script-action, conditional-action,
+  exception, saved, and watch breakpoints.
+- =OnBreak.java=: a script action target run as a single-file Java program.
+- Eglot: =jdtls=.
+- Dape: =jdtls= with =Main= as the main class.
+
+** C
+- =main.c=: structs, arrays, and helper functions.  The TODOs practice
+  function, conditional, hit-count, log, data (watchpoint), watch, saved, and
+  low-level memory/disassembly views.
+- =SPC m c= runs the Makefile; =SPC m D s= also builds before debugging.
+- Eglot: =clangd= using =compile_flags.txt=.
+- Dape: =gdb=, program =build/main=.
+
+** C++
+- =main.cpp=: vectors, a struct with a method, and range-for loops.  The TODOs
+  repeat conditional, data, log, action, function, hit-count, watch, saved,
+  and low-level views.
+- =SPC m c= runs the Makefile; =SPC m D s= also builds before debugging.
+- Eglot: =clangd= using =compile_flags.txt=.
+- Dape: =gdb=, program =build/main=.
+
+** YAML, SQL, YARA, Docker, and Compose
+These are editing/LSP checks, not Dape targets.  There is no useful DAP
+adapter for these formats here.  Use =SPC m l= after installing the
+corresponding server and =SPC m V= for Compose validation.
+
+** Web/TSX, Bash, and JSON
+These exercise the non-debugging modes and tree-sitter grammars.  Open them
+and check syntax highlighting, indentation, completion, and diagnostics.
+
+* Quick command reference
+
+| Command         | Purpose                                        |
+|-----------------+------------------------------------------------|
+| =SPC m l=        | Start Eglot explicitly                         |
+| =SPC m q=        | Stop this project's Eglot server               |
+| =SPC m f=        | Format through Eglot                           |
+| =SPC m F=        | Format with Ruff/Prettier/clang-format         |
+| =SPC m c=        | Compile with Projectile (for example make)     |
+| =SPC m t/T/u=    | Run project/file/test-at-point tests           |
+| =SPC m D s=      | Start Dape                                     |
+| =SPC m D b=      | Toggle a breakpoint                            |
+| =SPC m D e=      | Enable/disable a breakpoint without removing it |
+| =SPC m D B=      | Remove all breakpoints                         |
+| =SPC m D l=      | Log breakpoint (Ctrl+F2)                       |
+| =SPC m D E=      | Conditional breakpoint (Shift+F2)              |
+| =SPC m D h=      | Hit-count breakpoint                           |
+| =SPC m D F=      | Function breakpoint                            |
+| =SPC m D a=      | Breakpoint action on every hit (F3)            |
+| =SPC m D C=      | Conditional breakpoint action (Shift+F3)       |
+| =SPC m D A=      | Clear the breakpoint action                    |
+| =SPC m D c=      | Continue                                       |
+| =SPC m D n=      | Step over                                      |
+| =SPC m D i=      | Step into                                      |
+| =SPC m D o=      | Step out                                       |
+| =SPC m D u=      | Run to point                                   |
+| =SPC m D r=      | Restart the session                            |
+| =SPC m D R=      | Open the Dape REPL                             |
+| =SPC m D w/W=    | Watch symbol at point / watch an expression    |
+| =SPC m D v=      | Show the watch buffer                          |
+| =SPC m D V=      | Show the scope (press =b= for a data breakpoint) |
+| =SPC m D x=      | Evaluate an expression                         |
+| =SPC m D I=      | Show the info buffers                          |
+| =SPC m D G=      | Show the breakpoint list                       |
+| =SPC m D X=      | Toggle an exception breakpoint                 |
+| =SPC m D P=      | Save breakpoints to the project's =dape-bps=   |
+| =SPC m D L=      | Load breakpoints from the project's =dape-bps= |
+| =SPC m D m=      | Read memory at an address                      |
+| =SPC m D M=      | Disassemble around the instruction pointer      |
+| =SPC m D ?=      | Show the debugger help buffer                  |
+| =SPC m D q=      | Quit debugging                                 |

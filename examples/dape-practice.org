@@ -1,0 +1,366 @@
+#+title: Dape practice
+#+startup: showall
+#+TODO: TODO NEXT | DONE
+
+The C, C++, Java, JavaScript, Python, and TypeScript examples each contain
+=TODO (repeat 3x this week)= comments.  This file tracks the same exercises as
+Org TODOs so they appear in the agenda; the =examples/= directory is added to
+=org-agenda-files=.
+
+Each task uses the =.+3d= repeater: mark it =DONE= after a practice run and
+Org schedules the next run three days later, giving three runs in the first
+week.  After the third run, archive or delete the task.  The file links open
+the example at the line where the exercise lives, and the comments there have
+the full directions.
+
+* C
+** TODO Function breakpoint on item_total
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-c
+   :END:
+   Press =SPC m D F=, enter =item_total=, start with =SPC m D s=, and continue
+   with =F5=.  Remove it with =d= in the breakpoint list (=SPC m D G=).
+   [[file:c/main.c::24][c/main.c:24]]
+
+** TODO Data breakpoint on total
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-c
+   :END:
+   Stop on the loop line, open the scope with =SPC m D V=, put point on
+   =total=, and press =b=.  If GDB advertises data breakpoints, a Data row
+   appears in =SPC m D G=.  In the scope, =W= watches, ~=~ edits, and =m=
+   views memory.
+   [[file:c/main.c::34][c/main.c:34]]
+
+** TODO Conditional breakpoint on total > 10
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-c
+   :END:
+   Press =S-F2= (=SPC m D E=), enter =total > 10=, start with =SPC m D s=,
+   and press =F5=.  It stops on the second item, where =total= is 13.5.
+   [[file:c/main.c::41][c/main.c:41]]
+
+** TODO Hit-count breakpoint and watch index
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-c
+   :END:
+   Press =SPC m D h= on the loop line, choose ===== and =2=, then start.  At
+   the stop, put point on =index= and press =C-F3= (=SPC m D w=).
+   [[file:c/main.c::59][c/main.c:59]]
+
+** TODO Log breakpoint or debuggee expression action
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-c
+   :END:
+   Press =C-F2= (=SPC m D l=) and enter
+   =item={items[index].name} price={items[index].price}=.  If the adapter has
+   no log points, use =F3= (=SPC m D a=), choose "Debuggee expression", and
+   enter =items[index].name=.
+   [[file:c/main.c::64][c/main.c:64]]
+
+** TODO Save, load, disassemble, and read memory
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-c
+   :END:
+   =SPC m D P= saves source breakpoints to the project's =dape-bps= file;
+   =SPC m D L= loads them.  At a stop, =SPC m D M= disassembles and
+   =SPC m D m= reads memory at an address.  =SPC m D e= disables a
+   breakpoint in place and =SPC m D B= removes all of them.
+   [[file:c/main.c::73][c/main.c:73]]
+
+* C++
+** TODO Function breakpoint on subtotal
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-cpp
+   :END:
+   Press =SPC m D F=, enter =subtotal=, then start with =SPC m D s=.  Step
+   into the range-for with =F7= (=SPC m D i=).
+   [[file:cpp/main.cpp::29][cpp/main.cpp:29]]
+
+** TODO Data breakpoint on total
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-cpp
+   :END:
+   Stop on the loop line, open the scope with =SPC m D V=, put point on
+   =total=, and press =b=.  Accepted data breakpoints appear in
+   =SPC m D G=.
+   [[file:cpp/main.cpp::33][cpp/main.cpp:33]]
+
+** TODO Conditional breakpoint on total > 10.0
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-cpp
+   :END:
+   Press =S-F2= (=SPC m D E=), enter =total > 10.0=, start, and press =F5=.
+   It stops after the first item, when =total= is 13.5.
+   [[file:cpp/main.cpp::38][cpp/main.cpp:38]]
+
+** TODO Hit-count breakpoint and watch item
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-cpp
+   :END:
+   Press =SPC m D h= on the output loop, choose ===== and =2=.  At the stop,
+   put point on =item= and press =C-F3= to watch =item.quantity=.
+   [[file:cpp/main.cpp::56][cpp/main.cpp:56]]
+
+** TODO Log breakpoint or item.total() action
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-cpp
+   :END:
+   Press =C-F2= and enter =quantity={item.quantity} price={item.price}=.
+   For a normal hit, press =F3=, choose "Debuggee expression", and enter
+   =item.total()=.  Clear it with =SPC m D A=.
+   [[file:cpp/main.cpp::61][cpp/main.cpp:61]]
+
+** TODO Save, load, disassemble, and read memory
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-cpp
+   :END:
+   =SPC m D P= saves to the project's =dape-bps= file and =SPC m D L=
+   restores.  At a stop, =SPC m D M= disassembles and =SPC m D m= reads
+   memory.
+   [[file:cpp/main.cpp::71][cpp/main.cpp:71]]
+
+* Java
+** TODO Function breakpoint on subtotal
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-java
+   :END:
+   Start Eglot with =SPC m l=, press =SPC m D F=, enter =subtotal= (or
+   =Main.subtotal=), then start with =SPC m D s=.
+   [[file:java/Main.java::23][java/Main.java:23]]
+
+** TODO Hit-count breakpoint and watch total
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-java
+   :END:
+   Press =SPC m D h= on the loop line, choose ===== and =2=.  At the stop,
+   put point on =total= and press =C-F3=.
+   [[file:java/Main.java::28][java/Main.java:28]]
+
+** TODO Conditional breakpoint on item.quantity() > 2
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-java
+   :END:
+   Press =S-F2=, enter =item.quantity() > 2=, start, and press =F5=.  It
+   stops for the notebook and the pen.
+   [[file:java/Main.java::33][java/Main.java:33]]
+
+** TODO Log breakpoint, item.total() action, and conditional action
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-java
+   :END:
+   Press =C-F2= and enter =item={item.name()} total={total}=.  For code on
+   every hit, press =F3= and enter =item.total()=.  For a conditional action,
+   press =S-F3= with condition =item.quantity() > 2= and the Emacs Lisp
+   action =(message "big item")=.  Clear with =SPC m D A=.
+   [[file:java/Main.java::51][java/Main.java:51]]
+
+** TODO Script action and saved breakpoints
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-java
+   :END:
+   Press =F3=, choose "Script file", and select
+   =examples/java/OnBreak.java=.  Save with =SPC m D P= and load with
+   =SPC m D L=.
+   [[file:java/Main.java::63][java/Main.java:63]]
+
+** TODO Exception breakpoint with Main.crash()
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-java
+   :END:
+   Press =SPC m D X= and enable Uncaught Exceptions.  Open the REPL with
+   =SPC m D R= and evaluate =Main.crash()=; Dape stops at the throw.
+   [[file:java/Main.java::68][java/Main.java:68]]
+
+* JavaScript
+** TODO Function breakpoint on sumEven
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-javascript
+   :END:
+   Press =SPC m D F=, enter =sumEven=, then start with =SPC m D s=.  Inspect
+   the =values= argument in the scope.
+   [[file:javascript/main.js::13][javascript/main.js:13]]
+
+** TODO Hit-count breakpoint on the third iteration
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-javascript
+   :END:
+   Press =SPC m D h= on the loop line, choose ===== and =3=.  It stops on
+   =value = 12=.
+   [[file:javascript/main.js::18][javascript/main.js:18]]
+
+** TODO Conditional breakpoint on value > 10
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-javascript
+   :END:
+   Press =S-F2=, enter =value > 10=, start, and press =F5=.  It stops on 12
+   before it is added to =total=.
+   [[file:javascript/main.js::23][javascript/main.js:23]]
+
+** TODO Log breakpoint in describe
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-javascript
+   :END:
+   Press =C-F2= and enter =value={value} index={index}=.  It prints on every
+   call without stopping.
+   [[file:javascript/main.js::38][javascript/main.js:38]]
+
+** TODO JavaScript code action
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-javascript
+   :END:
+   Stop inside =sumEven=, press =F3=, choose "JavaScript code (statements)",
+   and enter =console.log("hit", value, total)=.  For a conditional action,
+   press =S-F3= with condition =value > 10= and the same statements.
+   [[file:javascript/main.js::48][javascript/main.js:48]]
+
+** TODO Script action and saved breakpoints
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-javascript
+   :END:
+   Use =F3= with "Script file" and select
+   =examples/javascript/on_break.js=.  Save with =SPC m D P= and load with
+   =SPC m D L=.
+   [[file:javascript/main.js::55][javascript/main.js:55]]
+
+** TODO Watch and exception breakpoint
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-javascript
+   :END:
+   At a stop, use =C-F3= or =C-S-F3= for watches such as
+   =values.filter(v => v % 2 === 0)=.  Press =SPC m D X=, enable Uncaught
+   Exceptions, open the REPL with =SPC m D R=, and evaluate =crash()=.
+   Use =SPC m D x= to evaluate =values.length= in the stopped frame.
+   [[file:javascript/main.js::61][javascript/main.js:61]]
+
+* Python
+** TODO Function breakpoint on deposit
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-python
+   :END:
+   Press =SPC m D F=, enter =deposit=, then start with =SPC m D s=.  Watch
+   =amount= change on each call.
+   [[file:python/main.py::24][python/main.py:24]]
+
+** TODO Conditional breakpoint on amount >= 50
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-python
+   :END:
+   Press =S-F2=, enter =amount >= 50=, start, and press =F5=.  It stops for
+   savings (50) and travel (75), but not checking (25).
+   [[file:python/main.py::29][python/main.py:29]]
+
+** TODO Log breakpoint in deposit
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-python
+   :END:
+   Press =C-F2= and enter
+   ={account.name} balance={account.balance}=.  It prints without stopping.
+   [[file:python/main.py::34][python/main.py:34]]
+
+** TODO Conditional and script actions
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-python
+   :END:
+   Stop on =return account.balance=, press =S-F3=, enter condition
+   =account.balance >= 300=, choose "Emacs Lisp", and enter
+   =(message "high balance")=.  For a script, press =F3= and choose
+   =examples/python/on_break.py=.
+   [[file:python/main.py::41][python/main.py:41]]
+
+** TODO Hit-count breakpoint and watch total
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-python
+   :END:
+   Press =SPC m D h= on =total += account.balance=, choose ===== and =2=.
+   At the stop, put point on =total= and press =C-F3=.
+   [[file:python/main.py::49][python/main.py:49]]
+
+** TODO Exception breakpoint with crash()
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-python
+   :END:
+   Press =SPC m D X= and enable Raised Exceptions (or Uncaught Exceptions).
+   Open the REPL with =SPC m D R= and evaluate =crash()=; Dape stops at the
+   raise.
+   [[file:python/main.py::70][python/main.py:70]]
+
+* TypeScript
+** TODO Function breakpoint on subtotal
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-typescript
+   :END:
+   Press =SPC m D F=, enter =subtotal= (or =Cart.subtotal=), then start with
+   =SPC m D s=.  Step into the reduce callback with =F7=.
+   [[file:typescript/main.ts::25][typescript/main.ts:25]]
+
+** TODO Conditional breakpoint and hit count in subtotal
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-typescript
+   :END:
+   Press =S-F2= on the reduce line and enter =item.quantity > 2=.  For a
+   hit-count breakpoint instead, press =SPC m D h= and choose ===== and =2=.
+   [[file:typescript/main.ts::29][typescript/main.ts:29]]
+
+** TODO Log breakpoint in summary
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-typescript
+   :END:
+   Press =C-F2= and enter
+   ={item.name} x {item.quantity} = {item.price * item.quantity}=.
+   [[file:typescript/main.ts::40][typescript/main.ts:40]]
+
+** TODO JavaScript code action and script action
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-typescript
+   :END:
+   Stop inside =subtotal=, press =F3=, choose "JavaScript code (statements)",
+   and enter =console.log("hit", item.name, total)=.  For a script, choose
+   =examples/javascript/on_break.js=.  For a conditional action, use =S-F3=
+   with condition =item.quantity > 2=.
+   [[file:typescript/main.ts::56][typescript/main.ts:56]]
+
+** TODO Watch and exception breakpoint
+   SCHEDULED: <2026-11-25 Wed .+3d>
+   :PROPERTIES:
+   :CATEGORY: dape-typescript
+   :END:
+   At a stop in =subtotal=, use =C-F3= or =C-S-F3= for =items= or
+   =this.items.length=.  Press =SPC m D X=, enable Uncaught Exceptions, open
+   the REPL with =SPC m D R=, and evaluate =crash()=.
+   [[file:typescript/main.ts::68][typescript/main.ts:68]]

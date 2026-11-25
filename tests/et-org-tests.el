@@ -27,6 +27,7 @@
            (et/org-extra-agenda-files nil)
            (et/org-agenda-sources-file (expand-file-name "agenda-sources.json" directory))
            (et/org-agenda-file-domains nil)
+           (et/org-examples-directory (expand-file-name "examples/" directory))
            (et/profile "personal")
           (et/profile-domains '("personal" "work" "general"))
           (et/dashboard-agenda-domains '("personal" "work" "general"))
@@ -365,6 +366,23 @@
       (with-temp-file daily (insert "* TODO From daily\n"))
       (et/org-refresh-agenda "personal")
       (should (member daily org-agenda-files)))))
+
+(ert-deftest et/org-agenda-includes-examples-directory ()
+  (et/with-test-vault
+    (unless (file-directory-p et/org-examples-directory)
+      (make-directory et/org-examples-directory t))
+    (let ((practice (expand-file-name "dape-practice.org"
+                                      et/org-examples-directory)))
+      (with-temp-file practice
+        (insert "* TODO Practice\n"
+                "  SCHEDULED: <2026-11-25 Wed .+3d>\n"))
+      (et/org-refresh-agenda "all")
+      (should (member et/org-examples-directory org-agenda-files))
+      (with-current-buffer (find-file-noselect practice)
+        (should (equal '("Practice")
+                       (org-map-entries
+                        (lambda () (org-get-heading t t t t))
+                        "/TODO" 'file)))))))
 
 (ert-deftest et/org-agenda-ignores-lock-and-autosave-files ()
   (et/with-test-vault

@@ -685,6 +685,49 @@ project, then `python' from `exec-path'."
     (apply #'dape--breakpoint-notify-changes sources)
     (message "Breakpoint toggled at line %d" (line-number-at-pos))))
 
+(defun et/dape--exception-breakpoints ()
+  "Return the adapter-provided exception breakpoints."
+  (seq-filter #'dape--exception-breakpoint-p dape--breakpoints))
+
+(defun et/dape--read-exception-breakpoint (breakpoints)
+  "Read one of BREAKPOINTS and return it.
+BREAKPOINTS is the adapter's exception breakpoint list."
+  (let ((choices
+         (mapcar (lambda (breakpoint)
+                   (cons (format "%s [%s]"
+                                 (or (dape--exception-breakpoint-label breakpoint)
+                                     (dape--exception-breakpoint-filter breakpoint))
+                                 (if (dape--breakpoint-disabled breakpoint)
+                                     "off" "on"))
+                         breakpoint))
+                 breakpoints)))
+    (cdr (assoc (completing-read "Exception breakpoint: " choices nil t)
+                choices))))
+
+(defun et/dape-toggle-exception-breakpoint (&optional breakpoint)
+  "Enable or disable an adapter exception breakpoint.
+Interactively prompt among the filters the adapter advertised, showing
+each filter's current state.  With BREAKPOINT, toggle it without
+prompting.  Start a Dape session first: the filters come from the
+adapter's capabilities."
+  (interactive)
+  (require 'dape)
+  (let ((breakpoints (et/dape--exception-breakpoints)))
+    (unless breakpoints
+      (user-error "No exception breakpoints; start a Dape session first"))
+    (let ((breakpoint (or breakpoint
+                          (et/dape--read-exception-breakpoint breakpoints))))
+      (dape--breakpoint-disable
+       breakpoint (not (dape--breakpoint-disabled breakpoint)))
+      (dolist (conn (dape--live-connections))
+        (dape--set-exception-breakpoints conn))
+      (run-hooks 'dape-update-ui-hook)
+      (message "Exception breakpoint %s %s"
+               (or (dape--exception-breakpoint-label breakpoint)
+                   (dape--exception-breakpoint-filter breakpoint))
+               (if (dape--breakpoint-disabled breakpoint)
+                   "disabled" "enabled")))))
+
 (defun et/dape--script-interpreter (file)
   "Return a command prefix for running script FILE."
   (pcase (downcase (or (file-name-extension file) ""))
@@ -731,6 +774,58 @@ project, then `python' from `exec-path'."
     (user-error "Start a Dape session first"))
   (dape--display-buffer
    (dape--info-get-buffer-create 'dape-info-watch-mode)))
+
+(defun et/dape-show-scope ()
+  "Display the scope buffer for Dape's current stopped frame.
+In that buffer, `b' sets a data breakpoint (watchpoint) on the variable
+at point, `W' toggles it as a watch, `=' edits its value, and `m' views
+its memory when the adapter supports it."
+  (interactive)
+  (unless (fboundp 'dape--info-get-buffer-create)
+    (user-error "Start a Dape session first"))
+  (dape--display-buffer
+   (dape--info-get-buffer-create 'dape-info-scope-mode)))
+
+(defun et/dape-show-breakpoints ()
+  "Display the Dape breakpoint list.
+RET toggles an exception breakpoint or visits a source breakpoint, `d'
+deletes the breakpoint at point, `D' disables a source breakpoint, and
+`e' edits a log, conditional, or hit-count breakpoint."
+  (interactive)
+  (unless (fboundp 'dape--info-get-buffer-create)
+    (user-error "Start a Dape session first"))
+  (dape--display-buffer
+   (dape--info-get-buffer-create 'dape-info-breakpoints-mode)))
+
+(defvar et/dape-breakpoints-file-name "dape-bps"
+  "Default breakpoint file name, resolved from the project root.")
+
+(defun et/dape-breakpoints-file ()
+  "Return the default breakpoint file for the current project."
+  (expand-file-name et/dape-breakpoints-file-name (et/dev-project-root)))
+
+(defun et/dape-save-breakpoints (&optional file)
+  "Save Dape breakpoints to FILE.
+FILE defaults to the project's `et/dape-breakpoints-file-name'.  Only
+source breakpoints are saved; breakpoint actions are session-only."
+  (interactive)
+  (require 'dape)
+  (dape-breakpoint-save
+   (or file
+       (read-file-name "Save breakpoints to file: "
+                       (et/dev-project-root) nil nil
+                       et/dape-breakpoints-file-name))))
+
+(defun et/dape-load-breakpoints (&optional file)
+  "Load Dape breakpoints from FILE.
+FILE defaults to the project's `et/dape-breakpoints-file-name'."
+  (interactive)
+  (require 'dape)
+  (dape-breakpoint-load
+   (or file
+       (read-file-name "Load breakpoints from file: "
+                       (et/dev-project-root) nil t
+                       et/dape-breakpoints-file-name))))
 
 (defun et/dape-repl-setup ()
   "Make the Dape REPL behave like a terminal under Evil.
@@ -968,8 +1063,14 @@ retry counter."
                    ("w" . et/dape-watch-at-point)
                    ("W" . et/dape-watch-expression)
                    ("v" . et/dape-show-watch)
+                   ("V" . et/dape-show-scope)
+                   ("m" . dape-memory) ("M" . dape-disassemble)
                    ("x" . dape-evaluate-expression)
-                   ("I" . dape-info) ("k" . dape-kill)
+                   ("I" . dape-info) ("G" . et/dape-show-breakpoints)
+                   ("X" . et/dape-toggle-exception-breakpoint)
+                   ("P" . et/dape-save-breakpoints)
+                   ("L" . et/dape-load-breakpoints)
+                   ("k" . dape-kill)
                    ("d" . dape-disconnect-quit)
                    ("t" . dape-select-thread)
                    ("T" . dape-select-session)
@@ -1095,7 +1196,10 @@ independent of `et/debug-keys-mode'."
    "Leader (any buffer)\n"
    "  SPC D s start     SPC D r restart     SPC D q quit\n"
    "  SPC D T session   SPC D t thread      SPC D S stack\n"
-   "  SPC D v watch buffer   SPC D I info   SPC D ? help\n\n"
+   "  SPC D v watch buffer   SPC D I info   SPC D ? help\n"
+   "  SPC D V scope (data breakpoint: b)    SPC D G breakpoint list\n"
+   "  SPC D X exception filters   SPC D P save   SPC D L load\n"
+   "  SPC D m memory   SPC D M disassemble\n\n"
    "Everything below also lives under SPC m D and SPC D.\n\n"
    "Watch expressions are evaluated on every stop:\n"
    "  values.length\n"
@@ -1108,7 +1212,7 @@ independent of `et/debug-keys-mode'."
    "  Action:    JavaScript code       var i = 5; console.log(i + value)\n"
    "  Action:    Emacs Lisp            (message \"big value\")\n"
    "  Action:    Shell command         notify-send dape \"hit\"\n"
-   "  Action:    Script file           examples/javascript/hit.sh\n"
+   "  Action:    Script file           examples/javascript/on_break.js\n"
    "  Plain SPC m D a sets an action that runs on every hit.\n"
    "  JavaScript code executes statements; console.log output comes back\n"
    "  to this REPL instead of the program terminal.\n\n"
@@ -1120,6 +1224,20 @@ independent of `et/debug-keys-mode'."
    "nil, none, and empty strings count as false.\n\n"
    "Log breakpoint (Ctrl+F2) prints without stopping:\n"
    "  value={value} index={index}\n\n"
+   "Exception breakpoints come from the adapter: SPC m D X\n"
+   "  Toggle filters such as Uncaught Exceptions, Caught Exceptions, or\n"
+   "  Raised Exceptions after a session starts.  SPC m D G lists every\n"
+   "  breakpoint; RET toggles an exception filter, d deletes, D disables.\n\n"
+   "Data breakpoints (watchpoints) from the scope buffer: SPC m D V\n"
+   "  Stop, put point on a variable in the scope, and press b.  Adapter\n"
+   "  support varies; accepted data breakpoints appear as Data rows in\n"
+   "  SPC m D G.  In the scope, W toggles a watch, = edits a value, and\n"
+   "  m views memory when the adapter supports it.\n\n"
+   "Persist and inspect\n"
+   "  SPC m D P saves source breakpoints in the project's dape-bps file;\n"
+   "  SPC m D L loads them.  Actions are session-only and are not saved.\n"
+   "  SPC m D M disassembles around the instruction pointer; SPC m D m\n"
+   "  reads memory at an address.  Both need adapter support.\n\n"
    "Watches and actions need a live session; breakpoints do not.\n"
    "REPL: RET sends, S-RET and M-RET add lines, arrows walk history,\n"
    "and history is saved in .local/dape-repl-history.\n"
@@ -1146,9 +1264,11 @@ independent of `et/debug-keys-mode'."
              dape-breakpoint-toggle dape-breakpoint-remove-all
              dape-breakpoint-log dape-breakpoint-expression
              dape-breakpoint-hits dape-breakpoint-function
+             dape-breakpoint-save dape-breakpoint-load
              dape-continue dape-next dape-step-in dape-step-out
              dape-pause dape-restart dape-restart-frame dape-until
-             dape-watch-dwim dape-info dape-kill dape-disconnect-quit
+             dape-watch-dwim dape-info dape-memory dape-disassemble
+             dape-kill dape-disconnect-quit
              dape-select-session dape-select-thread dape-select-stack
              dape-stack-select-down dape-stack-select-up
              dape-evaluate-expression dape-repl dape-quit)

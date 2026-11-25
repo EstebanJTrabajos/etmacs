@@ -1,0 +1,6 @@
+services:
+  example:
+    build: .
+    image: etmacs-example:local
+    environment:
+      EXAMPLE_MODE: local

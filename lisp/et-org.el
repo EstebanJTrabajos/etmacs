@@ -35,6 +35,11 @@ Register unclassified paths with `et/org-agenda-add-source' instead.")
   "JSON mapping explicitly registered agenda paths to their profile owners.")
 (defvar et/org-agenda-file-domains nil
   "Mapping from current agenda files to their domains for dashboard grouping.")
+(defvar et/org-examples-directory
+  (expand-file-name "examples/" et/config-directory)
+  "Disposable examples, including the Dape practice agenda file.")
+(when (file-directory-p et/org-examples-directory)
+  (add-to-list 'org-agenda-files et/org-examples-directory))
 (defvar et/bibliography-files nil "Local BibTeX files; set in .local/settings.el.")
 (defvar et/org-map (make-sparse-keymap "Org"))
 (defvar et/org-export-map (make-sparse-keymap "export"))
@@ -655,7 +660,10 @@ Directories include subdirectories unless DEPTH is `shallow'."
             et/org-extra-agenda-files))
     (setq et/org-agenda-scope scope
           et/org-agenda-file-domains (sort files (lambda (a b) (string< (car a) (car b))))
-          org-agenda-files (mapcar #'car et/org-agenda-file-domains))))
+          org-agenda-files
+          (append (when (file-directory-p et/org-examples-directory)
+                    (list et/org-examples-directory))
+                  (mapcar #'car et/org-agenda-file-domains)))))
 
 (defun et/org-agenda-refresh-sources (&rest _)
   "Keep built-in Org agenda and TODO commands up to date."

@@ -1,0 +1,11 @@
+# Disposable build output and local tool state.
+**/build/
+**/bin/
+**/dist/
+**/node_modules/
+**/.venv/
+**/__pycache__/
+**/.pytest_cache/
+*.class
+*.pyc
+.DS_Store

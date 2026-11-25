@@ -5499,6 +5499,11 @@ Register unclassified paths with `et/org-agenda-add-source' instead.")
   "JSON mapping explicitly registered agenda paths to their profile owners.")
 (defvar et/org-agenda-file-domains nil
   "Mapping from current agenda files to their domains for dashboard grouping.")
+(defvar et/org-examples-directory
+  (expand-file-name "examples/" et/config-directory)
+  "Disposable examples, including the Dape practice agenda file.")
+(when (file-directory-p et/org-examples-directory)
+  (add-to-list 'org-agenda-files et/org-examples-directory))
 (defvar et/bibliography-files nil "Local BibTeX files; set in .local/settings.el.")
 (defvar et/org-map (make-sparse-keymap "Org"))
 (defvar et/org-export-map (make-sparse-keymap "export"))
@@ -6119,7 +6124,10 @@ Directories include subdirectories unless DEPTH is `shallow'."
             et/org-extra-agenda-files))
     (setq et/org-agenda-scope scope
           et/org-agenda-file-domains (sort files (lambda (a b) (string< (car a) (car b))))
-          org-agenda-files (mapcar #'car et/org-agenda-file-domains))))
+          org-agenda-files
+          (append (when (file-directory-p et/org-examples-directory)
+                    (list et/org-examples-directory))
+                  (mapcar #'car et/org-agenda-file-domains)))))
 
 (defun et/org-agenda-refresh-sources (&rest _)
   "Keep built-in Org agenda and TODO commands up to date."
@@ -7771,9 +7779,11 @@ it. Every function key has an =SPC m D= alternative: =s= start, =b= breakpoint,
 breakpoints, =a/C= action and conditional action, =c= continue, =n= step over,
 =i= step in, =o= step out, =p= pause, =u= run to point, =r= restart,
 =R= open the REPL, =f= restart frame, =w/W= watch at point/expression,
-=v= watch buffer, =x= evaluate, =I= info and watch buffers, =k= kill the
-session, =d= disconnect but leave the debuggee running, =t/T/S= select thread,
-session and stack, =</>= move down/up the stack, =q= quit, and =?= describe the
+=v= watch buffer, =V= scope, =m/M= memory and disassembly, =x= evaluate,
+=I= info and watch buffers, =G= breakpoint list, =X= exception filters,
+=P/L= save/load breakpoints, =k= kill the session, =d= disconnect but leave
+the debuggee running, =t/T/S= select thread, session and stack, =</>= move
+down/up the stack, =q= quit, and =?= describe the
 debugger with examples. The same map is on =SPC D= from any buffer, so
 =SPC D s=, =SPC D r= and =SPC D q= start, restart and quit without first
 entering a programming-mode leader. Dape's own =C-x C-a= prefix is unbound so
@@ -7807,15 +7817,39 @@ project root. =SPC m D A= clears the action. Actions are stored for the current
 session only and run from =dape-stopped-hook= when Dape reports a breakpoint
 stop at that file and line.
 
+Exception breakpoints come from the running adapter. =SPC m D X= prompts for
+one of the adapter's filters, such as Uncaught Exceptions, and enables or
+disables it without removing it. =SPC m D G= shows the breakpoint list, where
+=RET= toggles an exception filter or visits a source breakpoint, =d= deletes,
+=D= disables a source breakpoint, and =e= edits a log, conditional, or
+hit-count breakpoint.
+
+Data breakpoints (watchpoints) are set from the scope buffer: stop at a line,
+use =SPC m D V= to display the scope, put point on a variable, and press =b=.
+Adapter support varies; when a data breakpoint is accepted it appears as a
+Data row in =SPC m D G=. The same scope buffer toggles watches with =W=, edits
+a value with ~=~, and opens the variable's memory with =m= when the adapter
+supports it. =SPC m D P= saves all source breakpoints to a project-local
+=dape-bps= file and =SPC m D L= loads them again; breakpoint actions are
+session-only and are not saved. =SPC m D M= disassembles around the current
+instruction pointer and =SPC m D m= reads memory from an address when the
+adapter advertises the capability.
+
 For the Python example, install =debugpy= in the interpreter Dape will use
 (for example =python -m pip install debugpy=) or select a virtualenv with
 =SPC m v= before =SPC m D s=. C/C++ examples compile with =make= first.
 
-A local =examples/= tree, ignored by Git, provides disposable programs for every
-supported language. Python, JavaScript/TypeScript, Java, C and C++ include Dape
-configurations; YAML, SQL, YARA, Dockerfile, Compose, TSX, Bash and JSON exercise
-editing, LSP, tree-sitter and compilation only. Each example has a =.projectile=
-marker so Projectile and Dape use the example directory as the project root.
+The =examples/= tree provides disposable programs for every supported
+language. The =dape-practice= branch tracks the example sources so the practice
+tasks are available from a fresh checkout; generated build output, virtualenvs,
+and caches are ignored by =examples/.gitignore=. Python, JavaScript/TypeScript,
+Java, C and C++ include Dape configurations; YAML, SQL, YARA, Dockerfile,
+Compose, TSX, Bash and JSON exercise editing, LSP, tree-sitter and compilation
+only. Each example has a =.projectile= marker so Projectile and Dape use the
+example directory as the project root. The debug-capable examples carry
+=TODO (repeat 3x this week)= comments, and =dape-practice.org= mirrors them as
+repeating Org TODOs. Because =examples/= is added to =org-agenda-files=, those
+practice tasks appear in the agenda.
 
 #+begin_src emacs-lisp :tangle lisp/et-dev.el
 ;;; et-dev.el --- Generated from config.org -*- lexical-binding: t; -*-
@@ -8505,6 +8539,49 @@ project, then `python' from `exec-path'."
     (apply #'dape--breakpoint-notify-changes sources)
     (message "Breakpoint toggled at line %d" (line-number-at-pos))))
 
+(defun et/dape--exception-breakpoints ()
+  "Return the adapter-provided exception breakpoints."
+  (seq-filter #'dape--exception-breakpoint-p dape--breakpoints))
+
+(defun et/dape--read-exception-breakpoint (breakpoints)
+  "Read one of BREAKPOINTS and return it.
+BREAKPOINTS is the adapter's exception breakpoint list."
+  (let ((choices
+         (mapcar (lambda (breakpoint)
+                   (cons (format "%s [%s]"
+                                 (or (dape--exception-breakpoint-label breakpoint)
+                                     (dape--exception-breakpoint-filter breakpoint))
+                                 (if (dape--breakpoint-disabled breakpoint)
+                                     "off" "on"))
+                         breakpoint))
+                 breakpoints)))
+    (cdr (assoc (completing-read "Exception breakpoint: " choices nil t)
+                choices))))
+
+(defun et/dape-toggle-exception-breakpoint (&optional breakpoint)
+  "Enable or disable an adapter exception breakpoint.
+Interactively prompt among the filters the adapter advertised, showing
+each filter's current state.  With BREAKPOINT, toggle it without
+prompting.  Start a Dape session first: the filters come from the
+adapter's capabilities."
+  (interactive)
+  (require 'dape)
+  (let ((breakpoints (et/dape--exception-breakpoints)))
+    (unless breakpoints
+      (user-error "No exception breakpoints; start a Dape session first"))
+    (let ((breakpoint (or breakpoint
+                          (et/dape--read-exception-breakpoint breakpoints))))
+      (dape--breakpoint-disable
+       breakpoint (not (dape--breakpoint-disabled breakpoint)))
+      (dolist (conn (dape--live-connections))
+        (dape--set-exception-breakpoints conn))
+      (run-hooks 'dape-update-ui-hook)
+      (message "Exception breakpoint %s %s"
+               (or (dape--exception-breakpoint-label breakpoint)
+                   (dape--exception-breakpoint-filter breakpoint))
+               (if (dape--breakpoint-disabled breakpoint)
+                   "disabled" "enabled")))))
+
 (defun et/dape--script-interpreter (file)
   "Return a command prefix for running script FILE."
   (pcase (downcase (or (file-name-extension file) ""))
@@ -8551,6 +8628,58 @@ project, then `python' from `exec-path'."
     (user-error "Start a Dape session first"))
   (dape--display-buffer
    (dape--info-get-buffer-create 'dape-info-watch-mode)))
+
+(defun et/dape-show-scope ()
+  "Display the scope buffer for Dape's current stopped frame.
+In that buffer, `b' sets a data breakpoint (watchpoint) on the variable
+at point, `W' toggles it as a watch, `=' edits its value, and `m' views
+its memory when the adapter supports it."
+  (interactive)
+  (unless (fboundp 'dape--info-get-buffer-create)
+    (user-error "Start a Dape session first"))
+  (dape--display-buffer
+   (dape--info-get-buffer-create 'dape-info-scope-mode)))
+
+(defun et/dape-show-breakpoints ()
+  "Display the Dape breakpoint list.
+RET toggles an exception breakpoint or visits a source breakpoint, `d'
+deletes the breakpoint at point, `D' disables a source breakpoint, and
+`e' edits a log, conditional, or hit-count breakpoint."
+  (interactive)
+  (unless (fboundp 'dape--info-get-buffer-create)
+    (user-error "Start a Dape session first"))
+  (dape--display-buffer
+   (dape--info-get-buffer-create 'dape-info-breakpoints-mode)))
+
+(defvar et/dape-breakpoints-file-name "dape-bps"
+  "Default breakpoint file name, resolved from the project root.")
+
+(defun et/dape-breakpoints-file ()
+  "Return the default breakpoint file for the current project."
+  (expand-file-name et/dape-breakpoints-file-name (et/dev-project-root)))
+
+(defun et/dape-save-breakpoints (&optional file)
+  "Save Dape breakpoints to FILE.
+FILE defaults to the project's `et/dape-breakpoints-file-name'.  Only
+source breakpoints are saved; breakpoint actions are session-only."
+  (interactive)
+  (require 'dape)
+  (dape-breakpoint-save
+   (or file
+       (read-file-name "Save breakpoints to file: "
+                       (et/dev-project-root) nil nil
+                       et/dape-breakpoints-file-name))))
+
+(defun et/dape-load-breakpoints (&optional file)
+  "Load Dape breakpoints from FILE.
+FILE defaults to the project's `et/dape-breakpoints-file-name'."
+  (interactive)
+  (require 'dape)
+  (dape-breakpoint-load
+   (or file
+       (read-file-name "Load breakpoints from file: "
+                       (et/dev-project-root) nil t
+                       et/dape-breakpoints-file-name))))
 
 (defun et/dape-repl-setup ()
   "Make the Dape REPL behave like a terminal under Evil.
@@ -8788,8 +8917,14 @@ retry counter."
                    ("w" . et/dape-watch-at-point)
                    ("W" . et/dape-watch-expression)
                    ("v" . et/dape-show-watch)
+                   ("V" . et/dape-show-scope)
+                   ("m" . dape-memory) ("M" . dape-disassemble)
                    ("x" . dape-evaluate-expression)
-                   ("I" . dape-info) ("k" . dape-kill)
+                   ("I" . dape-info) ("G" . et/dape-show-breakpoints)
+                   ("X" . et/dape-toggle-exception-breakpoint)
+                   ("P" . et/dape-save-breakpoints)
+                   ("L" . et/dape-load-breakpoints)
+                   ("k" . dape-kill)
                    ("d" . dape-disconnect-quit)
                    ("t" . dape-select-thread)
                    ("T" . dape-select-session)
@@ -8915,7 +9050,10 @@ independent of `et/debug-keys-mode'."
    "Leader (any buffer)\n"
    "  SPC D s start     SPC D r restart     SPC D q quit\n"
    "  SPC D T session   SPC D t thread      SPC D S stack\n"
-   "  SPC D v watch buffer   SPC D I info   SPC D ? help\n\n"
+   "  SPC D v watch buffer   SPC D I info   SPC D ? help\n"
+   "  SPC D V scope (data breakpoint: b)    SPC D G breakpoint list\n"
+   "  SPC D X exception filters   SPC D P save   SPC D L load\n"
+   "  SPC D m memory   SPC D M disassemble\n\n"
    "Everything below also lives under SPC m D and SPC D.\n\n"
    "Watch expressions are evaluated on every stop:\n"
    "  values.length\n"
@@ -8928,7 +9066,7 @@ independent of `et/debug-keys-mode'."
    "  Action:    JavaScript code       var i = 5; console.log(i + value)\n"
    "  Action:    Emacs Lisp            (message \"big value\")\n"
    "  Action:    Shell command         notify-send dape \"hit\"\n"
-   "  Action:    Script file           examples/javascript/hit.sh\n"
+   "  Action:    Script file           examples/javascript/on_break.js\n"
    "  Plain SPC m D a sets an action that runs on every hit.\n"
    "  JavaScript code executes statements; console.log output comes back\n"
    "  to this REPL instead of the program terminal.\n\n"
@@ -8940,6 +9078,20 @@ independent of `et/debug-keys-mode'."
    "nil, none, and empty strings count as false.\n\n"
    "Log breakpoint (Ctrl+F2) prints without stopping:\n"
    "  value={value} index={index}\n\n"
+   "Exception breakpoints come from the adapter: SPC m D X\n"
+   "  Toggle filters such as Uncaught Exceptions, Caught Exceptions, or\n"
+   "  Raised Exceptions after a session starts.  SPC m D G lists every\n"
+   "  breakpoint; RET toggles an exception filter, d deletes, D disables.\n\n"
+   "Data breakpoints (watchpoints) from the scope buffer: SPC m D V\n"
+   "  Stop, put point on a variable in the scope, and press b.  Adapter\n"
+   "  support varies; accepted data breakpoints appear as Data rows in\n"
+   "  SPC m D G.  In the scope, W toggles a watch, = edits a value, and\n"
+   "  m views memory when the adapter supports it.\n\n"
+   "Persist and inspect\n"
+   "  SPC m D P saves source breakpoints in the project's dape-bps file;\n"
+   "  SPC m D L loads them.  Actions are session-only and are not saved.\n"
+   "  SPC m D M disassembles around the instruction pointer; SPC m D m\n"
+   "  reads memory at an address.  Both need adapter support.\n\n"
    "Watches and actions need a live session; breakpoints do not.\n"
    "REPL: RET sends, S-RET and M-RET add lines, arrows walk history,\n"
    "and history is saved in .local/dape-repl-history.\n"
@@ -8966,9 +9118,11 @@ independent of `et/debug-keys-mode'."
              dape-breakpoint-toggle dape-breakpoint-remove-all
              dape-breakpoint-log dape-breakpoint-expression
              dape-breakpoint-hits dape-breakpoint-function
+             dape-breakpoint-save dape-breakpoint-load
              dape-continue dape-next dape-step-in dape-step-out
              dape-pause dape-restart dape-restart-frame dape-until
-             dape-watch-dwim dape-info dape-kill dape-disconnect-quit
+             dape-watch-dwim dape-info dape-memory dape-disassemble
+             dape-kill dape-disconnect-quit
              dape-select-session dape-select-thread dape-select-stack
              dape-stack-select-down dape-stack-select-up
              dape-evaluate-expression dape-repl dape-quit)
