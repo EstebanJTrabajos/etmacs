@@ -954,7 +954,9 @@ With prefix ARG, set the selected model as the persistent default."
   :if (locate-library "gptel")
   :commands (gptel gptel-send gptel-menu)
   :init
-  (setq gptel-include-reasoning nil)
+  (setq gptel-include-reasoning nil
+        ;; Keep responses and rewrite buffers in Org, like the rest of etmacs.
+        gptel-default-mode #'org-mode)
   :config
   (setq gptel-include-reasoning nil)
   (et/gptel-configure)
