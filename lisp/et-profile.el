@@ -3,6 +3,7 @@
 (require 'subr-x)
 (require 'cl-lib)
 (require 'json)
+(declare-function et/news-load-selection "et-news" ())
 
 (defconst et/profiles
   '((personal
@@ -202,6 +203,8 @@
            et/dashboard-agenda-domains
            (delete-dups (cons et/profile (copy-sequence et/profile-domains))))
      (make-directory et/profile-state-directory t)
+     (when (featurep 'et-news)
+       (et/news-load-selection))
      (when (fboundp 'et/org-refresh-agenda)
        (et/org-refresh-agenda))
     (unless noninteractive

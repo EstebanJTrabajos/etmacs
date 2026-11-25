@@ -471,6 +471,7 @@ neutral default. News summaries remain on =gpt-6-luna= until changed with
 (require 'subr-x)
 (require 'cl-lib)
 (require 'json)
+(declare-function et/news-load-selection "et-news" ())
 
 (defconst et/profiles
   '((personal
@@ -670,6 +671,8 @@ neutral default. News summaries remain on =gpt-6-luna= until changed with
            et/dashboard-agenda-domains
            (delete-dups (cons et/profile (copy-sequence et/profile-domains))))
      (make-directory et/profile-state-directory t)
+     (when (featurep 'et-news)
+       (et/news-load-selection))
      (when (fboundp 'et/org-refresh-agenda)
        (et/org-refresh-agenda))
     (unless noninteractive
@@ -1769,6 +1772,7 @@ require a log note keep Org's note prompt (=C-c C-c= to finish).
 (declare-function et/org-task-due-label "et-org" (task))
 (declare-function et/org-task-sort-predicate "et-org" (a b))
 (declare-function et/news-summarize-at-point "et-news" ())
+(declare-function et/news-dashboard-sites "et-news" ())
 (defvar et/org-agenda-scope)
 (defvar et/org-agenda-file-domains)
 (defvar org-agenda-files)
@@ -2121,7 +2125,7 @@ Keep point at its previous position, clamped to the new contents."
       (et/dashboard-insert-button
        "Update feeds" (lambda (_button) (et/news-update)))
       (insert "\n\n")
-      (dolist (site et/news-sites)
+      (dolist (site (et/news-dashboard-sites))
         (let* ((site-id (car site))
                (collapsed (member site-id et/dashboard-news-collapsed))
                (start (point))
@@ -2152,8 +2156,11 @@ Keep point at its previous position, clamped to the new contents."
            "Open full feed"
            (lambda (_button) (et/news-open-site site-id)))
           (insert "  ")
-          (et/dashboard-insert-button
-           "Choose feeds" (lambda (_button) (et/news-select-feeds)))
+        (et/dashboard-insert-button
+         "Choose feeds" (lambda (_button) (et/news-select-feeds)))
+        (insert "  ")
+        (et/dashboard-insert-button
+         "Edit feeds" (lambda (_button) (et/news-edit-feeds)))
           (insert "\n\n")
           (add-text-properties start (point)
                                (list 'et-dashboard-news-site site-id)))))
@@ -2243,9 +2250,23 @@ Keep point at its previous position, clamped to the new contents."
 exposes separate topic feeds; Decipher, ArsTechnica Security, TechNet/Microsoft Security,
 SecurityWeek, and BleepingComputer supply the cybersecurity feeds. The Emacs site combines
 r/emacs, Planet Emacslife, Sacha Chua's Emacs News, Mastering Emacs, System Crafters, and Emacs
-Stack Exchange; toggle individual sources with =et/news-select-feeds=. All feeds are
-downloaded, while =et/news-select-feeds= controls which topics contribute to the dashboard's
-five newest articles per site. The dashboard reads only Elfeed's local cache, so startup never
+Stack Exchange. The shared catalog ships in =news-feeds.json=; editing it creates
+the local override =.local/news-feeds.json=. Each profile stores enabled sites
+and topics, dashboard order, and article counts in
+=.local/profiles/PROFILE/news.json=. Legacy =news.el= selections are migrated
+without evaluating them; the old file is retained as a backup.
+
+=SPC N e= opens the tabulated feed editor. Its =SPC m= menu has =m/u= to
+mark/unmark rows, =e/d= to enable/disable for the current profile, =c= for the
+dashboard article count, =K/J= to move a site up/down, =f= to select its topics,
+=a= to add a site, =RET= to edit its shared name/URL, and =x= to delete it
+from all profiles (with confirmation). =+/-= add/remove topic feeds within a
+site. Site names and URLs are shared; enablement, topic selection, order and
+counts are profile-specific. The default is five articles per site.
+Changes save immediately without downloading; =SPC N u= downloads only
+the active profile's enabled topic feeds. =SPC N s= remains a quick topic picker.
+
+The dashboard reads only Elfeed's shared local cache, so startup never
 fetches the network; =SPC N u= updates feeds. Each site's "Open full feed" button opens the
 Elfeed search buffer filtered to that site. In an Elfeed search buffer, =SPC N /= searches by
 keyword, =SPC N f= narrows to a feed, =SPC N d= narrows to a date range, =SPC N m=/=M= mark
@@ -2261,54 +2282,137 @@ no security section or forced security tag. Summary tags use =_= as the only sep
 carry category prefixes: =#= topics, =@= people/groups/foundations, =$= companies, and =!=
 MITRE techniques. Org's tag syntax is extended locally to allow =$= and =!=.
 
+Each summary draft and saved note ends with a =Generation usage= section:
+input tokens (including cache reads), output tokens, model/backend, and optionally
+estimated USD cost. =et/news-summary-cost-enabled= defaults to nil on new
+installations. =SPC N $= toggles it and saves the setting in
+=.local/news-settings.json=; it is enabled in this checkout's local settings.
+Counts are still shown when costs are disabled.
+Counts come from the provider via gptel, not from counting words.
+Prices come from gptel's model metadata, or =et/news-summary-pricing= in
+=.local/settings.el=. Cache reads/writes use standard input prices unless you
+configure their specific rates. Estimates can differ from actual billing,
+including tiered pricing. Missing usage or prices are reported as unavailable.
+Regeneration replaces this footer; usage covers only the displayed draft's
+generation request, not previous drafts.
+
 #+begin_src emacs-lisp :tangle lisp/et-news.el
 ;;; et-news.el --- Generated from config.org -*- lexical-binding: t; -*-
+(require 'cl-lib)
+(require 'json)
 (require 'seq)
 (require 'subr-x)
+(require 'tabulated-list)
 
 (defvar et/news-limit 5)
-(defvar et/news-state-file (expand-file-name "news.el" et/profile-state-directory))
+(defvar et/news-state-file nil
+  "Override the profile's news.json path, or nil to follow the active profile.")
+(defvar et/news-catalog-file (expand-file-name "news-feeds.json" et/state-directory)
+  "Editable shared feed catalog; defaults are shipped in news-feeds.json.")
+(defvar et/news-settings-file (expand-file-name "news-settings.json" et/state-directory))
+(defvar et/news-summary-cost-enabled nil
+  "Whether to calculate estimated summary costs.  New installations default off.")
 (defvar et/news-selected nil)
+(defvar et/news-site-settings nil
+  "Alist of site IDs and profile-specific :enabled and :limit settings.")
+(defvar et/news-sites nil
+  "Shared feed catalog in the current profile's dashboard order.")
 (defvar et/news--refresh-timer nil)
 (defvar et/news-map (make-sparse-keymap "news"))
 (define-key et/leader-map (kbd "N") (cons "news" et/news-map))
 
-(defconst et/news-sites
-  '((sciam "Scientific American"
-     (("All" "https://www.scientificamerican.com/platform/syndication/rss/" sciam-all)))
-    (nyt "New York Times"
-     (("Home" "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml" nyt-home)
-      ("World" "https://rss.nytimes.com/services/xml/rss/nyt/World.xml" nyt-world)
-      ("U.S." "https://rss.nytimes.com/services/xml/rss/nyt/US.xml" nyt-us)
-      ("Business" "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml" nyt-business)
-      ("Technology" "https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml" nyt-technology)
-      ("Science" "https://rss.nytimes.com/services/xml/rss/nyt/Science.xml" nyt-science)
-      ("Health" "https://rss.nytimes.com/services/xml/rss/nyt/Health.xml" nyt-health)
-      ("Sports" "https://rss.nytimes.com/services/xml/rss/nyt/Sports.xml" nyt-sports)
-      ("Arts" "https://rss.nytimes.com/services/xml/rss/nyt/Arts.xml" nyt-arts)))
-    (decipher "Decipher"
-     (("All" "https://decipher.sc/feed/" decipher-all)))
-    (arstechnica "ArsTechnica Security"
-     (("Security" "https://arstechnica.com/security/feed/" arstechnica-security)))
-    (technet "TechNet / Microsoft Security"
-     (("All" "https://www.microsoft.com/en-us/security/blog/feed/" technet-all)))
-    (securityweek "SecurityWeek"
-     (("All" "https://www.securityweek.com/feed/" securityweek-all)))
-    (bleepingcomputer "BleepingComputer"
-     (("All" "https://www.bleepingcomputer.com/feed/" bleepingcomputer-all)))
-    (emacs "Emacs"
-     (("r/emacs" "https://www.reddit.com/r/emacs/.rss" emacs-reddit)
-      ("Planet Emacslife" "https://planet.emacslife.com/atom.xml"
-       planet-emacslife)
-      ("Emacs News" "https://sachachua.com/blog/category/emacs-news/feed"
-       emacs-news)
-      ("Mastering Emacs" "https://www.masteringemacs.org/feed"
-       mastering-emacs)
-      ("System Crafters" "https://systemcrafters.net/rss/"
-       system-crafters)
-      ("Emacs Stack Exchange" "https://emacs.stackexchange.com/feeds"
-       emacs-stackexchange))))
-  "News sites and their (LABEL URL TAG) feeds.")
+(defun et/news-profile-file ()
+  "Return the active profile's JSON settings path."
+  (or et/news-state-file (expand-file-name "news.json" et/profile-state-directory)))
+
+(defun et/news-read-json (file)
+  "Read FILE as data, without evaluating Lisp."
+  (with-temp-buffer
+    (insert-file-contents file)
+    (json-parse-buffer :object-type 'alist :array-type 'list :false-object :false)))
+
+(defun et/news-write-json (file data)
+  "Atomically save DATA to FILE with private permissions."
+  (let ((directory (file-name-directory file)))
+    (make-directory directory t)
+    (let ((temp (make-temp-file (expand-file-name ".news-" directory))))
+      (unwind-protect
+          (progn
+            (with-temp-file temp (insert (json-serialize data) "\n"))
+            (set-file-modes temp #o600)
+            (rename-file temp file t))
+        (when (file-exists-p temp) (delete-file temp))))))
+
+(defun et/news-load-settings ()
+  "Load installation-wide news preferences from JSON."
+  (when (file-readable-p et/news-settings-file)
+    (let ((data (et/news-read-json et/news-settings-file)))
+      (setq et/news-summary-cost-enabled (eq t (alist-get 'summary_cost_enabled data))))))
+
+(defun et/news-toggle-summary-cost ()
+  "Toggle summary cost estimation and save the installation-wide preference."
+  (interactive)
+  (let ((data (when (file-exists-p et/news-settings-file)
+                (et/news-read-json et/news-settings-file))))
+    (setf (alist-get 'summary_cost_enabled data) (if et/news-summary-cost-enabled :false t))
+    (et/news-write-json et/news-settings-file data)
+    (et/news-load-settings)
+    (message "News summary cost estimates %s" (if et/news-summary-cost-enabled "enabled" "disabled"))))
+
+(defun et/news-valid-id-p (id)
+  "Whether ID is safe as a feed identifier and Elfeed tag."
+  (let ((case-fold-search nil))
+    (and (stringp id) (string-match-p "\\`[a-z0-9][a-z0-9_-]*\\'" id))))
+
+(defun et/news-valid-label-p (label)
+  (and (stringp label) (not (string-empty-p (string-trim label)))
+       (not (string-match-p "[\r\n]" label))))
+
+(defun et/news-valid-url-p (url)
+  (and (stringp url) (string-match-p "\\`https?://[^ \t\r\n]+\\'" url)))
+
+(defun et/news-load-catalog ()
+  "Load the shared JSON feed catalog, preserving existing IDs and topic labels."
+  (let* ((file (if (file-exists-p et/news-catalog-file) et/news-catalog-file
+                 (expand-file-name "news-feeds.json" et/config-directory)))
+         (data (et/news-read-json file))
+         (sites (alist-get 'sites data))
+         ids result)
+    (unless (and (equal (alist-get 'version data) 1) (listp sites))
+      (error "Invalid news catalog: %s" file))
+    (dolist (site sites)
+      (let ((id (alist-get 'id site)) (title (alist-get 'title site))
+            (feeds (alist-get 'feeds site)) labels parsed)
+        (unless (and (et/news-valid-id-p id) (not (member id ids))
+                     (et/news-valid-label-p title) (consp feeds))
+          (error "Invalid or duplicate site in %s" file))
+        (push id ids)
+        (dolist (feed feeds)
+          (let ((label (alist-get 'label feed)) (url (alist-get 'url feed))
+                (tag (alist-get 'tag feed)))
+            (unless (and (et/news-valid-label-p label) (not (member label labels))
+                         (et/news-valid-url-p url) (et/news-valid-id-p tag))
+              (error "Invalid feed in %s" file))
+            (push label labels)
+            (push (list label url (intern tag)) parsed)))
+        (push (list (intern id) title (nreverse parsed)) result)))
+    (setq et/news-sites (nreverse result))))
+
+(defun et/news-save-catalog ()
+  "Save the shared catalog; enabling and ordering remain profile-specific."
+  (et/news-write-json
+   et/news-catalog-file
+   `((version . 1)
+     (sites . ,(vconcat
+                (mapcar
+                 (lambda (site)
+                   `((id . ,(symbol-name (car site))) (title . ,(nth 1 site))
+                     (feeds . ,(vconcat
+                                (mapcar (lambda (feed)
+                                          `((label . ,(car feed)) (url . ,(cadr feed))
+                                            (tag . ,(symbol-name (nth 2 feed)))))
+                                        (nth 2 site))))))
+                 et/news-sites))))))
 
 (defun et/news-default-selection ()
   "Return all site topics selected."
@@ -2317,32 +2421,71 @@ MITRE techniques. Org's tag syntax is extended locally to allow =$= and =!=.
           et/news-sites))
 
 (defun et/news-load-selection ()
-  "Load the saved front-page selection, merging in new topics."
-  (let ((saved (when (file-readable-p et/news-state-file)
-                 (condition-case nil
-                     (with-temp-buffer
-                       (insert-file-contents et/news-state-file)
-                       (goto-char (point-min))
-                       (read (current-buffer)))
-                   (error nil)))))
-    (setq et/news-selected
-          (mapcar
-           (lambda (site)
-             (let* ((id (car site))
-                    (labels (mapcar #'car (nth 2 site)))
-                    (chosen (cdr (assq id saved))))
-               (cons id (seq-filter (lambda (label) (member label labels))
-                                    (or chosen labels)))))
-           et/news-sites))))
+  "Load this profile's selection, limits, and order; migrate legacy news.el."
+  (et/news-load-catalog)
+  (let* ((file (et/news-profile-file))
+         (legacy (expand-file-name "news.el" (file-name-directory file)))
+         (data (when (file-exists-p file) (et/news-read-json file)))
+         (saved (alist-get 'sites data))
+         (old (when (and (not data) (file-readable-p legacy))
+                (with-temp-buffer
+                  (insert-file-contents legacy)
+                  (read (current-buffer)))))
+         ordered)
+    (when (and data (not (equal (alist-get 'version data) 1)))
+      (error "Unsupported news settings version: %s" file))
+    (setq et/news-selected nil et/news-site-settings nil)
+    (dolist (record saved)
+      (when-let* ((id (alist-get 'id record))
+                  ((et/news-valid-id-p id))
+                  (site (assq (intern id) et/news-sites)))
+        (unless (memq site ordered) (push site ordered))))
+    (setq ordered (nreverse ordered)
+          et/news-sites
+          (append ordered (seq-remove (lambda (site) (memq site ordered)) et/news-sites)))
+    (dolist (site et/news-sites)
+      (let* ((id (car site)) (labels (mapcar #'car (nth 2 site)))
+             (record (seq-find (lambda (entry) (equal (alist-get 'id entry) (symbol-name id))) saved))
+             (limit (alist-get 'limit record))
+             (chosen (cond (record (alist-get 'topics record))
+                           ((assq id old) (cdr (assq id old)))
+                           (t labels))))
+        (push (cons id (seq-filter (lambda (label) (member label labels)) chosen)) et/news-selected)
+        (push (cons id (list :enabled (or (not record) (eq t (alist-get 'enabled record)))
+                            :limit (if (and (integerp limit) (>= limit 0)) limit et/news-limit)))
+              et/news-site-settings)))
+    (setq et/news-selected (nreverse et/news-selected))
+    (when (and old (not data)) (et/news-save-selection))
+    (when (featurep 'elfeed) (setq elfeed-feeds (et/news-elfeed-feeds)))))
 
 (defun et/news-save-selection ()
-  "Persist the front-page selection."
-  (let ((coding-system-for-write 'utf-8-unix))
-    (with-temp-file et/news-state-file
-      (insert ";; Generated by et/news-select-feeds; do not edit by hand.\n")
-      (prin1 et/news-selected (current-buffer))
-      (insert "\n")))
-  (set-file-modes et/news-state-file #o600))
+  "Persist this profile's selected topics, enabled sites, order, and limits."
+  (et/news-write-json
+   (et/news-profile-file)
+   `((version . 1)
+     (sites . ,(vconcat
+                (mapcar (lambda (site)
+                          (let ((id (car site)))
+                            `((id . ,(symbol-name id))
+                              (enabled . ,(if (et/news-site-enabled-p id) t :false))
+                              (limit . ,(et/news-site-limit id))
+                              (topics . ,(vconcat (et/news-selected-labels id))))))
+                        et/news-sites))))))
+
+(defun et/news-site-enabled-p (id)
+  "Return whether site ID is enabled for this profile."
+  (let ((entry (assq id et/news-site-settings)))
+    (or (not entry) (plist-get (cdr entry) :enabled))))
+
+(defun et/news-site-limit (id)
+  "Return the article count for site ID on this profile's dashboard."
+  (or (plist-get (alist-get id et/news-site-settings) :limit) et/news-limit))
+
+(defun et/news-dashboard-sites ()
+  "Return enabled sites in this profile's configured order."
+  (seq-filter (lambda (site) (and (et/news-site-enabled-p (car site))
+                                  (et/news-selected-labels (car site))))
+              et/news-sites))
 
 (defun et/news-selected-labels (site)
   "Return selected topic labels for SITE."
@@ -2357,11 +2500,12 @@ MITRE techniques. Org's tag syntax is extended locally to allow =$= and =!=.
                         (nth 2 spec)))))
 
 (defun et/news-elfeed-feeds ()
-  "Return all site feeds in `elfeed-feeds' format."
+  "Return this profile's enabled topic feeds in `elfeed-feeds' format."
   (let (feeds)
-    (dolist (site et/news-sites)
+    (dolist (site (et/news-dashboard-sites))
       (dolist (feed (nth 2 site))
-        (push (list (cadr feed) (car site) (nth 2 feed)) feeds)))
+        (when (member (car feed) (et/news-selected-labels (car site)))
+          (push (list (cadr feed) (car site) (nth 2 feed)) feeds))))
     (nreverse feeds)))
 
 (defun et/news--ensure-elfeed ()
@@ -2373,7 +2517,7 @@ MITRE techniques. Org's tag syntax is extended locally to allow =$= and =!=.
 (defun et/news-entries (site &optional limit)
   "Return the newest cached entries for SITE, up to LIMIT."
   (et/news--ensure-elfeed)
-  (let ((urls (et/news-selected-urls site))
+  (let ((urls (when (et/news-site-enabled-p site) (et/news-selected-urls site)))
         entries)
     (maphash
      (lambda (_id entry)
@@ -2387,7 +2531,7 @@ MITRE techniques. Org's tag syntax is extended locally to allow =$= and =!=.
            (lambda (a b)
              (> (or (elfeed-entry-date a) 0)
                 (or (elfeed-entry-date b) 0))))
-     (or limit et/news-limit))))
+     (or limit (et/news-site-limit site)))))
 
 (defun et/news-open-article (entry)
   "Open ENTRY's article in the default browser."
@@ -2409,7 +2553,7 @@ MITRE techniques. Org's tag syntax is extended locally to allow =$= and =!=.
   (elfeed-search-set-filter (format "+%s" site)))
 
 (defun et/news-update ()
-  "Download all configured news feeds asynchronously."
+  "Download the current profile's enabled news feeds asynchronously."
   (interactive)
   (et/news--ensure-elfeed)
   (elfeed-update)
@@ -2430,6 +2574,12 @@ MITRE techniques. Org's tag syntax is extended locally to allow =$= and =!=.
   "Cached gptel backend for article summaries.")
 (defvar et/news-summary-max-chars 60000
   "Maximum article characters sent to the summary model.")
+(defvar et/news-summary-pricing nil
+  "Optional summary prices in USD per million tokens.
+Entries are ((BACKEND-NAME MODEL-NAME) . PLIST), with :input and :output
+rates, and optional :cached-input and :cache-write rates.
+For example: ((\"My backend\" \"my-model\") . (:input 1.0 :output 5.0)).
+Otherwise use gptel's model price metadata.  Costs are estimates, not bills.")
 (defvar et/news-related-node-domain "general"
   "Domain used for auto-created language/platform/package nodes.")
 
@@ -2716,12 +2866,81 @@ MITRE techniques. Org's tag syntax is extended locally to allow =$= and =!=.
                   (gptel-backend-name backend))))
     et/news-summary-backend))
 
+(defun et/news--summary-unfence (output)
+  "Remove an outer Markdown Org code fence from OUTPUT."
+  (let ((output (string-trim output)))
+    (setq output (replace-regexp-in-string
+                  "\\`[ \t]*```\\(?:org\\)?[ \t]*\n" "" output))
+    (replace-regexp-in-string "\n?[ \t]*```[ \t]*\\'" "" output)))
+
+(defun et/news--summary-count (value)
+  "Return VALUE if it is a nonnegative token count, otherwise nil."
+  (and (integerp value) (>= value 0) value))
+
+(defun et/news--summary-rate (value)
+  "Return VALUE if it is a nonnegative token rate, otherwise nil."
+  (and (numberp value) (>= value 0) value))
+
+(defun et/news--summary-usage-footer (info backend model)
+  "Format token usage from request INFO and estimated cost for BACKEND and MODEL."
+  (let* ((tokens (or (plist-get info :tokens-full) (plist-get info :tokens)))
+         ;; gptel excludes cache reads from :input, but includes cache writes.
+         (input (et/news--summary-count (plist-get tokens :input)))
+         (output (et/news--summary-count (plist-get tokens :output)))
+         (cached (or (et/news--summary-count (plist-get tokens :cached)) 0))
+         (writes (or (et/news--summary-count (plist-get tokens :cache)) 0))
+         (backend-name (gptel-backend-name backend))
+         (model-name (format "%s" model))
+         (override (and et/news-summary-cost-enabled
+                        (assoc (list backend-name model-name) et/news-summary-pricing)))
+         (rates (when et/news-summary-cost-enabled
+                  (if override (cdr override)
+                    (and (symbolp model)
+                         (list :input (get model :input-cost)
+                               :output (get model :output-cost))))))
+         (input-rate (et/news--summary-rate (plist-get rates :input)))
+         (output-rate (et/news--summary-rate (plist-get rates :output)))
+         (cached-rate (et/news--summary-rate (plist-get rates :cached-input)))
+         (write-rate (et/news--summary-rate (plist-get rates :cache-write)))
+         (cost (when (and input output input-rate output-rate (<= writes input))
+                 (/ (+ (* (- input writes) input-rate)
+                       (* writes (or write-rate input-rate))
+                       (* cached (or cached-rate input-rate))
+                       (* output output-rate))
+                    1000000.0))))
+    (concat
+     "\n\n* Generation usage\n"
+     (format "- Backend: %s\n- Model: %s\n"
+             (replace-regexp-in-string "[\r\n]+" " " backend-name)
+             (replace-regexp-in-string "[\r\n]+" " " model-name))
+     (format "- Input tokens: %s%s\n"
+             (if input (+ input cached) "unavailable")
+             (if (> cached 0) (format " (%d cached)" cached) ""))
+     (format "- Output tokens: %s\n" (or output "unavailable"))
+     (cond
+      ((not et/news-summary-cost-enabled) "- Estimated cost: disabled.\n")
+      (cost
+       (format "- Estimated cost: USD $%.6f\n  Based on %s; actual billing may differ%s.\n"
+               cost (if override "configured prices" "gptel model prices")
+               (if (or (and (> cached 0) (not cached-rate))
+                       (and (> writes 0) (not write-rate)))
+                   " (cache tokens priced at the standard input rate)" "")))
+      ((not (and input output))
+       "- Estimated cost: unavailable (provider did not report complete token usage).\n")
+      (t "- Estimated cost: unavailable (model pricing is not configured).\n"))
+     "Usage covers this generation request only, not previous drafts.\n")))
+
+(defvar-local et/news-summary-request-id nil
+  "Identity of the most recently started request for this review buffer.")
+
 (defun et/news--request-summary (context text complete backend model buffer)
   "Request an article summary for CONTEXT and TEXT into BUFFER.
 BACKEND and MODEL select the gptel backend and model."
   (let* ((prompt (et/news--summary-prompt context text complete))
          (gptel-backend backend)
-         (gptel-model model))
+         (gptel-model model)
+         (request-id (make-symbol "news-summary")))
+    (with-current-buffer buffer (setq et/news-summary-request-id request-id))
     (gptel-request prompt
       :system et/news-summary-system-prompt
       :context context
@@ -2729,17 +2948,20 @@ BACKEND and MODEL select the gptel backend and model."
       :stream nil
       :callback
       (lambda (response info)
-        (when (buffer-live-p buffer)
+        (when (and (buffer-live-p buffer)
+                   (eq (buffer-local-value 'et/news-summary-request-id buffer) request-id))
           (with-current-buffer buffer
             (let ((inhibit-read-only t))
               (erase-buffer)
               (insert
-               (if (stringp response)
-                   response
+                (if (stringp response)
+                    (et/news--summary-unfence response)
                   (format "# Summary request failed: %s\n"
                           (or (plist-get info :status) "unknown error"))))
               (when (stringp response)
-                (et/document-format-region (point-min) (point-max)))
+                (et/document-format-region (point-min) (point-max))
+                (goto-char (point-max))
+                (insert (et/news--summary-usage-footer info backend model)))
               (set-buffer-modified-p nil)
               (goto-char (point-min)))))))))
 
@@ -2872,11 +3094,7 @@ The startup default remains `gpt-6-luna'; this does not persist."
 
 (defun et/news--parse-summary-output (output)
   "Parse OUTPUT into tags, ecosystem, description, body, and related rows."
-  (let* ((output (string-trim output))
-         (output (replace-regexp-in-string
-                  "\\`[ \t]*```\\(?:org\\)?[ \t]*\n" "" output))
-         (output (replace-regexp-in-string
-                  "\n?[ \t]*```[ \t]*\\'" "" output))
+  (let* ((output (et/news--summary-unfence output))
          (body-start (or (string-match "^\\* Summary" output) 0))
          (metadata (substring output 0 body-start))
          (body (substring output body-start))
@@ -3235,14 +3453,14 @@ run with the new buffer so a later AI pass can fill it and add tags."
     (message "Created news note: %s" title)))
 
 (defun et/news-select-feeds ()
-  "Choose which site topics appear on the dashboard and update feeds."
+  "Choose this profile's site topics without downloading articles."
   (interactive)
   (let (selection)
     (dolist (site et/news-sites)
       (let* ((id (car site))
              (label (nth 1 site))
              (labels (mapcar #'car (nth 2 site)))
-             (current (or (et/news-selected-labels id) labels))
+             (current (et/news-selected-labels id))
              (chosen (completing-read-multiple
                       (format "%s topics (comma separated): " label)
                       labels nil t nil nil
@@ -3250,14 +3468,242 @@ run with the new buffer so a later AI pass can fill it and add tags."
         (push (cons id chosen) selection)))
     (setq et/news-selected (nreverse selection))
     (et/news-save-selection)
-    (when (fboundp 'et/dashboard-refresh)
-      (when-let* ((buffer (get-buffer et/dashboard-buffer-name)))
-        (with-current-buffer buffer
-          (when (derived-mode-p 'et/dashboard-mode)
-            (et/dashboard-refresh)))))
-    (when (locate-library "elfeed")
-      (et/news-update))
+    (et/news-refresh-views)
     (message "News topics updated")))
+
+(defun et/news-refresh-views ()
+  "Apply preferences to Elfeed and refresh the dashboard without network activity."
+  (when (featurep 'elfeed) (setq elfeed-feeds (et/news-elfeed-feeds)))
+  (when-let* ((buffer (get-buffer et/dashboard-buffer-name)))
+    (with-current-buffer buffer
+      (when (derived-mode-p 'et/dashboard-mode) (et/dashboard-refresh)))))
+
+(defvar-local et/news-feed-marks nil)
+(defvar-local et/news-editor-profile nil)
+
+(defun et/news-feed-editor-entries ()
+  "Build the current profile's ordered feed table."
+  (setq mode-name (format "Etmacs Feeds [%s]" et/profile)
+        et/news-editor-profile et/profile
+        et/news-feed-marks nil
+        tabulated-list-entries
+        (mapcar (lambda (site)
+                  (let ((id (car site)))
+                    (list id (vector (if (et/news-site-enabled-p id) "Enabled" "Disabled")
+                                     (number-to-string (et/news-site-limit id))
+                                     (nth 1 site)
+                                     (format "%d/%d" (length (et/news-selected-labels id))
+                                             (length (nth 2 site)))
+                                     (mapconcat #'cadr (nth 2 site) ", ")))))
+                et/news-sites)))
+
+(defun et/news-feed-editor-reload ()
+  "Reload persisted catalog and profile settings before rebuilding the table."
+  (et/news-load-selection)
+  (et/news-feed-editor-entries))
+
+(defun et/news-feed-editor-check-profile ()
+  "Avoid applying stale marks after changing profiles."
+  (unless (equal et/news-editor-profile et/profile)
+    (user-error "Profile changed; refresh the feed editor first")))
+
+(defun et/news-feed-editor-ids ()
+  "Return marked sites, or the site at point."
+  (et/news-feed-editor-check-profile)
+  (or et/news-feed-marks (when-let* ((id (tabulated-list-get-id))) (list id))
+      (user-error "No feed selected")))
+
+(defun et/news-feed-editor-mark ()
+  "Mark this site and advance to the next row."
+  (interactive)
+  (et/news-feed-editor-check-profile)
+  (when-let* ((id (tabulated-list-get-id)))
+    (cl-pushnew id et/news-feed-marks)
+    (tabulated-list-put-tag "*" t)))
+
+(defun et/news-feed-editor-unmark ()
+  "Unmark this site and advance to the next row."
+  (interactive)
+  (when-let* ((id (tabulated-list-get-id)))
+    (setq et/news-feed-marks (delq id et/news-feed-marks))
+    (tabulated-list-put-tag " " t)))
+
+(defun et/news-feed-editor-save (&optional catalog id)
+  "Persist profile edits, optionally CATALOG edits, and return to row ID."
+  (when catalog (et/news-save-catalog))
+  (et/news-save-selection)
+  (et/news-refresh-views)
+  (tabulated-list-revert)
+  (when id
+    (goto-char (point-min))
+    (while (and (not (eobp)) (not (eq (tabulated-list-get-id) id))) (forward-line 1))))
+
+(defun et/news-feed-editor-set (property value)
+  "Set PROPERTY to VALUE on marked sites for this profile."
+  (let ((ids (et/news-feed-editor-ids)))
+    (dolist (id ids)
+      (setf (alist-get id et/news-site-settings)
+            (plist-put (copy-sequence (or (alist-get id et/news-site-settings)
+                                          (list :enabled t :limit et/news-limit)))
+                       property value)))
+    (et/news-feed-editor-save nil (car ids))))
+
+(defun et/news-feed-editor-enable ()
+  "Enable marked sites for this profile."
+  (interactive)
+  (et/news-feed-editor-set :enabled t))
+
+(defun et/news-feed-editor-disable ()
+  "Disable marked sites for this profile."
+  (interactive)
+  (et/news-feed-editor-set :enabled nil))
+
+(defun et/news-feed-editor-limit (count)
+  "Set the dashboard article COUNT for marked sites in this profile."
+  (interactive (list (read-number "Articles per site on dashboard (0 or more): " 5)))
+  (unless (and (integerp count) (>= count 0)) (user-error "Use a nonnegative integer"))
+  (et/news-feed-editor-set :limit count))
+
+(defun et/news-feed-editor-move (direction)
+  "Move the current site one position in DIRECTION (-1 up, 1 down)."
+  (et/news-feed-editor-check-profile)
+  (let* ((id (or (tabulated-list-get-id) (user-error "No site on this row")))
+         (sites (vconcat et/news-sites))
+         (from (cl-position id et/news-sites :key #'car))
+         (to (+ from direction)))
+    (unless (<= 0 to (1- (length sites))) (user-error "Already at the end of the list"))
+    (cl-rotatef (aref sites from) (aref sites to))
+    (setq et/news-sites (append sites nil))
+    (et/news-feed-editor-save nil id)))
+
+(defun et/news-feed-editor-up ()
+  "Move the current site up in this profile's dashboard."
+  (interactive)
+  (et/news-feed-editor-move -1))
+
+(defun et/news-feed-editor-down ()
+  "Move the current site down in this profile's dashboard."
+  (interactive)
+  (et/news-feed-editor-move 1))
+
+(defun et/news-feed-editor-topics ()
+  "Select enabled topics within the site at point."
+  (interactive)
+  (et/news-feed-editor-check-profile)
+  (let* ((id (or (tabulated-list-get-id) (user-error "No site selected")))
+         (site (assq id et/news-sites))
+         (labels (mapcar #'car (nth 2 site)))
+         (selected (completing-read-multiple
+                    "Topics (comma separated): " labels nil t nil nil
+                    (mapconcat #'identity (et/news-selected-labels id) ","))))
+    (setf (alist-get id et/news-selected) selected)
+    (et/news-feed-editor-save nil id)))
+
+(defun et/news-feed-editor-add (id title url)
+  "Add a shared catalog site ID with TITLE and feed URL, enabled here."
+  (interactive (list (read-string "Unique site ID (e.g. openai or 9; lowercase, digits, - or _): ")
+                     (read-string "Site name: ")
+                     (read-string "Feed URL: ")))
+  (et/news-feed-editor-check-profile)
+  (unless (et/news-valid-id-p id)
+    (user-error "Site ID must start with a lowercase letter or digit and use only lowercase letters, digits, - or _"))
+  (when (assq (intern id) et/news-sites)
+    (user-error "Site ID %s already exists; choose another ID" id))
+  (unless (et/news-valid-label-p title)
+    (user-error "Site name must be nonempty and on one line"))
+  (unless (et/news-valid-url-p url)
+    (user-error "Feed URL must start with http:// or https:// and contain no whitespace"))
+  (let ((symbol (intern id)))
+    (setq et/news-sites (append et/news-sites (list (list symbol title (list (list "All" url symbol))))))
+    (setf (alist-get symbol et/news-selected) '("All")
+          (alist-get symbol et/news-site-settings) (list :enabled t :limit et/news-limit))
+    (et/news-feed-editor-save t symbol)))
+
+(defun et/news-feed-editor-edit ()
+  "Edit the shared name and a feed URL on the current site."
+  (interactive)
+  (et/news-feed-editor-check-profile)
+  (let* ((id (or (tabulated-list-get-id) (user-error "No site selected")))
+         (site (assq id et/news-sites))
+         (feeds (nth 2 site))
+         (feed (if (cdr feeds)
+                   (assoc (completing-read "Feed topic: " (mapcar #'car feeds) nil t) feeds)
+                 (car feeds)))
+         (title (read-string "Site name (shared across profiles): " (nth 1 site)))
+         (url (read-string "Feed URL (shared across profiles): " (cadr feed))))
+    (unless (and (et/news-valid-label-p title) (et/news-valid-url-p url))
+      (user-error "Use a nonempty site name and HTTP(S) feed URL"))
+    (setcar (cdr site) title)
+    (setcar (cdr feed) url)
+    (et/news-feed-editor-save t id)))
+
+(defun et/news-feed-editor-add-topic (label url)
+  "Add a shared topic LABEL and feed URL to the site at point."
+  (interactive (list (read-string "New topic name: ") (read-string "Feed URL: ")))
+  (et/news-feed-editor-check-profile)
+  (let* ((id (or (tabulated-list-get-id) (user-error "No site selected")))
+         (site (assq id et/news-sites))
+         (feeds (nth 2 site)))
+    (unless (and (et/news-valid-label-p label) (not (assoc label feeds)) (et/news-valid-url-p url))
+      (user-error "Choose a unique topic name and HTTP(S) URL"))
+    (setcar (nthcdr 2 site)
+            (append feeds (list (list label url (intern (format "%s-topic-%s" id (org-id-new)))))))
+    (setf (alist-get id et/news-selected) (append (et/news-selected-labels id) (list label)))
+    (et/news-feed-editor-save t id)))
+
+(defun et/news-feed-editor-delete-topic ()
+  "Delete a topic URL from the shared site; use x to delete an entire site."
+  (interactive)
+  (et/news-feed-editor-check-profile)
+  (let* ((id (or (tabulated-list-get-id) (user-error "No site selected")))
+         (site (assq id et/news-sites))
+         (feeds (nth 2 site)))
+    (unless (cdr feeds) (user-error "Use SPC m x to delete a site with only one feed"))
+    (let ((label (completing-read "Remove topic: " (mapcar #'car feeds) nil t)))
+      (when (yes-or-no-p (format "Remove %s from ALL profiles' catalog? " label))
+        (setcar (nthcdr 2 site) (assoc-delete-all label feeds))
+        (setf (alist-get id et/news-selected) (delete label (et/news-selected-labels id)))
+        (et/news-feed-editor-save t id)))))
+
+(defun et/news-feed-editor-delete ()
+  "Delete marked sites from the shared catalog, never deleting cached articles."
+  (interactive)
+  (let ((ids (et/news-feed-editor-ids)))
+    (when (yes-or-no-p (format "Delete %d site(s) from ALL profiles' catalog? " (length ids)))
+      (setq et/news-sites (seq-remove (lambda (site) (memq (car site) ids)) et/news-sites))
+      (et/news-feed-editor-save t))))
+
+(defvar et/news-feed-editor-mode-map
+  (let ((map (make-sparse-keymap)))
+    (dolist (binding '(("m" . et/news-feed-editor-mark) ("u" . et/news-feed-editor-unmark)
+                       ("e" . et/news-feed-editor-enable) ("d" . et/news-feed-editor-disable)
+                       ("c" . et/news-feed-editor-limit) ("K" . et/news-feed-editor-up)
+                       ("J" . et/news-feed-editor-down) ("f" . et/news-feed-editor-topics)
+                       ("+" . et/news-feed-editor-add-topic) ("-" . et/news-feed-editor-delete-topic)
+                       ("a" . et/news-feed-editor-add) ("RET" . et/news-feed-editor-edit)
+                       ("x" . et/news-feed-editor-delete) ("g" . revert-buffer) ("q" . quit-window)))
+      (define-key map (kbd (car binding)) (cdr binding)))
+    map))
+
+(define-derived-mode et/news-feed-editor-mode tabulated-list-mode "Etmacs Feeds"
+  "Edit the shared catalog and this profile's dashboard preferences."
+  (setq tabulated-list-format [("Status" 10 nil) ("Articles" 9 nil) ("Site" 28 nil)
+                               ("Topics" 8 nil) ("Feed URLs" 0 nil)]
+        tabulated-list-padding 2 tabulated-list-sort-key nil)
+  (setq mode-line-process
+        " SPC m: m mark · e enable · d disable · c count · K/J move · f topics · a add · RET edit · x delete")
+  (tabulated-list-init-header)
+  (add-hook 'tabulated-list-revert-hook #'et/news-feed-editor-reload nil t))
+
+(et/register-package-leader 'et/news-feed-editor-mode et/news-feed-editor-mode-map)
+(with-eval-after-load 'evil (evil-set-initial-state 'et/news-feed-editor-mode 'normal))
+
+(defun et/news-edit-feeds ()
+  "Open the feed editor for the current profile."
+  (interactive)
+  (pop-to-buffer (get-buffer-create "*Etmacs News Feeds*"))
+  (unless (derived-mode-p 'et/news-feed-editor-mode) (et/news-feed-editor-mode))
+  (tabulated-list-revert))
 
 (defun et/news--schedule-refresh ()
   "Refresh the dashboard after elfeed finishes updating."
@@ -3289,6 +3735,8 @@ run with the new buffer so a later AI pass can fill it and add tags."
 (define-key et/news-map (kbd "o") #'et/news-open-reader)
 (define-key et/news-map (kbd "u") #'et/news-update)
 (define-key et/news-map (kbd "s") #'et/news-select-feeds)
+(define-key et/news-map (kbd "e") #'et/news-edit-feeds)
+(define-key et/news-map (kbd "$") #'et/news-toggle-summary-cost)
 (define-key et/news-map (kbd "/") #'et/news-search)
 (define-key et/news-map (kbd "f") #'et/news-narrow-feed)
 (define-key et/news-map (kbd "d") #'et/news-narrow-date)
@@ -3299,6 +3747,7 @@ run with the new buffer so a later AI pass can fill it and add tags."
 (define-key et/news-map (kbd "S") #'et/news-summarize-at-point)
 (define-key et/news-map (kbd "C") #'et/change-news-summary-model)
 (et/register-package-leader 'elfeed-search-mode et/news-map)
+(et/news-load-settings)
 (et/news-load-selection)
 (provide 'et-news)
 ;;; et-news.el ends here

@@ -14,6 +14,7 @@
 (declare-function et/org-task-due-label "et-org" (task))
 (declare-function et/org-task-sort-predicate "et-org" (a b))
 (declare-function et/news-summarize-at-point "et-news" ())
+(declare-function et/news-dashboard-sites "et-news" ())
 (defvar et/org-agenda-scope)
 (defvar et/org-agenda-file-domains)
 (defvar org-agenda-files)
@@ -366,7 +367,7 @@ Keep point at its previous position, clamped to the new contents."
       (et/dashboard-insert-button
        "Update feeds" (lambda (_button) (et/news-update)))
       (insert "\n\n")
-      (dolist (site et/news-sites)
+      (dolist (site (et/news-dashboard-sites))
         (let* ((site-id (car site))
                (collapsed (member site-id et/dashboard-news-collapsed))
                (start (point))
@@ -397,8 +398,11 @@ Keep point at its previous position, clamped to the new contents."
            "Open full feed"
            (lambda (_button) (et/news-open-site site-id)))
           (insert "  ")
-          (et/dashboard-insert-button
-           "Choose feeds" (lambda (_button) (et/news-select-feeds)))
+        (et/dashboard-insert-button
+         "Choose feeds" (lambda (_button) (et/news-select-feeds)))
+        (insert "  ")
+        (et/dashboard-insert-button
+         "Edit feeds" (lambda (_button) (et/news-edit-feeds)))
           (insert "\n\n")
           (add-text-properties start (point)
                                (list 'et-dashboard-news-site site-id)))))

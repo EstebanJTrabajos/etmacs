@@ -360,12 +360,36 @@ Home/World/U.S./Business/Technology/Science/Health/Sports/Arts feeds, Decipher,
 ArsTechnica Security, TechNet/Microsoft Security, SecurityWeek, and
 BleepingComputer. A combined Emacs site reads r/emacs, Planet Emacslife, Sacha
 Chua's Emacs News, Mastering Emacs, System Crafters, and Emacs Stack Exchange.
-All feeds are downloaded; =SPC N s= chooses which topics feed the dashboard's
-five newest articles per site. =SPC N u= updates feeds, =SPC N o=
+The shared catalog is data in =news-feeds.json=, not generated Lisp. Editing
+feeds creates a local override at =.local/news-feeds.json=. Each profile saves
+enabled sites/topics, dashboard order, and article limits in
+=.local/profiles/<profile>/news.json=. Work and Personal can use the same feeds
+with different choices. Existing =news.el= selections migrate automatically;
+the original file is retained.
+
+=SPC N e= opens the feed editor. Evil remains active; use its =SPC m= menu:
+
+| Keys      | Action |
+|-----------+----------------------------------------------------------|
+| SPC m m/u | Mark/unmark sites                                        |
+| SPC m e/d | Enable/disable marked sites for this profile              |
+| SPC m c   | Set dashboard article count for marked sites (default 5)  |
+| SPC m K/J | Move the current site up/down on this profile's dashboard |
+| SPC m f   | Choose enabled topics within the current site             |
+| SPC m a   | Add a site and feed URL to the shared catalog              |
+| SPC m RET | Edit a site's shared name or feed URL                     |
+| SPC m +/- | Add/remove a topic feed within the current site           |
+| SPC m x   | Delete marked sites from all profiles, after confirmation |
+| SPC m g/q | Reload persisted settings / close editor                  |
+
+Changes save immediately without downloading. Site names and URLs are shared;
+enabled state, topic selection, order and counts are profile-specific.
+=SPC N s= remains a quick topic picker. =SPC N u= downloads enabled feeds for
+the active profile; =SPC N o=
 opens Elfeed, and each site's dashboard button opens its full Elfeed search.
 =SPC m TAB= in the dashboard collapses or expands the article list for the feed at
-point. State lives in =.local/profiles/<profile>/news.el= and =.local/elfeed/=;
-startup uses only the cache.
+point. Elfeed's cache remains shared in =.local/elfeed/=; disabling a feed
+does not delete its cached articles. Startup uses only the cache.
 
 In an Elfeed search buffer, the same leader prefix adds =SPC N /= (keyword
 search), =SPC N f= (narrow to feed), =SPC N d= (date range), =SPC N m= / =SPC N M=
@@ -374,6 +398,26 @@ and open an AI summary draft). In the dashboard, =SPC m S= summarizes the
 article at point.
 
 The summary uses =gpt-6-luna= through gptel and produces a 3–5 paragraph note.
+Its footer shows provider-reported input/output tokens in both the draft and
+saved note. Cached input is included in the input total.
+Cost calculation is optional: =et/news-summary-cost-enabled= defaults to nil
+for new installations. Toggle it with =SPC N $=; the preference persists in
+=.local/news-settings.json=. It is enabled in this installation's local settings.
+When off, token counts still appear but costs are not calculated.
+The estimate uses gptel model prices, not a billing receipt; missing usage or
+prices display as unavailable. To override prices in =.local/settings.el=:
+
+#+begin_src emacs-lisp
+;; USD per million tokens; replace these example names and rates.
+(setq et/news-summary-pricing
+      '((("My backend" "my-model") . (:input 1.0 :output 5.0
+                                     :cached-input 0.1 :cache-write 1.25))))
+#+end_src
+
+Without cache-specific rates, cache tokens use the standard input rate and
+the footer flags this approximation. Usage applies to the latest generation,
+not all regenerated drafts combined.
+
 Use =SPC C n= or =M-x et/change-news-summary-model= to choose another gptel
 model for the current session; restarts return to =gpt-6-luna=. The prompt
 classifies the article first. Cybersecurity articles also get
