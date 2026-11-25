@@ -1,0 +1,12 @@
+#!/bin/sh
+# Block merging the practice-only branch into main locally.
+branch=$(git symbolic-ref --short HEAD 2>/dev/null || true)
+[ "$branch" = "main" ] || exit 0
+merge_head=$(git rev-parse -q --verify MERGE_HEAD 2>/dev/null || true)
+[ -n "$merge_head" ] || exit 0
+practice=$(git rev-parse -q --verify refs/heads/dape-practice 2>/dev/null || true)
+[ -n "$practice" ] || exit 0
+if git merge-base --is-ancestor "$practice" "$merge_head"; then
+  echo "Refusing to merge dape-practice into main; it is a practice-only branch." >&2
+  exit 1
+fi
